@@ -138,7 +138,7 @@ func main() {
 		// Verify all definitions have required fields
 		assert.NotEmpty(t, def.Type)
 		assert.NotEmpty(t, def.Name)
-		assert.Greater(t, def.LineStart, 0)
+		assert.Positive(t, def.LineStart)
 		assert.GreaterOrEqual(t, def.LineEnd, def.LineStart)
 		assert.Contains(t, []string{"public", "private"}, def.Visibility)
 	}
@@ -154,10 +154,8 @@ func main() {
 	}
 
 	// Verify definition type counts
-	assert.Greater(t, definitionTypes["function"]+definitionTypes["method"], 3,
-		"Should have multiple function/method definitions")
-	assert.Greater(t, definitionTypes["struct"]+definitionTypes["interface"], 0,
-		"Should have struct/interface definitions")
+	assert.Greater(t, definitionTypes["function"]+definitionTypes["method"], 3)
+	assert.Positive(t, definitionTypes["struct"]+definitionTypes["interface"])
 
 	// Verify symbols
 	assert.GreaterOrEqual(t, len(metadata.Symbols), 7)
@@ -461,7 +459,7 @@ func TestGoPlugin_Chunk_NoSemanticChunks(t *testing.T) {
 `
 	chunks, err := plugin.Chunk(contentOnlyComments, "only_comments.go", &model.CodeChunkingOptions{})
 	require.Error(t, err)
-	assert.EqualError(t, err, "no semantic chunks found in Go file")
+	require.EqualError(t, err, "no semantic chunks found in Go file")
 	assert.Nil(t, chunks)
 }
 

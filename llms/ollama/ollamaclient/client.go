@@ -16,8 +16,8 @@ import (
 
 const (
 	DefaultOllamaURL = "http://127.0.0.1:11434"
-	DefaultTimeout = 10 * time.Minute
-	MaxBufferSize = 512 * 1000
+	DefaultTimeout   = 10 * time.Minute
+	MaxBufferSize    = 512 * 1000
 )
 
 // Client is a HTTP client for the Ollama API that supports both streaming and non-streaming requests.
@@ -170,10 +170,6 @@ func (c *Client) doRequest(ctx context.Context, method, path string, reqData, re
 
 // prepareRequestBody marshals the request data to JSON if provided.
 func (c *Client) prepareRequestBody(reqData any) (io.Reader, error) {
-	if reqData == nil {
-		return nil, nil
-	}
-
 	data, err := json.Marshal(reqData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request data: %w", err)

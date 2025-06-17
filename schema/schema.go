@@ -10,10 +10,6 @@ type Document struct {
 	Metadata    map[string]any
 }
 
-func (d Document) String() string {
-	return d.PageContent
-}
-
 func NewDocument(content string, metadata map[string]any) Document {
 	if metadata == nil {
 		metadata = make(map[string]any)
@@ -22,6 +18,10 @@ func NewDocument(content string, metadata map[string]any) Document {
 		PageContent: content,
 		Metadata:    metadata,
 	}
+}
+
+func (d Document) String() string {
+	return d.PageContent
 }
 
 type ModelDetails struct {
@@ -49,6 +49,10 @@ type SystemChatMessage struct {
 	Content string
 }
 
+func NewSystemChatMessage(content string) SystemChatMessage {
+	return SystemChatMessage{Content: content}
+}
+
 func (m SystemChatMessage) GetType() ChatMessageType {
 	return ChatMessageTypeSystem
 }
@@ -59,6 +63,10 @@ func (m SystemChatMessage) GetContent() string {
 
 type HumanChatMessage struct {
 	Content string
+}
+
+func NewHumanChatMessage(content string) HumanChatMessage {
+	return HumanChatMessage{Content: content}
 }
 
 func (m HumanChatMessage) GetType() ChatMessageType {
@@ -73,6 +81,10 @@ type AIChatMessage struct {
 	Content string
 }
 
+func NewAIChatMessage(content string) AIChatMessage {
+	return AIChatMessage{Content: content}
+}
+
 func (m AIChatMessage) GetType() ChatMessageType {
 	return ChatMessageTypeAI
 }
@@ -81,26 +93,13 @@ func (m AIChatMessage) GetContent() string {
 	return m.Content
 }
 
-// Convenience constructors
-func NewSystemChatMessage(content string) SystemChatMessage {
-	return SystemChatMessage{Content: content}
-}
-
-func NewHumanChatMessage(content string) HumanChatMessage {
-	return HumanChatMessage{Content: content}
-}
-
-func NewAIChatMessage(content string) AIChatMessage {
-	return AIChatMessage{Content: content}
-}
-
 func ChatMessageToString(msg ChatMessage) string {
 	return fmt.Sprintf("[%s]: %s", msg.GetType(), msg.GetContent())
 }
 
 type CollectionInfo struct {
-	Name           string `json:"name"`            // Name of the collection.
-	PointsCount    uint64 `json:"points_count"`    // Number of points (vectors) in the collection.
-	VectorSize     uint64 `json:"vector_size"`     // Dimensionality of the vectors in this collection.
-	VectorDistance string `json:"vector_distance"` // Distance metric used by the collection (e.g., "Cosine").
+	Name           string `json:"name"`
+	PointsCount    uint64 `json:"points_count"`
+	VectorSize     uint64 `json:"vector_size"`
+	VectorDistance string `json:"vector_distance"`
 }

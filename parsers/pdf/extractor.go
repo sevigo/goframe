@@ -50,27 +50,27 @@ type textExtractionResult struct {
 }
 
 // extractTextFromPDF extracts text content from a PDF file
-func (p *PDFPlugin) extractTextFromPDF(filePath string) ([]textExtractionResult, int, error) {
+func (p *PDFPlugin) extractTextFromPDF(filePath string) ([]textExtractionResult, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to open PDF file %s: %w", filePath, err)
+		return nil, fmt.Errorf("failed to open PDF file %s: %w", filePath, err)
 	}
 	defer f.Close()
 
 	fsInfo, err := f.Stat()
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to get file info for %s: %w", filePath, err)
+		return nil, fmt.Errorf("failed to get file info for %s: %w", filePath, err)
 	}
 
 	pdfReader, err := pdf.NewReader(f, fsInfo.Size())
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to create PDF reader for %s: %w", filePath, err)
+		return nil, fmt.Errorf("failed to create PDF reader for %s: %w", filePath, err)
 	}
 
 	numPages := pdfReader.NumPage()
 	if numPages == 0 {
 		p.logger.Warn("PDF has no pages", "path", filePath)
-		return []textExtractionResult{}, 0, nil
+		return []textExtractionResult{}, nil
 	}
 
 	p.logger.Debug("PDF text extraction starting", "path", filePath, "pages", numPages)
@@ -106,11 +106,11 @@ func (p *PDFPlugin) extractTextFromPDF(filePath string) ([]textExtractionResult,
 	}
 
 	if len(pageTexts) == 0 {
-		return nil, numPages, errors.New("no text extracted from PDF")
+		return nil, errors.New("no text extracted from PDF")
 	}
 
 	p.logger.Debug("PDF text extraction finished", "path", filePath, "pages_with_text", len(pageTexts))
-	return pageTexts, numPages, nil
+	return pageTexts, nil
 }
 
 // extractPageText extracts text from a single PDF page
@@ -183,7 +183,7 @@ func (p *PDFPlugin) identifyMajorSections(fullTextWithMarkers string, filePath s
 func (p *PDFPlugin) findSectionsWithPattern(
 	fullTextWithMarkers string,
 	pattern *regexp.Regexp,
-	filePath string,
+	_ string,
 	opts *internal_model.CodeChunkingOptions,
 ) []internal_model.CodeChunk {
 	var sections []internal_model.CodeChunk
@@ -241,7 +241,7 @@ func (p *PDFPlugin) findSectionsWithPattern(
 }
 
 // identifyFormattedSections identifies sections based on formatting
-func (p *PDFPlugin) identifyFormattedSections(fullTextWithMarkers string, filePath string, opts *internal_model.CodeChunkingOptions) []internal_model.CodeChunk {
+func (p *PDFPlugin) identifyFormattedSections(fullTextWithMarkers string, _ string, opts *internal_model.CodeChunkingOptions) []internal_model.CodeChunk {
 	var sections []internal_model.CodeChunk
 	lines := strings.Split(fullTextWithMarkers, "\n")
 
@@ -395,7 +395,7 @@ func (p *PDFPlugin) splitContentIntoParagraphs(text string, lineOffset int, page
 }
 
 // splitOversizedChunks ensures no chunk exceeds max size limits
-func (p *PDFPlugin) splitOversizedChunks(chunks []internal_model.CodeChunk, filePath string, opts *internal_model.CodeChunkingOptions) []internal_model.CodeChunk {
+func (p *PDFPlugin) splitOversizedChunks(chunks []internal_model.CodeChunk, _ string, opts *internal_model.CodeChunkingOptions) []internal_model.CodeChunk {
 	var finalChunks []internal_model.CodeChunk
 	for _, chunk := range chunks {
 		if len(chunk.Content) > opts.MaxLinesPerChunk || (chunk.LineEnd-chunk.LineStart+1) > opts.MaxLinesPerChunk {
@@ -490,7 +490,7 @@ func (p *PDFPlugin) ExtractMetadata(content string, filePath string) (internal_m
 
 	// Extract title heuristic from first page
 	if numPages > 0 {
-		pageResults, _, extractErr := p.extractTextFromPDF(filePath)
+		pageResults, extractErr := p.extractTextFromPDF(filePath)
 		if extractErr == nil && len(pageResults) > 0 {
 			firstPageText := pageResults[0].Text
 			if title := extractHeuristicTitle(firstPageText); title != "" {

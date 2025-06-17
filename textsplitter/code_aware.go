@@ -29,7 +29,12 @@ type CodeAwareTextSplitter struct {
 var _ TextSplitter = (*CodeAwareTextSplitter)(nil)
 
 // NewCodeAware creates the splitter.
-func NewCodeAware(registry parsers.ParserRegistry, tokenizer Tokenizer, logger *slog.Logger, opts ...Option) (*CodeAwareTextSplitter, error) {
+func NewCodeAware(
+	registry parsers.ParserRegistry,
+	tokenizer Tokenizer,
+	logger *slog.Logger,
+	opts ...Option,
+) (*CodeAwareTextSplitter, error) {
 	if registry == nil {
 		return nil, errors.New("parser registry cannot be nil")
 	}

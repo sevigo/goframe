@@ -85,7 +85,12 @@ func (p *JSONPlugin) analyzeStructure(data interface{}, key string, path string)
 }
 
 // structureToChunks converts JSON structure to chunks
-func (p *JSONPlugin) structureToChunks(structure JSONStructure, content string, path string, opts *model.CodeChunkingOptions) []model.CodeChunk {
+func (p *JSONPlugin) structureToChunks(
+	structure JSONStructure,
+	content,
+	path string,
+	opts *model.CodeChunkingOptions,
+) []model.CodeChunk {
 	var chunks []model.CodeChunk
 	lines := strings.Split(content, "\n")
 
@@ -94,7 +99,7 @@ func (p *JSONPlugin) structureToChunks(structure JSONStructure, content string, 
 	case "object":
 		chunks = p.chunkObject(structure, content, lines, path, opts)
 	case "array":
-		chunks = p.chunkArray(structure, content, lines, path, opts)
+		chunks = p.chunkArray(structure, content, path, opts)
 	default:
 		// Single primitive value
 		chunks = p.createSingleChunk(content, path, structure.Type)
@@ -115,7 +120,7 @@ func (p *JSONPlugin) chunkObject(structure JSONStructure, content string, lines 
 	// For larger objects, create chunks for significant properties
 	for _, child := range structure.Children {
 		if p.shouldCreateChunkForProperty(child, opts) {
-			chunk := p.createPropertyChunk(child, content, lines, path)
+			chunk := p.createPropertyChunk(child, content, lines)
 			if chunk != nil {
 				chunks = append(chunks, *chunk)
 			}
@@ -134,7 +139,6 @@ func (p *JSONPlugin) chunkObject(structure JSONStructure, content string, lines 
 func (p *JSONPlugin) chunkArray(
 	structure JSONStructure,
 	content string,
-	lines []string,
 	path string,
 	opts *model.CodeChunkingOptions,
 ) []model.CodeChunk {
@@ -159,7 +163,7 @@ func (p *JSONPlugin) chunkArray(
 		}
 
 		arraySlice := structure.Children[i:end]
-		chunk := p.createArraySliceChunk(arraySlice, i, content, lines, path)
+		chunk := p.createArraySliceChunk(arraySlice, i)
 		if chunk != nil {
 			chunks = append(chunks, *chunk)
 		}
@@ -173,10 +177,10 @@ func (p *JSONPlugin) shouldCreateChunkForProperty(child JSONStructure, opts *mod
 	switch child.Type {
 	case "object":
 		// Create chunk for objects with multiple properties
-		return len(child.Children) > 2 || len(p.extractPropertyContent(child, "")) > opts.MinCharsPerChunk*2
+		return len(child.Children) > 2 || len(p.extractPropertyContent(child)) > opts.MinCharsPerChunk*2
 	case "array":
 		// Create chunk for arrays with multiple items
-		return len(child.Children) > 3 || len(p.extractArraySliceContent([]JSONStructure{child}, "")) > opts.MinCharsPerChunk*2
+		return len(child.Children) > 3 || len(p.extractArraySliceContent([]JSONStructure{child})) > opts.MinCharsPerChunk*2
 	default:
 		if str, ok := child.Value.(string); ok && len(str) > opts.MinCharsPerChunk {
 			return true
@@ -186,9 +190,9 @@ func (p *JSONPlugin) shouldCreateChunkForProperty(child JSONStructure, opts *mod
 }
 
 // createPropertyChunk creates a chunk for a significant JSON property
-func (p *JSONPlugin) createPropertyChunk(child JSONStructure, content string, lines []string, path string) *model.CodeChunk {
+func (p *JSONPlugin) createPropertyChunk(child JSONStructure, _ string, lines []string) *model.CodeChunk {
 	// Find the property in the content
-	propertyContent := p.extractPropertyContent(child, content)
+	propertyContent := p.extractPropertyContent(child)
 	if propertyContent == "" {
 		return nil
 	}
@@ -228,14 +232,14 @@ func (p *JSONPlugin) createPropertyChunk(child JSONStructure, content string, li
 }
 
 // createArraySliceChunk creates a chunk for a slice of array items
-func (p *JSONPlugin) createArraySliceChunk(items []JSONStructure, startIndex int, content string, lines []string, path string) *model.CodeChunk {
+func (p *JSONPlugin) createArraySliceChunk(items []JSONStructure, startIndex int) *model.CodeChunk {
 	// Extract content for this slice (simplified)
-	sliceContent := p.extractArraySliceContent(items, content)
+	sliceContent := p.extractArraySliceContent(items)
 	if sliceContent == "" {
 		return nil
 	}
 
-	startLine, endLine := p.estimateLines(sliceContent, lines)
+	startLine, endLine := p.estimateLines(sliceContent)
 
 	identifier := fmt.Sprintf("items[%d-%d]", startIndex, startIndex+len(items)-1)
 
@@ -255,7 +259,7 @@ func (p *JSONPlugin) createArraySliceChunk(items []JSONStructure, startIndex int
 }
 
 // Helper functions for content extraction and line estimation
-func (p *JSONPlugin) extractPropertyContent(child JSONStructure, content string) string {
+func (p *JSONPlugin) extractPropertyContent(child JSONStructure) string {
 	// Simplified: re-marshal the property
 	propertyData := map[string]interface{}{
 		child.Key: child.Value,
@@ -267,7 +271,7 @@ func (p *JSONPlugin) extractPropertyContent(child JSONStructure, content string)
 	return ""
 }
 
-func (p *JSONPlugin) extractArraySliceContent(items []JSONStructure, content string) string {
+func (p *JSONPlugin) extractArraySliceContent(items []JSONStructure) string {
 	var values []any
 	for _, item := range items {
 		values = append(values, item.Value)
@@ -297,7 +301,7 @@ func (p *JSONPlugin) findPropertyLines(key string, propertyContent string, lines
 	return startLine, endLine
 }
 
-func (p *JSONPlugin) estimateLines(chunkContent string, lines []string) (int, int) {
+func (p *JSONPlugin) estimateLines(chunkContent string) (int, int) {
 	chunkLines := strings.Split(chunkContent, "\n")
 	return 1, len(chunkLines)
 }

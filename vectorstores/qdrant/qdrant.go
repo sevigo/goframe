@@ -91,7 +91,7 @@ func createQdrantClient(opts options, logger *slog.Logger) (*qdrant.Client, erro
 
 	port, err := strconv.Atoi(portStr)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid port %q: %v", ErrInvalidURL, portStr, err)
+		return nil, fmt.Errorf("%w: invalid port %q: %w", ErrInvalidURL, portStr, err)
 	}
 
 	// Use Hostname() to get only the host without the port
@@ -174,7 +174,7 @@ func (s *Store) AddDocuments(ctx context.Context, docs []schema.Document, option
 	ids := make([]string, len(docs))
 
 	for i, doc := range docs {
-		docID := s.generateDocumentID(doc, opts)
+		docID := s.generateDocumentID(doc)
 		ids[i] = docID
 
 		points[i] = &qdrant.PointStruct{
@@ -217,7 +217,12 @@ func (s *Store) AddDocuments(ctx context.Context, docs []schema.Document, option
 }
 
 // SimilaritySearch performs vector similarity search with comprehensive logging.
-func (s *Store) SimilaritySearch(ctx context.Context, query string, numDocuments int, options ...vectorstores.Option) ([]schema.Document, error) {
+func (s *Store) SimilaritySearch(
+	ctx context.Context,
+	query string,
+	numDocuments int,
+	options ...vectorstores.Option,
+) ([]schema.Document, error) {
 	start := time.Now()
 	s.logger.DebugContext(ctx, "Starting similarity search",
 		"query_length", len(query), "num_documents", numDocuments)
@@ -291,7 +296,12 @@ func (s *Store) SimilaritySearch(ctx context.Context, query string, numDocuments
 }
 
 // SimilaritySearchWithScores performs similarity search returning documents with similarity scores.
-func (s *Store) SimilaritySearchWithScores(ctx context.Context, query string, numDocuments int, options ...vectorstores.Option) ([]vectorstores.DocumentWithScore, error) {
+func (s *Store) SimilaritySearchWithScores(
+	ctx context.Context,
+	query string,
+	numDocuments int,
+	options ...vectorstores.Option,
+) ([]vectorstores.DocumentWithScore, error) {
 	start := time.Now()
 	s.logger.DebugContext(ctx, "Starting similarity search with scores",
 		"query_length", len(query), "num_documents", numDocuments)
@@ -539,7 +549,7 @@ func (s *Store) Health(ctx context.Context) error {
 // Helper methods
 
 // generateDocumentID creates a unique ID for a document.
-func (s *Store) generateDocumentID(doc schema.Document, opts vectorstores.Options) string {
+func (s *Store) generateDocumentID(doc schema.Document) string {
 	// Use custom ID if provided in metadata
 	if id, exists := doc.Metadata["id"]; exists {
 		if idStr, ok := id.(string); ok && idStr != "" {
@@ -621,22 +631,6 @@ func (s *Store) collectionExists(ctx context.Context, name string) (bool, error)
 		return false, err
 	}
 	return true, nil
-}
-
-// parseDistanceMetric converts string distance metric to Qdrant distance enum.
-func parseDistanceMetric(metric string) (qdrant.Distance, bool) {
-	switch strings.ToLower(metric) {
-	case "cosine":
-		return qdrant.Distance_Cosine, true
-	case "dot":
-		return qdrant.Distance_Dot, true
-	case "euclidean":
-		return qdrant.Distance_Euclid, true
-	case "manhattan":
-		return qdrant.Distance_Manhattan, true
-	default:
-		return qdrant.Distance_Cosine, false
-	}
 }
 
 // documentToPayload converts a schema.Document to Qdrant payload format.
@@ -722,8 +716,8 @@ func (s *Store) convertFromQdrantValue(value *qdrant.Value) any {
 		return v.BoolValue
 	case *qdrant.Value_ListValue:
 		// Handle list values
-		list := make([]any, len(v.ListValue.Values))
-		for i, val := range v.ListValue.Values {
+		list := make([]any, len(v.ListValue.GetValues()))
+		for i, val := range v.ListValue.GetValues() {
 			list[i] = s.convertFromQdrantValue(val)
 		}
 		return list
@@ -773,17 +767,15 @@ func buildQdrantFilter(filters map[string]any) *qdrant.Filter {
 			continue
 		}
 
-		if match != nil {
-			condition := &qdrant.Condition{
-				ConditionOneOf: &qdrant.Condition_Field{
-					Field: &qdrant.FieldCondition{
-						Key:   key,
-						Match: match,
-					},
+		condition := &qdrant.Condition{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key:   key,
+					Match: match,
 				},
-			}
-			conditions = append(conditions, condition)
+			},
 		}
+		conditions = append(conditions, condition)
 	}
 
 	if len(conditions) == 0 {

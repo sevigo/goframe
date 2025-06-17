@@ -212,24 +212,24 @@ func (opts *options) validate() error {
 
 // parseOptions processes the provided options and returns a configured options struct.
 func parseOptions(opts ...Option) (options, error) {
-	options := options{}
+	o := options{}
 
 	// Apply all provided options
 	for _, opt := range opts {
 		if opt != nil {
-			opt(&options)
+			opt(&o)
 		}
 	}
 
 	// Apply defaults for unset values
-	applyDefaults(&options)
+	applyDefaults(&o)
 
 	// Validate the final configuration
-	if err := options.validate(); err != nil {
-		return options, err
+	if err := o.validate(); err != nil {
+		return o, err
 	}
 
-	return options, nil
+	return o, nil
 }
 
 // String returns a string representation of the options (excluding sensitive data).

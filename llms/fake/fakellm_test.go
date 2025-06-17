@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/sevigo/goframe/llms/fake"
 )
@@ -90,7 +91,7 @@ func TestLLM_Call(t *testing.T) {
 		fakeLLM := fake.NewFakeLLM([]string{})
 
 		result, err := fakeLLM.Call(ctx, "test prompt")
-		assert.Error(t, err, "should return error for empty responses")
+		require.Error(t, err, "should return error for empty responses")
 		assert.EqualError(t, err, "no responses configured", "should return specific error message")
 		assert.Empty(t, result, "result should be empty on error")
 	})
@@ -100,7 +101,7 @@ func TestLLM_Call(t *testing.T) {
 		fakeLLM := fake.NewFakeLLM(responses)
 
 		result, err := fakeLLM.Call(ctx, "test prompt")
-		assert.NoError(t, err, "should not return error")
+		require.NoError(t, err, "should not return error")
 		assert.Equal(t, "response with options", result, "should return response regardless of options")
 	})
 }
@@ -111,16 +112,16 @@ func TestLLM_Reset(t *testing.T) {
 
 	// Advance through responses
 	_, err := fakeLLM.GenerateContent(context.Background(), nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	_, err = fakeLLM.GenerateContent(context.Background(), nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Reset and verify it starts from the beginning
 	fakeLLM.Reset()
 
 	// Verify next response is first again
 	resp, err := fakeLLM.GenerateContent(context.Background(), nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, "first", resp.Choices[0].Content, "should return first response after reset")
 }
 
@@ -144,31 +145,31 @@ func TestLLM_Integration(t *testing.T) {
 
 		// Test Call method
 		result1, err := fakeLLM.Call(context.Background(), "prompt1")
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, "response1", result1)
 
 		// Test GenerateContent method
 		resp, err := fakeLLM.GenerateContent(context.Background(), nil)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, "response2", resp.Choices[0].Content)
 
 		// Test cycling
 		result2, err := fakeLLM.Call(context.Background(), "prompt2")
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, "response1", result2, "should cycle back to first response")
 
 		// Test reset
 		fakeLLM.Reset()
 		result3, err := fakeLLM.Call(context.Background(), "prompt3")
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, "response1", result3, "should start from first response after reset")
 
 		// Test add response
 		fakeLLM.AddResponse("response3")
 		_, err = fakeLLM.Call(context.Background(), "prompt4") // response2
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		result4, err := fakeLLM.Call(context.Background(), "prompt5")
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, "response3", result4, "should return newly added response")
 	})
 }

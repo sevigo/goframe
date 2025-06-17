@@ -42,7 +42,7 @@ type DocumentStructure struct {
 }
 
 // parseMarkdown parses markdown content using goldmark into structured elements
-func (p *MarkdownPlugin) parseMarkdown(content string) (*DocumentStructure, error) {
+func (p *MarkdownPlugin) parseMarkdown(content string) *DocumentStructure {
 	lines := strings.Split(content, "\n")
 	doc := &DocumentStructure{
 		Elements: make([]MarkdownElement, 0),
@@ -80,7 +80,7 @@ func (p *MarkdownPlugin) parseMarkdown(content string) (*DocumentStructure, erro
 	// Determine document title
 	doc.Title = p.deriveTitle(doc)
 
-	return doc, nil
+	return doc
 }
 
 // convertASTToElements converts goldmark AST nodes to MarkdownElement structures

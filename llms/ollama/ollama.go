@@ -123,8 +123,8 @@ func (o *LLM) GenerateContent(
 	fn := func(response api.ChatResponse) error {
 		fullResponse.WriteString(response.Message.Content)
 		if opts.StreamingFunc != nil {
-			if err := opts.StreamingFunc(ctx, []byte(response.Message.Content)); err != nil {
-				return fmt.Errorf("streaming function returned an error: %w", err)
+			if errStream := opts.StreamingFunc(ctx, []byte(response.Message.Content)); errStream != nil {
+				return fmt.Errorf("streaming function returned an error: %w", errStream)
 			}
 		}
 		// If this is the last chunk, store the final metadata

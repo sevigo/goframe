@@ -40,7 +40,13 @@ func (c *CodeAwareTextSplitter) isShortContent(content string, lines []string) b
 		len(strings.TrimSpace(content)) < shortContentCharThreshold
 }
 
-func (c *CodeAwareTextSplitter) createSingleChunk(ctx context.Context, content string, lineCount int, chunkerType, modelName string) schema.CodeChunk {
+func (c *CodeAwareTextSplitter) createSingleChunk(
+	ctx context.Context,
+	content string,
+	lineCount int,
+	chunkerType,
+	modelName string,
+) schema.CodeChunk {
 	chunk := schema.CodeChunk{
 		Content:     content,
 		LineStart:   1,

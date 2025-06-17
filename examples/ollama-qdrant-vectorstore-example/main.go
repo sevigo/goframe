@@ -30,7 +30,7 @@ func main() {
 	store, cleanup, err := setupVectorStore(ctx, logger)
 	if err != nil {
 		logger.Error("Failed to setup vector store", "error", err)
-		os.Exit(1)
+		return
 	}
 	defer cleanup()
 
@@ -40,7 +40,7 @@ func main() {
 	// Demonstrate core functionality
 	if err := demonstrateVectorStore(ctx, store, documents, logger); err != nil {
 		logger.Error("Demo failed", "error", err)
-		os.Exit(1)
+		return
 	}
 
 	logger.Info("Vector store demo completed successfully")
@@ -168,7 +168,12 @@ func createSampleDocuments() []schema.Document {
 }
 
 // demonstrateVectorStore shows various vector store operations with proper error handling
-func demonstrateVectorStore(ctx context.Context, store *qdrant.Store, documents []schema.Document, logger *slog.Logger) error {
+func demonstrateVectorStore(
+	ctx context.Context,
+	store *qdrant.Store,
+	documents []schema.Document,
+	logger *slog.Logger,
+) error {
 	// Add documents to the vector store
 	logger.Info("Adding documents to vector store", "count", len(documents))
 
