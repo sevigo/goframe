@@ -97,7 +97,6 @@ func (o *LLM) GenerateContent(
 	start := time.Now()
 	o.logger.DebugContext(ctx, "Starting Ollama content generation", "message_count", len(messages))
 
-	// 1. Process and validate call options
 	opts := llms.CallOptions{}
 	for _, opt := range options {
 		opt(&opts)
@@ -115,20 +114,8 @@ func (o *LLM) GenerateContent(
 	req := &api.ChatRequest{
 		Model:    model,
 		Messages: chatMsgs,
-		Stream:   &isStreamingFunc, // Enable streaming if a function is provided
-		// Options:  makeOllamaOptionsFromOptions(o.options, opts),
+		Stream:   &isStreamingFunc,
 	}
-	// if o.options.keepAlive != "" {
-	// 	req.KeepAlive = o.options.keepAlive
-	// }
-	// if o.options.format != "" {
-	// 	req.Format = o.options.format
-	// }
-	// if opts.JSONMode {
-	// 	req.Format = "json"
-	// }
-
-	// 4. Execute the request (streaming or non-streaming)
 	var fullResponse strings.Builder
 	var finalResp api.ChatResponse
 
@@ -195,8 +182,6 @@ func (o *LLM) convertToOllamaMessages(messages []schema.MessageContent) ([]api.M
 					textContent = part.Text
 					foundText = true
 				}
-			// case schema.BinaryContent:
-			// 	imageParts = append(imageParts, api.ImageData(part.Data))
 			default:
 				return nil, fmt.Errorf("unsupported content part type: %T", part)
 			}
@@ -387,7 +372,7 @@ func (o *LLM) ModelExists(ctx context.Context) (bool, error) {
 func (o *LLM) PullModel(ctx context.Context, progressFn func(api.ProgressResponse) error) error {
 	req := &ollamaclient.PullRequest{
 		Model:  o.options.model,
-		Stream: true, // Required for progress reporting
+		Stream: true,
 	}
 
 	return o.client.Pull(ctx, req, progressFn)
@@ -494,22 +479,4 @@ func (o *LLM) determineModel(opts llms.CallOptions) string {
 		return opts.Model
 	}
 	return o.options.model
-}
-
-// extractPrompt extracts text content from a message, handling multiple parts if needed.
-func (o *LLM) extractPrompt(message schema.MessageContent) string {
-	var textParts []string
-
-	for _, part := range message.Parts {
-		if textPart, ok := part.(schema.TextContent); ok {
-			textParts = append(textParts, textPart.Text)
-		}
-	}
-
-	if len(textParts) == 0 {
-		return ""
-	}
-
-	// Join multiple text parts with newlines
-	return strings.Join(textParts, "\n")
 }

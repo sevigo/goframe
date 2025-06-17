@@ -37,7 +37,6 @@ func (c *CodeAwareTextSplitter) calculateEffectiveParameters(ctx context.Context
 		params.OverlapTokens = params.ChunkSize / 4
 	}
 
-	// Derive line and character limits from token-based chunk size
 	params.MinCharsPerChunk = c.calculateMinCharsPerChunk(params.ChunkSize, c.estimationRatio)
 	params.MaxLinesPerChunk = c.calculateMaxLinesPerChunk(params.ChunkSize, c.estimationRatio)
 

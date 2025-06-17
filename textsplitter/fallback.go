@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	model "github.com/sevigo/goframe/schema"
+	"github.com/sevigo/goframe/schema"
 )
 
 // intelligentFallbackChunk implements smart line-based chunking.
@@ -15,7 +15,7 @@ func (c *CodeAwareTextSplitter) intelligentFallbackChunk(
 	content, _ string,
 	params chunkingParameters,
 	modelName string,
-) ([]model.CodeChunk, error) {
+) ([]schema.CodeChunk, error) {
 	if !c.hasSignificantContent(content) {
 		return nil, fmt.Errorf("%w: content lacks significant characters", ErrEmptyContent)
 	}
@@ -26,7 +26,7 @@ func (c *CodeAwareTextSplitter) intelligentFallbackChunk(
 		if len(strings.TrimSpace(content)) >= params.MinCharsPerChunk {
 			chunk := c.createSingleChunk(ctx, content, len(lines), "fallback_single", modelName)
 			if c.isValidChunk(chunk) {
-				return []model.CodeChunk{chunk}, nil
+				return []schema.CodeChunk{chunk}, nil
 			}
 		}
 		return nil, fmt.Errorf("%w: content too short after validation", ErrEmptyContent)
@@ -40,8 +40,8 @@ func (c *CodeAwareTextSplitter) isShortContent(content string, lines []string) b
 		len(strings.TrimSpace(content)) < shortContentCharThreshold
 }
 
-func (c *CodeAwareTextSplitter) createSingleChunk(ctx context.Context, content string, lineCount int, chunkerType, modelName string) model.CodeChunk {
-	chunk := model.CodeChunk{
+func (c *CodeAwareTextSplitter) createSingleChunk(ctx context.Context, content string, lineCount int, chunkerType, modelName string) schema.CodeChunk {
+	chunk := schema.CodeChunk{
 		Content:     content,
 		LineStart:   1,
 		LineEnd:     lineCount,
@@ -64,8 +64,8 @@ func (c *CodeAwareTextSplitter) chunkWithOverlap(
 	lines []string,
 	params chunkingParameters,
 	chunkerType, modelName string,
-) ([]model.CodeChunk, error) {
-	var chunks []model.CodeChunk
+) ([]schema.CodeChunk, error) {
+	var chunks []schema.CodeChunk
 
 	effectiveLinesPerChunk := params.MaxLinesPerChunk
 	if effectiveLinesPerChunk == 0 {
@@ -109,8 +109,8 @@ func (c *CodeAwareTextSplitter) chunkWithOverlap(
 	return chunks, nil
 }
 
-func (c *CodeAwareTextSplitter) createChunkWithOverlap(ctx context.Context, content string, startLineIndex, endLineIndex int, chunkerType string, chunkIndex int, hasOverlap bool, modelName string) model.CodeChunk {
-	chunk := model.CodeChunk{
+func (c *CodeAwareTextSplitter) createChunkWithOverlap(ctx context.Context, content string, startLineIndex, endLineIndex int, chunkerType string, chunkIndex int, hasOverlap bool, modelName string) schema.CodeChunk {
+	chunk := schema.CodeChunk{
 		Content:    content,
 		LineStart:  startLineIndex + 1,
 		LineEnd:    endLineIndex,
@@ -150,4 +150,3 @@ func (c *CodeAwareTextSplitter) detectChunkType(content string) string {
 
 	return string(ChunkTypeCode)
 }
-

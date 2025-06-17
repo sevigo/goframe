@@ -124,46 +124,6 @@ func (c *CodeAwareTextSplitter) chunkContent(ctx context.Context, content, fileP
 	return plugin.Chunk(content, filePath, opts)
 }
 
-func (c *CodeAwareTextSplitter) splitDocument(ctx context.Context, doc schema.Document) ([]schema.Document, error) {
-	modelName := "default" // Could be extracted from context or document metadata
-	filePath, ok := doc.Metadata["source"].(string)
-	if !ok {
-		filePath = "unknown"
-	}
-
-	codeChunks, err := c.chunkFile(ctx, doc.PageContent, filePath, modelName, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	chunks := make([]schema.Document, 0, len(codeChunks))
-	for _, chunk := range codeChunks {
-		metadata := make(map[string]any)
-		for k, v := range doc.Metadata {
-			metadata[k] = v
-		}
-
-		// Add chunk-specific metadata
-		metadata["line_start"] = chunk.LineStart
-		metadata["line_end"] = chunk.LineEnd
-		metadata["chunk_type"] = chunk.Type
-		metadata["token_count"] = chunk.TokenCount
-
-		for k, v := range chunk.Annotations {
-			metadata[k] = v
-		}
-
-		chunks = append(chunks, schema.NewDocument(chunk.Content, metadata))
-	}
-
-	return chunks, nil
-}
-
-// ChunkFile chunks content using appropriate language plugin or intelligent fallback.
-func (c *CodeAwareTextSplitter) chunkFile(ctx context.Context, content, filePath, modelName string, opts *schema.CodeChunkingOptions) ([]schema.CodeChunk, error) {
-	return c.ChunkFileWithFileInfo(ctx, content, filePath, modelName, nil, opts)
-}
-
 // ChunkFileWithFileInfo chunks content with file info for enhanced language detection.
 func (c *CodeAwareTextSplitter) ChunkFileWithFileInfo(
 	ctx context.Context,

@@ -15,11 +15,8 @@ import (
 )
 
 const (
-	// DefaultOllamaURL is the default Ollama server URL
 	DefaultOllamaURL = "http://127.0.0.1:11434"
-	// DefaultTimeout is the default HTTP client timeout
 	DefaultTimeout = 10 * time.Minute
-	// MaxBufferSize is the maximum buffer size for streaming responses
 	MaxBufferSize = 512 * 1000
 )
 

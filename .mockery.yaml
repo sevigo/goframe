@@ -1,5 +1,0 @@
-with-expecter: true
-disable-version-string: true
-mockname: "Mock{{.InterfaceName}}"
-outpkg: mocks
-output: "./internal/mocks"

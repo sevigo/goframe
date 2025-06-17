@@ -56,7 +56,7 @@ func WithMaxChunkSize(size int) Option {
 }
 
 // WithEstimationRatio sets the character-to-token estimation ratio.
-func WithEstimationRatio(ratio float64) Option { // <<< ADD THIS FUNCTION
+func WithEstimationRatio(ratio float64) Option {
 	return func(o *options) {
 		if ratio > 0 {
 			o.estimationRatio = ratio
