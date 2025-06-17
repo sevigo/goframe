@@ -13,7 +13,7 @@ import (
 func (p *PDFPlugin) Chunk(_ string, filePath string, opts *internal_model.CodeChunkingOptions) ([]internal_model.CodeChunk, error) {
 	p.logger.Debug("PDF Chunking called", "path", filePath)
 
-	pageTextResults, _, err := p.extractTextFromPDF(filePath)
+	pageTextResults, err := p.extractTextFromPDF(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("pdfplugin: could not extract text from PDF %s: %w", filePath, err)
 	}

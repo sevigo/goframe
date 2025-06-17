@@ -172,7 +172,12 @@ func (p *CSVPlugin) looksLikeText(value string) bool {
 }
 
 // createChunks creates chunks based on CSV structure and size constraints
-func (p *CSVPlugin) createChunks(structure *CSVStructure, content string, path string, opts *schema.CodeChunkingOptions) []schema.CodeChunk {
+func (p *CSVPlugin) createChunks(
+	structure *CSVStructure,
+	content string,
+	path string,
+	opts *schema.CodeChunkingOptions,
+) []schema.CodeChunk {
 	var chunks []schema.CodeChunk
 
 	// For small CSV files, create a single chunk

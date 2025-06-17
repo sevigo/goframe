@@ -1,4 +1,4 @@
-package yaml_test
+package yaml_test //nolint:cyclop //ok
 
 import (
 	"fmt"
@@ -358,7 +358,7 @@ deployment:
 		assert.GreaterOrEqual(t, len(metadata.Definitions), 1)
 
 		foundAppDef := false
-		foundDbDef := false
+		foundDBDef := false
 		for _, def := range metadata.Definitions {
 			t.Logf("Definition: Name=%s, Type=%s, Signature=%s", def.Name, def.Type, def.Signature)
 			if def.Name == "application" {
@@ -367,13 +367,13 @@ deployment:
 				assert.Contains(t, def.Signature, "mapping")
 			}
 			if def.Name == "database" {
-				foundDbDef = true
+				foundDBDef = true
 				assert.Equal(t, "mapping", def.Type)
 			}
 		}
 
 		// At least one of these should be found
-		assert.True(t, foundAppDef || foundDbDef, "Should have at least one complex structure definition")
+		assert.True(t, foundAppDef || foundDBDef, "Should have at least one complex structure definition")
 	})
 
 	// Test Docker Compose detection
@@ -453,7 +453,7 @@ jobs:
 		emptyContent := ""
 		chunks, err := plugin.Chunk(emptyContent, "empty.yaml", &model.CodeChunkingOptions{})
 		require.NoError(t, err)
-		assert.Equal(t, 1, len(chunks))
+		assert.Len(t, chunks, 1)
 
 		// Test minimal YAML
 		minimalContent := `---
@@ -461,7 +461,7 @@ value: 42
 `
 		chunks, err = plugin.Chunk(minimalContent, "minimal.yml", &model.CodeChunkingOptions{})
 		require.NoError(t, err)
-		assert.Equal(t, 1, len(chunks))
+		assert.Len(t, chunks, 1)
 		assert.Equal(t, "yaml_document", chunks[0].Type)
 	})
 
@@ -489,6 +489,6 @@ value: 42
 		}
 
 		// Either single large_list chunk or sequence slices
-		assert.True(t, len(chunks) >= 1, "Should have at least one chunk")
+		assert.GreaterOrEqual(t, len(chunks), 1, "Should have at least one chunk")
 	})
 }

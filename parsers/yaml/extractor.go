@@ -350,7 +350,6 @@ func (p *YamlPlugin) isComplexYamlNode(node *yaml.Node) bool {
 	case yaml.MappingNode, yaml.SequenceNode:
 		return true
 	case yaml.ScalarNode:
-		// Consider multi-line scalars as complex
 		return len(strings.Split(node.Value, "\n")) > 1
 	default:
 		return false

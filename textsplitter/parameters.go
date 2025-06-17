@@ -9,7 +9,13 @@ import (
 )
 
 // calculateEffectiveParameters determines the actual parameters to use for chunking.
-func (c *CodeAwareTextSplitter) calculateEffectiveParameters(ctx context.Context, opts *model.CodeChunkingOptions, filePath string, contentLength int, modelName string) chunkingParameters {
+func (c *CodeAwareTextSplitter) calculateEffectiveParameters(
+	ctx context.Context,
+	opts *model.CodeChunkingOptions,
+	filePath string,
+	contentLength int,
+	modelName string,
+) chunkingParameters {
 	params := chunkingParameters{
 		ChunkSize:     c.chunkSize,
 		OverlapTokens: 0,
@@ -23,12 +29,12 @@ func (c *CodeAwareTextSplitter) calculateEffectiveParameters(ctx context.Context
 		params.ChunkSize = c.GetRecommendedChunkSize(ctx, filePath, modelName, contentLength)
 	}
 
-	// Determine overlap in tokens
-	if opts != nil && opts.OverlapTokens > 0 {
+	switch {
+	case opts != nil && opts.OverlapTokens > 0:
 		params.OverlapTokens = opts.OverlapTokens
-	} else if modelName != "" {
+	case modelName != "":
 		params.OverlapTokens = c.tokenizer.GetOptimalOverlapTokens(ctx, modelName)
-	} else {
+	default:
 		params.OverlapTokens = int(float64(params.ChunkSize) * defaultOverlapRatio)
 	}
 

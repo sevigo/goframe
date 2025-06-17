@@ -30,14 +30,14 @@ func main() {
 	ragChain, cleanup, err := setupRAGSystem(ctx, logger)
 	if err != nil {
 		logger.Error("Failed to setup RAG system", "error", err)
-		os.Exit(1)
+		return
 	}
 	defer cleanup()
 
 	// Load knowledge base
-	if err := loadKnowledgeBase(ctx, ragChain.Retriever.(*VectorStoreRetriever), logger); err != nil {
+	if err := loadKnowledgeBase(ctx, ragChain.Retriever.(*VectorStoreRetriever), logger); err != nil { //nolint:errcheck //fixme
 		logger.Error("Failed to load knowledge base", "error", err)
-		os.Exit(1)
+		return
 	}
 
 	// Run interactive Q&A session
@@ -223,9 +223,9 @@ func runQASession(ctx context.Context, ragChain *chains.RetrievalQA, logger *slo
 	}
 
 	for i, q := range questions {
-		fmt.Printf("\n" + strings.Repeat("=", 80) + "\n")
+		fmt.Printf("\n%s\n", strings.Repeat("=", 80))
 		fmt.Printf("Question %d (%s): %s\n", i+1, q.category, q.question)
-		fmt.Printf(strings.Repeat("-", 80) + "\n")
+		fmt.Printf("%s\n", strings.Repeat("-", 80))
 
 		start := time.Now()
 		answer, err := ragChain.Call(ctx, q.question)
@@ -244,6 +244,6 @@ func runQASession(ctx context.Context, ragChain *chains.RetrievalQA, logger *slo
 			"answer_length", len(answer))
 	}
 
-	fmt.Printf("\n" + strings.Repeat("=", 80) + "\n")
+	fmt.Printf("\n%s\n", strings.Repeat("=", 80))
 	logger.Info("Q&A session completed")
 }

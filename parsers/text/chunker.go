@@ -236,7 +236,7 @@ func (p *TextPlugin) createChunks(structure TextStructure, content string, path 
 			continue
 		}
 
-		chunk := p.createChunkFromSection(section, i, path, opts)
+		chunk := p.createChunkFromSection(section, i, path)
 
 		// Split large chunks if needed
 		if opts != nil && opts.MaxLinesPerChunk > 0 {
@@ -260,7 +260,7 @@ func (p *TextPlugin) createChunks(structure TextStructure, content string, path 
 }
 
 // createChunkFromSection creates a chunk from a text section
-func (p *TextPlugin) createChunkFromSection(section TextSection, index int, path string, opts *model.CodeChunkingOptions) model.CodeChunk {
+func (p *TextPlugin) createChunkFromSection(section TextSection, index int, path string) model.CodeChunk {
 	identifier := p.generateIdentifier(section, index, path)
 
 	annotations := map[string]string{

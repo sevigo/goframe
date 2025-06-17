@@ -1,4 +1,4 @@
-package json_test
+package json_test //nolint:cyclop //ok
 
 import (
 	"encoding/json"

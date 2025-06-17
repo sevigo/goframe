@@ -31,24 +31,6 @@ type MessageContent struct {
 	Parts []ContentPart
 }
 
-func (mc MessageContent) String() string {
-	if len(mc.Parts) == 0 {
-		return ""
-	}
-
-	var parts []string
-	for _, part := range mc.Parts {
-		if s := part.String(); s != "" {
-			parts = append(parts, s)
-		}
-	}
-	return strings.Join(parts, " ")
-}
-
-func (mc MessageContent) GetTextContent() string {
-	return mc.String()
-}
-
 func NewTextMessage(role ChatMessageType, text string) MessageContent {
 	return MessageContent{
 		Role:  role,
@@ -66,4 +48,22 @@ func NewHumanMessage(text string) MessageContent {
 
 func NewAIMessage(text string) MessageContent {
 	return NewTextMessage(ChatMessageTypeAI, text)
+}
+
+func (mc MessageContent) String() string {
+	if len(mc.Parts) == 0 {
+		return ""
+	}
+
+	var parts []string
+	for _, part := range mc.Parts {
+		if s := part.String(); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func (mc MessageContent) GetTextContent() string {
+	return mc.String()
 }

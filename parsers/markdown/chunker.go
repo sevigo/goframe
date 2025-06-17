@@ -20,10 +20,7 @@ type HeadingSection struct {
 // Chunk breaks Markdown into semantic chunks based on hierarchical structure
 func (p *MarkdownPlugin) Chunk(content string, path string, opt *model.CodeChunkingOptions) ([]model.CodeChunk, error) {
 	// Parse the markdown into structured elements
-	doc, err := p.parseMarkdown(content)
-	if err != nil {
-		return nil, err
-	}
+	doc := p.parseMarkdown(content)
 
 	// Ensure doc.Title has a fallback from filename if not set by frontmatter or H1
 	if doc.Title == "" {

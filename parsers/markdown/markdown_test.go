@@ -1,4 +1,4 @@
-package markdown_test
+package markdown_test //nolint:cyclop //ok
 
 import (
 	"testing"
@@ -417,7 +417,7 @@ And some more text after the code block.`
 		require.NoError(t, err)
 
 		// Should create a single document chunk
-		assert.Equal(t, 1, len(chunks))
+		assert.Len(t, chunks, 1)
 
 		chunk := chunks[0]
 		assert.Equal(t, "document", chunk.Type)

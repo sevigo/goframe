@@ -32,7 +32,11 @@ func (c *CodeAwareTextSplitter) tryLanguageSpecificChunking(
 	return c.enrichChunksWithTokenCounts(ctx, chunks, modelName), nil
 }
 
-func (c *CodeAwareTextSplitter) enrichChunksWithTokenCounts(ctx context.Context, chunks []model.CodeChunk, modelName string) []model.CodeChunk {
+func (c *CodeAwareTextSplitter) enrichChunksWithTokenCounts(
+	ctx context.Context,
+	chunks []model.CodeChunk,
+	modelName string,
+) []model.CodeChunk {
 	enrichedChunks := make([]model.CodeChunk, 0, len(chunks))
 
 	for _, chunk := range chunks {

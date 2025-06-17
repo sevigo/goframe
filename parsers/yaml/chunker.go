@@ -1,4 +1,3 @@
-// chunker - Fixed version
 package yaml
 
 import (
@@ -144,7 +143,7 @@ func (p *YamlPlugin) structureToChunks(structure YamlStructure, content string, 
 	case "mapping":
 		chunks = p.chunkMapping(structure, content, lines, path)
 	case "sequence":
-		chunks = p.chunkSequence(structure, content, lines, path)
+		chunks = p.chunkSequence(structure, content, path)
 	default:
 		// Single scalar value
 		chunks = p.createSingleChunk(content, path, structure.Type)
@@ -165,7 +164,7 @@ func (p *YamlPlugin) chunkMapping(structure YamlStructure, content string, lines
 	// For larger mappings, create chunks for significant top-level keys
 	for _, child := range structure.Children {
 		if p.shouldCreateChunkForKey(child) {
-			chunk := p.createKeyChunk(child, content, lines, path)
+			chunk := p.createKeyChunk(child, content, lines)
 			if chunk != nil {
 				chunks = append(chunks, *chunk)
 			}
@@ -181,7 +180,7 @@ func (p *YamlPlugin) chunkMapping(structure YamlStructure, content string, lines
 }
 
 // chunkSequence creates chunks for YAML sequences (arrays)
-func (p *YamlPlugin) chunkSequence(structure YamlStructure, content string, lines []string, path string) []schema.CodeChunk {
+func (p *YamlPlugin) chunkSequence(structure YamlStructure, content string, path string) []schema.CodeChunk {
 	var chunks []schema.CodeChunk
 
 	// For small sequences, create a single chunk
@@ -198,7 +197,7 @@ func (p *YamlPlugin) chunkSequence(structure YamlStructure, content string, line
 		}
 
 		sequenceSlice := structure.Children[i:end]
-		chunk := p.createSequenceSliceChunk(sequenceSlice, i, content, lines, path)
+		chunk := p.createSequenceSliceChunk(sequenceSlice, i, content)
 		if chunk != nil {
 			chunks = append(chunks, *chunk)
 		}
@@ -241,7 +240,7 @@ func (p *YamlPlugin) hasSignificantNesting(structure YamlStructure) bool {
 }
 
 // createKeyChunk creates a chunk for a significant YAML key
-func (p *YamlPlugin) createKeyChunk(child YamlStructure, content string, lines []string, path string) *schema.CodeChunk {
+func (p *YamlPlugin) createKeyChunk(child YamlStructure, content string, lines []string) *schema.CodeChunk {
 	// Extract content for this key section
 	keyContent := p.extractKeyContent(child, content, lines)
 	if keyContent == "" {
@@ -281,7 +280,7 @@ func (p *YamlPlugin) createKeyChunk(child YamlStructure, content string, lines [
 }
 
 // createSequenceSliceChunk creates a chunk for a slice of sequence items
-func (p *YamlPlugin) createSequenceSliceChunk(items []YamlStructure, startIndex int, content string, lines []string, path string) *schema.CodeChunk {
+func (p *YamlPlugin) createSequenceSliceChunk(items []YamlStructure, startIndex int, content string) *schema.CodeChunk {
 	if len(items) == 0 {
 		return nil
 	}

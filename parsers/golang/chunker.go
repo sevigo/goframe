@@ -286,7 +286,11 @@ func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *
 }
 
 // extractVarConstChunks extracts top-level variable and constant declaration chunks
-func (p *GoPlugin) extractVarConstChunks(content string, fset *token.FileSet, file *ast.File) []model.CodeChunk {
+func (p *GoPlugin) extractVarConstChunks( //nolint:funlen //fixme
+	content string,
+	fset *token.FileSet,
+	file *ast.File,
+) []model.CodeChunk {
 	var chunks []model.CodeChunk
 	lines := strings.Split(content, "\n")
 

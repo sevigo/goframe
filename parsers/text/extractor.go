@@ -34,7 +34,7 @@ func (p *TextPlugin) ExtractMetadata(content string, path string) (schema.FileMe
 }
 
 // analyzeTextContent analyzes the content for various text characteristics
-func (p *TextPlugin) analyzeTextContent(content string, lines []string, metadata *schema.FileMetadata) {
+func (p *TextPlugin) analyzeTextContent(_ string, lines []string, metadata *schema.FileMetadata) {
 	var (
 		emptyLines    int
 		headings      int

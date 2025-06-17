@@ -73,7 +73,9 @@ func (c *CodeAwareTextSplitter) hasSignificantContent(content string) bool {
 	return significanceRatio >= minSignificanceRatio && significantChars >= minSignificantChars
 }
 
-func (c *CodeAwareTextSplitter) analyzeContentCharacters(content string) (significantChars, totalNonWhitespaceChars int) {
+func (c *CodeAwareTextSplitter) analyzeContentCharacters(content string) (int, int) {
+	var totalNonWhitespaceChars, significantChars = 0, 0
+
 	for _, r := range content {
 		if !unicode.IsSpace(r) {
 			totalNonWhitespaceChars++
