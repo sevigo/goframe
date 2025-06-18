@@ -1,0 +1,55 @@
+name: GoFrame CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Specify the Go version your project uses.
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      # The cache is invalidated if go.sum or the linter config changes.
+      - name: Cache Go modules and linter
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/golangci-lint
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}-${{ hashFiles('.golangci.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      # This fails if 'go mod tidy' produces any changes, ensuring that go.mod/go.sum are committed.
+      - name: Verify Dependencies
+        run: |
+          go mod tidy
+          if [[ -n $(git status -s) ]]; then
+            echo "go.mod/go.sum is not tidy. Please run 'go mod tidy' and commit the changes."
+            git diff
+            exit 1
+          fi
+
+      # This reuses the same logic as local development.
+      - name: Lint Code
+        run: make lint
+
+      # This automatically handles the testcontainers setup via the DOCKER_ENV variable in the Makefile.
+      - name: Run Tests
+        run: make test
+
+      # This is a good way to verify that the library's public API hasn't been broken.
+      - name: Build Examples
+        run: make build-examples
