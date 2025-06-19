@@ -25,7 +25,6 @@ import (
 var (
 	ErrMissingEmbedder       = errors.New("qdrant: embedder is required but not provided")
 	ErrMissingCollectionName = errors.New("qdrant: collection name is required")
-	ErrCollectionNotFound    = errors.New("qdrant: collection not found")
 	ErrInvalidNumDocuments   = errors.New("qdrant: number of documents must be positive")
 	ErrConnectionFailed      = errors.New("qdrant: connection failed")
 	ErrInvalidURL            = errors.New("qdrant: invalid URL provided")
@@ -78,7 +77,7 @@ type Store struct {
 // Compile-time interface check
 var _ vectorstores.VectorStore = (*Store)(nil)
 
-func New(opts ...Option) (*Store, error) {
+func New(opts ...Option) (vectorstores.VectorStore, error) {
 	storeOptions, err := parseOptions(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("invalid options: %w", err)
@@ -667,7 +666,6 @@ func (s *Store) SimilaritySearch(
 	opts := vectorstores.ParseOptions(options...)
 	collectionName := s.getCollectionName(opts)
 
-	// Embed query
 	embedStart := time.Now()
 	queryVector, err := s.embedder.EmbedQuery(ctx, query)
 	embedDuration := time.Since(embedStart)
@@ -694,7 +692,7 @@ func (s *Store) SimilaritySearch(
 	if err != nil {
 		if stat, ok := status.FromError(err); ok && stat.Code() == codes.NotFound {
 			s.logger.WarnContext(ctx, "Collection not found during search", "collection", collectionName)
-			return nil, ErrCollectionNotFound
+			return nil, vectorstores.ErrCollectionNotFound
 		}
 		s.logger.ErrorContext(ctx, "Search failed",
 			"error", err, "collection", collectionName, "duration", searchDuration)
@@ -767,7 +765,7 @@ func (s *Store) SimilaritySearchWithScores(
 	if err != nil {
 		if stat, ok := status.FromError(err); ok && stat.Code() == codes.NotFound {
 			s.logger.WarnContext(ctx, "Collection not found during scored search", "collection", collectionName)
-			return nil, ErrCollectionNotFound
+			return nil, vectorstores.ErrCollectionNotFound
 		}
 		s.logger.ErrorContext(ctx, "Scored search failed", "error", err, "collection", collectionName)
 		return nil, fmt.Errorf("qdrant search failed: %w", err)
@@ -942,7 +940,7 @@ func (s *Store) DeleteCollection(ctx context.Context, name string) error {
 	if err != nil {
 		if stat, ok := status.FromError(err); ok && stat.Code() == codes.NotFound {
 			s.logger.WarnContext(ctx, "Collection not found for deletion", "name", name)
-			return ErrCollectionNotFound
+			return vectorstores.ErrCollectionNotFound
 		}
 		s.logger.ErrorContext(ctx, "Collection deletion failed",
 			"name", name, "error", err, "duration", duration)

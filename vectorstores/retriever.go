@@ -15,17 +15,19 @@ type Retriever interface {
 type retrieverImpl struct {
 	vectorStore VectorStore
 	numDocs     int
+	options     []Option
 }
 
 // GetRelevantDocuments retrieves documents from the vector store.
 func (r retrieverImpl) GetRelevantDocuments(ctx context.Context, query string) ([]schema.Document, error) {
-	return r.vectorStore.SimilaritySearch(ctx, query, r.numDocs)
+	return r.vectorStore.SimilaritySearch(ctx, query, r.numDocs, r.options...)
 }
 
 // ToRetriever creates a retriever from a vector store.
-func ToRetriever(vectorStore VectorStore, numDocs int) schema.Retriever {
+func ToRetriever(vectorStore VectorStore, numDocs int, options ...Option) schema.Retriever {
 	return retrieverImpl{
 		vectorStore: vectorStore,
 		numDocs:     numDocs,
+		options:     options,
 	}
 }
