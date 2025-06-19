@@ -32,7 +32,7 @@ func (f *LLM) GenerateContent(
 	_ context.Context,
 	messages []schema.MessageContent,
 	_ ...llms.CallOption,
-) (*llms.ContentResponse, error) {
+) (*schema.ContentResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -50,8 +50,8 @@ func (f *LLM) GenerateContent(
 	response := f.responses[f.index]
 	f.index = (f.index + 1) % len(f.responses)
 
-	return &llms.ContentResponse{
-		Choices: []*llms.ContentChoice{
+	return &schema.ContentResponse{
+		Choices: []*schema.ContentChoice{
 			{Content: response},
 		},
 	}, nil

@@ -8,7 +8,7 @@ import (
 )
 
 type Model interface {
-	GenerateContent(ctx context.Context, messages []schema.MessageContent, options ...CallOption) (*ContentResponse, error)
+	GenerateContent(ctx context.Context, messages []schema.MessageContent, options ...CallOption) (*schema.ContentResponse, error)
 	Call(ctx context.Context, prompt string, options ...CallOption) (string, error)
 }
 

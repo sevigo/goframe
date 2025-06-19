@@ -14,20 +14,11 @@ type Embedder interface {
 }
 
 type EmbedderImpl struct {
-	client EmbedderClient
+	client Embedder
 	opts   options
 }
 
-type EmbedderClient interface {
-	CreateEmbedding(ctx context.Context, texts []string) ([][]float32, error)
-	GetDimension(ctx context.Context) (int, error)
-}
-
-func NewEmbedder(client EmbedderClient, opts ...Option) (*EmbedderImpl, error) {
-	if client == nil {
-		return nil, errors.New("client cannot be nil")
-	}
-
+func NewEmbedder(client Embedder, opts ...Option) (Embedder, error) {
 	embedderOpts := options{
 		StripNewLines: true,
 		BatchSize:     32,
@@ -54,7 +45,7 @@ func (e *EmbedderImpl) EmbedQuery(ctx context.Context, text string) ([]float32, 
 
 	processedText := e.preprocessText(text)
 
-	embeddings, err := e.client.CreateEmbedding(ctx, []string{processedText})
+	embeddings, err := e.client.EmbedDocuments(ctx, []string{processedText})
 	if err != nil {
 		return nil, fmt.Errorf("error embedding query: %w", err)
 	}
@@ -79,7 +70,7 @@ func (e *EmbedderImpl) EmbedDocuments(ctx context.Context, texts []string) ([][]
 	allEmbeddings := make([][]float32, 0, len(texts))
 
 	for _, batch := range batchedTexts {
-		batchEmbeddings, err := e.client.CreateEmbedding(ctx, batch)
+		batchEmbeddings, err := e.client.EmbedDocuments(ctx, batch)
 		if err != nil {
 			return nil, fmt.Errorf("error embedding document batch: %w", err)
 		}
