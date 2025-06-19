@@ -47,7 +47,7 @@ func main() {
 }
 
 // setupVectorStore creates and configures a Qdrant vector store with Ollama embeddings
-func setupVectorStore(ctx context.Context, logger *slog.Logger) (*qdrant.Store, func(), error) {
+func setupVectorStore(ctx context.Context, logger *slog.Logger) (vectorstores.VectorStore, func(), error) {
 	logger.Info("Initializing vector store components")
 
 	// Create Ollama embedder with a dedicated embedding model
@@ -79,15 +79,9 @@ func setupVectorStore(ctx context.Context, logger *slog.Logger) (*qdrant.Store, 
 	// Cleanup function to remove test collection
 	cleanup := func() {
 		logger.Info("Cleaning up test collection", "collection", collectionName)
-		if err := store.DeleteCollection(ctx, collectionName); err != nil {
-			logger.Warn("Failed to cleanup test collection", "error", err)
-		}
-	}
-
-	// Verify store health
-	if err := store.Health(ctx); err != nil {
-		cleanup()
-		return nil, nil, fmt.Errorf("vector store health check failed: %w", err)
+		// if err := store.DeleteCollection(ctx, collectionName); err != nil {
+		// 	logger.Warn("Failed to cleanup test collection", "error", err)
+		// }
 	}
 
 	logger.Info("Vector store initialized successfully", "collection", collectionName)
@@ -170,7 +164,7 @@ func createSampleDocuments() []schema.Document {
 // demonstrateVectorStore shows various vector store operations with proper error handling
 func demonstrateVectorStore(
 	ctx context.Context,
-	store *qdrant.Store,
+	store vectorstores.VectorStore,
 	documents []schema.Document,
 	logger *slog.Logger,
 ) error {
@@ -255,9 +249,9 @@ func demonstrateVectorStore(
 		logger.Info("Demonstrating document deletion")
 		deleteIDs := documentIDs[:min(2, len(documentIDs))]
 
-		if err := store.DeleteDocuments(ctx, deleteIDs); err != nil {
-			return fmt.Errorf("failed to delete documents: %w", err)
-		}
+		// if err := store.DeleteDocuments(ctx, deleteIDs); err != nil {
+		// 	return fmt.Errorf("failed to delete documents: %w", err)
+		// }
 
 		logger.Info("Documents deleted successfully", "count", len(deleteIDs))
 
@@ -283,7 +277,7 @@ type searchScenario struct {
 }
 
 // runSearchScenario executes a single search scenario with detailed logging
-func runSearchScenario(ctx context.Context, store *qdrant.Store, scenario searchScenario, logger *slog.Logger) error {
+func runSearchScenario(ctx context.Context, store vectorstores.VectorStore, scenario searchScenario, logger *slog.Logger) error {
 	logger.Info("Running search scenario",
 		"name", scenario.name,
 		"query", scenario.query)

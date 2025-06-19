@@ -238,9 +238,9 @@ func setupRAGSystem(ctx context.Context, logger *slog.Logger) (*chains.Retrieval
 	// Cleanup function
 	cleanup := func() {
 		logger.Info("Cleaning up resources", "collection", collectionName)
-		if err := vectorStore.DeleteCollection(ctx, collectionName); err != nil {
-			logger.Warn("Failed to cleanup collection", "error", err)
-		}
+		// if err := vectorStore.DeleteCollection(ctx, collectionName); err != nil {
+		// 	logger.Warn("Failed to cleanup collection", "error", err)
+		// }
 	}
 
 	logger.Info("RAG system setup complete")
