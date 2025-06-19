@@ -7,14 +7,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	model "github.com/sevigo/goframe/schema"
+	"github.com/sevigo/goframe/schema"
 )
 
 type GoPlugin struct {
 	logger *slog.Logger
 }
 
-func NewGoPlugin(logger *slog.Logger) model.ParserPlugin {
+func NewGoPlugin(logger *slog.Logger) schema.ParserPlugin {
 	return &GoPlugin{
 		logger: logger,
 	}

@@ -1,4 +1,3 @@
-// File: pkg/llms/ollama/ollama.go
 package ollama
 
 import (
@@ -38,9 +37,9 @@ type LLM struct {
 
 // Compile-time interface checks
 var (
-	_ llms.Model                = (*LLM)(nil)
-	_ embeddings.EmbedderClient = (*LLM)(nil)
-	_ llms.Tokenizer            = (*LLM)(nil)
+	_ llms.Model          = (*LLM)(nil)
+	_ embeddings.Embedder = (*LLM)(nil)
+	_ llms.Tokenizer      = (*LLM)(nil)
 )
 
 // New creates a new Ollama LLM instance with comprehensive error handling and validation.
@@ -89,7 +88,7 @@ func (o *LLM) GenerateContent(
 	ctx context.Context,
 	messages []schema.MessageContent,
 	options ...llms.CallOption,
-) (*llms.ContentResponse, error) {
+) (*schema.ContentResponse, error) {
 	if o.logger == nil {
 		o.logger = slog.Default()
 	}
@@ -142,9 +141,8 @@ func (o *LLM) GenerateContent(
 		return nil, err
 	}
 
-	// 5. Format the final response
-	response := &llms.ContentResponse{
-		Choices: []*llms.ContentChoice{
+	response := &schema.ContentResponse{
+		Choices: []*schema.ContentChoice{
 			{
 				Content: fullResponse.String(),
 				GenerationInfo: map[string]any{
@@ -207,67 +205,39 @@ func typeToRole(typ schema.ChatMessageType) string {
 	}
 }
 
-func (o *LLM) CreateEmbedding(ctx context.Context, texts []string) ([][]float32, error) {
-	start := time.Now()
-	o.logger.DebugContext(ctx, "Starting batch embedding creation", "text_count", len(texts))
+// EmbedDocuments creates embeddings for documents with validation.
+func (o *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error) {
+	o.logger.DebugContext(ctx, "Embedding documents", "document_count", len(texts))
 
 	if len(texts) == 0 {
 		return [][]float32{}, nil
 	}
 
 	if err := o.EnsureModel(ctx); err != nil {
-		o.logger.ErrorContext(ctx, "Model availability check failed for embeddings", "error", err)
 		return nil, fmt.Errorf("embedding model preparation failed: %w", err)
 	}
 
+	// Ollama client handles batching internally, so we can send all at once
+	// This is a placeholder for a true batch client call if the underlying client supports it.
+	// For now, we iterate. A better client would handle this.
 	allEmbeddings := make([][]float32, 0, len(texts))
-	failed := 0
-
-	for i, text := range texts {
-		if ctx.Err() != nil {
-			o.logger.WarnContext(ctx, "Context canceled during batch embedding",
-				"processed", i, "total", len(texts))
-			return nil, ErrContextCanceled
-		}
-
+	for _, text := range texts {
 		embedding, err := o.createSingleEmbedding(ctx, text)
 		if err != nil {
-			o.logger.ErrorContext(ctx, "Failed to create embedding for text",
-				"index", i, "text_length", len(text), "error", err)
-			failed++
-			continue
+			// In a real scenario, you might want to decide on a failure strategy
+			// (e.g., continue and return partial results, or fail completely).
+			return nil, fmt.Errorf("failed to embed document: %w", err)
 		}
 		allEmbeddings = append(allEmbeddings, embedding)
 	}
 
-	duration := time.Since(start)
-	if failed > 0 {
-		o.logger.WarnContext(ctx, "Batch embedding completed with failures",
-			"successful", len(allEmbeddings), "failed", failed, "duration", duration)
-		return nil, fmt.Errorf("failed to embed %d out of %d texts", failed, len(texts))
-	}
-
-	o.logger.InfoContext(ctx, "Batch embedding completed successfully",
-		"count", len(allEmbeddings), "duration", duration)
-	return allEmbeddings, nil
-}
-
-// EmbedDocuments creates embeddings for documents with validation.
-func (o *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error) {
-	o.logger.DebugContext(ctx, "Embedding documents", "document_count", len(texts))
-
-	embeddings, err := o.CreateEmbedding(ctx, texts)
-	if err != nil {
-		return nil, fmt.Errorf("document embedding failed: %w", err)
-	}
-
-	if len(texts) != len(embeddings) {
+	if len(texts) != len(allEmbeddings) {
 		o.logger.ErrorContext(ctx, "Embedding count mismatch",
-			"expected", len(texts), "got", len(embeddings))
+			"expected", len(texts), "got", len(allEmbeddings))
 		return nil, ErrIncompleteEmbedding
 	}
 
-	return embeddings, nil
+	return allEmbeddings, nil
 }
 
 // EmbedQuery creates an embedding for a single query with comprehensive error handling.
