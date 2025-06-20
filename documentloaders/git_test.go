@@ -1,4 +1,4 @@
-package documentloaders
+package documentloaders_test
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/sevigo/goframe/documentloaders"
 	"github.com/sevigo/goframe/parsers"
 	"github.com/sevigo/goframe/schema"
 )
@@ -117,17 +118,13 @@ func TestGitLoader_Load(t *testing.T) {
 	require.NoError(t, err)
 
 	registry := newFakeRegistry()
-	loader := NewGit(tempDir, registry)
+	loader := documentloaders.NewGit(tempDir, registry)
 
-	// 2. Act: Run the Load method.
 	docs, err := loader.Load(context.Background())
 
-	// 3. Assert: Verify the results.
 	require.NoError(t, err, "Load should not return an error")
 	require.NotNil(t, docs, "Load should return documents")
 
-	// We expect 2 chunks from main.go + 1 chunk from README.txt = 3 documents.
-	// .git/ and .png files should be skipped.
 	assert.Len(t, docs, 3, "Expected 3 documents to be loaded and chunked")
 
 	// Create maps to check for presence and correctness, as order is not guaranteed.
@@ -144,11 +141,12 @@ func TestGitLoader_Load(t *testing.T) {
 
 		switch source {
 		case "src/main.go":
-			if identifier == "main" {
+			switch identifier {
+			case "main":
 				assert.Equal(t, "package main\n\nfunc main() {}", doc.PageContent)
 				assert.Equal(t, "function", doc.Metadata["chunk_type"])
 				foundMain = true
-			} else if identifier == "helper" {
+			case "helper":
 				assert.Equal(t, "func helper() {}", doc.PageContent)
 				assert.Equal(t, "function", doc.Metadata["chunk_type"])
 				foundHelper = true
