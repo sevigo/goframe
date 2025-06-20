@@ -23,12 +23,6 @@ import (
 	"github.com/sevigo/goframe/vectorstores/qdrant"
 )
 
-// llama3.2:latest, gemma3:latest
-//
-// Interesting idea:
-// Keep fast model for most cases: Use gemma3:12b with improved prompts
-// Add confidence scoring: If the fast model seems uncertain, fall back to thinking model
-// Use thinking model selectively: For complex queries or when validation confidence is low
 const (
 	maxRandomQuestion = 10
 	generatorModel    = "gemini-2.5-flash"
