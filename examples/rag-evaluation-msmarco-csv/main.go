@@ -79,7 +79,7 @@ func main() {
 	}
 
 	// Setup RAG system
-	ragChain, vectorStore, cleanup, err := setupRAGSystem(ctx, logger)
+	ragChain, vectorStore, cleanup, err := setupRAGSystem(logger)
 	if err != nil {
 		logger.Error("Failed to set up RAG system", "error", err)
 		return
@@ -194,7 +194,7 @@ func loadMSMARCODataset(path string, logger *slog.Logger) ([]string, []Evaluatio
 }
 
 // setupRAGSystem initializes the complete RAG pipeline
-func setupRAGSystem(ctx context.Context, logger *slog.Logger) (*chains.RetrievalQA, vectorstores.VectorStore, func(), error) {
+func setupRAGSystem(logger *slog.Logger) (*chains.RetrievalQA, vectorstores.VectorStore, func(), error) {
 	collectionName := fmt.Sprintf("rag-eval-msmarco-%d", time.Now().Unix())
 	logger.Info("Setting up RAG system", "collection", collectionName)
 

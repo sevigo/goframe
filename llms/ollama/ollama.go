@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ollama/ollama/api"
@@ -217,20 +218,58 @@ func (o *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, 
 		return nil, fmt.Errorf("embedding model preparation failed: %w", err)
 	}
 
-	// Ollama client handles batching internally, so we can send all at once
-	// This is a placeholder for a true batch client call if the underlying client supports it.
-	// For now, we iterate. A better client would handle this.
-	allEmbeddings := make([][]float32, 0, len(texts))
-	for _, text := range texts {
-		embedding, err := o.createSingleEmbedding(ctx, text)
-		if err != nil {
-			// In a real scenario, you might want to decide on a failure strategy
-			// (e.g., continue and return partial results, or fail completely).
-			return nil, fmt.Errorf("failed to embed document: %w", err)
-		}
-		allEmbeddings = append(allEmbeddings, embedding)
+	// Use a worker pool to process embeddings concurrently.
+	const maxWorkers = 8 // Number of concurrent requests to Ollama.
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	allEmbeddings := make([][]float32, len(texts))
+	errs := make(chan error, len(texts)) // Buffered channel for errors
+	jobs := make(chan struct {
+		index int
+		text  string
+	}, len(texts))
+
+	// Start worker goroutines
+	for range maxWorkers {
+		go func() {
+			for job := range jobs {
+				embedding, err := o.createSingleEmbedding(ctx, job.text)
+				if err != nil {
+					errs <- fmt.Errorf("failed to embed document at index %d: %w", job.index, err)
+				} else {
+					mu.Lock()
+					allEmbeddings[job.index] = embedding
+					mu.Unlock()
+				}
+				wg.Done()
+			}
+		}()
 	}
 
+	// Add all texts to the job queue
+	wg.Add(len(texts))
+	for i, text := range texts {
+		jobs <- struct {
+			index int
+			text  string
+		}{index: i, text: text}
+	}
+	close(jobs) // No more jobs will be sent
+
+	// Wait for all jobs to complete
+	wg.Wait()
+	close(errs)
+
+	// Check if any errors occurred during processing.
+	// We fail fast on the first error encountered.
+	for err := range errs {
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Final validation check.
 	if len(texts) != len(allEmbeddings) {
 		o.logger.ErrorContext(ctx, "Embedding count mismatch",
 			"expected", len(texts), "got", len(allEmbeddings))
@@ -267,6 +306,9 @@ func (o *LLM) createSingleEmbedding(ctx context.Context, text string) ([]float32
 	duration := time.Since(start)
 
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, ErrContextCanceled
+		}
 		o.logger.ErrorContext(ctx, "Embedding API call failed",
 			"error", err, "text_length", len(text), "duration", duration)
 		return nil, fmt.Errorf("embedding generation failed: %w", err)
