@@ -217,15 +217,10 @@ func (o *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, 
 		return nil, fmt.Errorf("embedding model preparation failed: %w", err)
 	}
 
-	// Ollama client handles batching internally, so we can send all at once
-	// This is a placeholder for a true batch client call if the underlying client supports it.
-	// For now, we iterate. A better client would handle this.
 	allEmbeddings := make([][]float32, 0, len(texts))
 	for _, text := range texts {
 		embedding, err := o.createSingleEmbedding(ctx, text)
 		if err != nil {
-			// In a real scenario, you might want to decide on a failure strategy
-			// (e.g., continue and return partial results, or fail completely).
 			return nil, fmt.Errorf("failed to embed document: %w", err)
 		}
 		allEmbeddings = append(allEmbeddings, embedding)
