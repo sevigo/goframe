@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/sevigo/goframe/llms"
+	"github.com/sevigo/goframe/prompts"
 	"github.com/sevigo/goframe/schema"
 )
 
@@ -46,21 +47,9 @@ func (c RetrievalQA) Call(ctx context.Context, query string) (string, error) {
 	context := strings.Join(docContents, "\n\n---\n\n")
 
 	// Create RAG prompt with retrieved context
-	prompt := buildRAGPrompt(context, query)
-
+	prompt := prompts.DefaultRAGPrompt.Format(map[string]string{
+		"context": context,
+		"query":   query,
+	})
 	return c.LLM.Call(ctx, prompt)
-}
-
-// buildRAGPrompt constructs a prompt that instructs the LLM to answer based
-// on the provided context and admit when it doesn't know the answer.
-func buildRAGPrompt(context, query string) string {
-	return fmt.Sprintf(`Use the following context to answer the question at the end.
-If you don't know the answer, just say that you don't know, don't try to make up an answer.
-
-Context:
-%s
-
-Question: %s
-
-Helpful Answer:`, context, query)
 }
