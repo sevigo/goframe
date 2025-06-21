@@ -103,12 +103,11 @@ func main() {
 	}
 
 	// Setup the RAG system
-	ragChain, vectorStore, cleanup, err := setupRAGSystem(ctx, logger)
+	ragChain, vectorStore, err := setupRAGSystem(ctx, logger)
 	if err != nil {
 		logger.Error("Failed to setup RAG system", "error", err)
 		return
 	}
-	defer cleanup()
 
 	exists, err := checkCollectionExists(ctx, vectorStore, logger)
 	if err != nil {
@@ -149,17 +148,17 @@ func checkCollectionExists(ctx context.Context, store vectorstores.VectorStore, 
 }
 
 // setupRAGSystem initializes all components needed for the validated RAG pipeline.
-func setupRAGSystem(ctx context.Context, logger *slog.Logger) (*ValidatingRetrievalChain, vectorstores.VectorStore, func(), error) {
+func setupRAGSystem(ctx context.Context, logger *slog.Logger) (*ValidatingRetrievalChain, vectorstores.VectorStore, error) {
 	logger.Info("Setting up RAG system components")
 
 	// Embedder (Ollama)
 	embedderLLM, err := ollama.New(ollama.WithModel(embedderModel), ollama.WithLogger(logger))
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to create embedder LLM: %w", err)
+		return nil, nil, fmt.Errorf("failed to create embedder LLM: %w", err)
 	}
 	embedder, err := embeddings.NewEmbedder(embedderLLM)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to create embedder: %w", err)
+		return nil, nil, fmt.Errorf("failed to create embedder: %w", err)
 	}
 
 	// Vector Store (Qdrant)
@@ -170,7 +169,7 @@ func setupRAGSystem(ctx context.Context, logger *slog.Logger) (*ValidatingRetrie
 		qdrant.WithLogger(logger),
 	)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to create vector store: %w", err)
+		return nil, nil, fmt.Errorf("failed to create vector store: %w", err)
 	}
 	retriever := vectorstores.ToRetriever(
 		vectorStore,
@@ -180,13 +179,13 @@ func setupRAGSystem(ctx context.Context, logger *slog.Logger) (*ValidatingRetrie
 
 	validatorLLM, err := ollama.New(ollama.WithModel(validatorModel), ollama.WithLogger(logger))
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to create validator LLM: %w", err)
+		return nil, nil, fmt.Errorf("failed to create validator LLM: %w", err)
 	}
 
 	// Generator LLM (Gemini - powerful)
 	generatorLLM, err := gemini.New(ctx, gemini.WithModel(generatorModel), gemini.WithLogger(logger))
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to create generator LLM: %w", err)
+		return nil, nil, fmt.Errorf("failed to create generator LLM: %w", err)
 	}
 
 	// Create the chain
@@ -197,12 +196,8 @@ func setupRAGSystem(ctx context.Context, logger *slog.Logger) (*ValidatingRetrie
 		Logger:       logger,
 	}
 
-	cleanup := func() {
-		logger.Info("Cleaning up RAG system", "collection", collectionName)
-	}
-
 	logger.Info("RAG system setup completed", "collection", collectionName)
-	return chain, vectorStore, cleanup, nil
+	return chain, vectorStore, nil
 }
 
 // loadKnowledgeBase populates the vector store with passages from the dataset.

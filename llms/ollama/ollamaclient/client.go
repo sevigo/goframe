@@ -27,8 +27,6 @@ type Client struct {
 }
 
 // NewClient creates a new Ollama client with the provided configuration.
-// If baseURL is nil, it uses OLLAMA_URL environment variable or the default URL.
-// If httpClient is nil, it creates a default client with a 10-minute timeout.
 func NewClient(baseURL *url.URL, httpClient *http.Client) (*Client, error) {
 	if baseURL == nil {
 		var err error

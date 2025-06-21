@@ -27,12 +27,11 @@ func main() {
 	defer cancel()
 
 	// Setup the RAG system
-	ragChain, cleanup, err := setupRAGSystem(ctx, logger)
+	ragChain, err := setupRAGSystem(ctx, logger)
 	if err != nil {
 		logger.Error("Failed to setup RAG system", "error", err)
 		return
 	}
-	defer cleanup()
 
 	// Load knowledge base
 	if err := loadKnowledgeBase(ctx, ragChain.Retriever.(*VectorStoreRetriever), logger); err != nil { //nolint:errcheck //fixme
@@ -55,7 +54,7 @@ func (r *VectorStoreRetriever) GetRelevantDocuments(ctx context.Context, query s
 }
 
 // setupRAGSystem initializes all components needed for RAG
-func setupRAGSystem(ctx context.Context, logger *slog.Logger) (*chains.RetrievalQA, func(), error) {
+func setupRAGSystem(ctx context.Context, logger *slog.Logger) (*chains.RetrievalQA, error) {
 	logger.Info("Setting up RAG system components")
 
 	// Create embedder for document retrieval
@@ -64,12 +63,12 @@ func setupRAGSystem(ctx context.Context, logger *slog.Logger) (*chains.Retrieval
 		ollama.WithLogger(logger),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create embedder LLM: %w", err)
+		return nil, fmt.Errorf("failed to create embedder LLM: %w", err)
 	}
 
 	embedder, err := embeddings.NewEmbedder(embedderLLM)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create embedder: %w", err)
+		return nil, fmt.Errorf("failed to create embedder: %w", err)
 	}
 
 	// Create vector store for document storage
@@ -80,7 +79,7 @@ func setupRAGSystem(ctx context.Context, logger *slog.Logger) (*chains.Retrieval
 		qdrant.WithLogger(logger),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create vector store: %w", err)
+		return nil, fmt.Errorf("failed to create vector store: %w", err)
 	}
 
 	// Create LLM for answer generation
@@ -89,23 +88,15 @@ func setupRAGSystem(ctx context.Context, logger *slog.Logger) (*chains.Retrieval
 		ollama.WithLogger(logger),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create generation LLM: %w", err)
+		return nil, fmt.Errorf("failed to create generation LLM: %w", err)
 	}
 
 	// Create retriever and RAG chain
 	retriever := &VectorStoreRetriever{store: vectorStore}
 	ragChain := chains.NewRetrievalQA(retriever, generationLLM)
 
-	// Cleanup function
-	cleanup := func() {
-		logger.Info("Cleaning up RAG system", "collection", collectionName)
-		// if err := vectorStore.DeleteCollection(ctx, collectionName); err != nil {
-		// 	logger.Warn("Failed to cleanup collection", "error", err)
-		// }
-	}
-
 	logger.Info("RAG system setup completed", "collection", collectionName)
-	return &ragChain, cleanup, nil
+	return &ragChain, nil
 }
 
 // loadKnowledgeBase populates the vector store with sample technical documentation
