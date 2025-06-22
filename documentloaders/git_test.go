@@ -16,8 +16,6 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
-// --- Fake Parser Implementations for Testing ---
-
 // fakeGoParser simulates a language-specific parser for Go files.
 type fakeGoParser struct{}
 

@@ -27,7 +27,7 @@ func main() {
 	defer cancel()
 
 	// Setup the RAG system
-	ragChain, err := setupRAGSystem(ctx, logger)
+	ragChain, err := setupRAGSystem(logger)
 	if err != nil {
 		logger.Error("Failed to setup RAG system", "error", err)
 		return
@@ -54,7 +54,7 @@ func (r *VectorStoreRetriever) GetRelevantDocuments(ctx context.Context, query s
 }
 
 // setupRAGSystem initializes all components needed for RAG
-func setupRAGSystem(ctx context.Context, logger *slog.Logger) (*chains.RetrievalQA, error) {
+func setupRAGSystem(logger *slog.Logger) (*chains.RetrievalQA, error) {
 	logger.Info("Setting up RAG system components")
 
 	// Create embedder for document retrieval
