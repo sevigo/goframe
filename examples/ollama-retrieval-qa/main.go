@@ -27,7 +27,7 @@ func main() {
 	defer cancel()
 
 	// Setup the RAG system
-	ragChain, err := setupRAGSystem(ctx, logger)
+	ragChain, err := setupRAGSystem(logger)
 	if err != nil {
 		logger.Error("Failed to setup RAG system", "error", err)
 		return
@@ -43,6 +43,10 @@ func main() {
 	runQASession(ctx, ragChain, logger)
 }
 
+// TODO: The VectorStoreRetriever: In examples/ollama-retrieval-qa/main.go,
+// you define a VectorStoreRetriever struct. This is a crucial piece of glue code
+// that adapts a VectorStore to a schema.Retriever.
+// Recommendation: This struct should not live in an example. It's a core utility. Move it to the vectorstores package itself (e.g., in vectorstores/retriever.go). Your ToRetriever function in that file is a great start, but the implementation is hidden. Making the struct and its creation public and central will make the library much easier to use.
 // VectorStoreRetriever wraps a vector store to implement the Retriever interface
 type VectorStoreRetriever struct {
 	store vectorstores.VectorStore
@@ -54,7 +58,7 @@ func (r *VectorStoreRetriever) GetRelevantDocuments(ctx context.Context, query s
 }
 
 // setupRAGSystem initializes all components needed for RAG
-func setupRAGSystem(ctx context.Context, logger *slog.Logger) (*chains.RetrievalQA, error) {
+func setupRAGSystem(logger *slog.Logger) (*chains.RetrievalQA, error) {
 	logger.Info("Setting up RAG system components")
 
 	// Create embedder for document retrieval
