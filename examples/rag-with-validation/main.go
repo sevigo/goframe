@@ -74,7 +74,7 @@ func main() {
 		retriever,
 		generatorLLM,
 		chains.WithValidator(validatorLLM),
-		chains.WithVLogger(logger),
+		chains.WithLogger(logger),
 	)
 	if err != nil {
 		logger.Error("Failed to create validating RAG chain", "error", err)
@@ -154,7 +154,7 @@ func loadKnowledgeBase(ctx context.Context, store vectorstores.VectorStore, pass
 }
 
 // runQASession demonstrates the Q&A session using the fully assembled chain.
-func runQASession(ctx context.Context, ragChain *chains.ValidatingRetrievalQA, evaluationSet []EvaluationCase, logger *slog.Logger) {
+func runQASession(ctx context.Context, ragChain chains.ValidatingRetrievalQA, evaluationSet []EvaluationCase, logger *slog.Logger) {
 	if len(evaluationSet) == 0 {
 		logger.Error("Evaluation set is empty, cannot run Q&A session.")
 		return
