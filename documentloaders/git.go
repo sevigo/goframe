@@ -17,7 +17,8 @@ type Loader interface {
 	Load(ctx context.Context) ([]schema.Document, error)
 }
 
-// GitLoader loads documents from a local git repository.
+// GitLoader loads and processes documents from a git repository on the local file system.
+// It uses a ParserRegistry to apply language-specific chunking strategies.
 type GitLoader struct {
 	path           string
 	parserRegistry parsers.ParserRegistry

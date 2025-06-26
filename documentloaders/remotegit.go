@@ -9,15 +9,13 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
-// RemoteGitRepoLoader clones a remote repository and then uses a GitLoader
-// to load all parsable files within it into documents.
+// RemoteGitRepoLoader clones a remote repository and uses a GitLoader to load files.
 type RemoteGitRepoLoader struct {
 	RepoURL        string
 	ParserRegistry parsers.ParserRegistry
 	Logger         *slog.Logger
 }
 
-// NewRemoteGitRepoLoader creates a loader for remote Git repositories.
 func NewRemoteGitRepoLoader(repoURL string, registry parsers.ParserRegistry, logger *slog.Logger) *RemoteGitRepoLoader {
 	if logger == nil {
 		logger = slog.Default()
