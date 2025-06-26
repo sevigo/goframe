@@ -12,7 +12,6 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
-// CodeAwareTextSplitter implements intelligent chunking using language-specific parsers.
 type CodeAwareTextSplitter struct {
 	tokenizer      Tokenizer
 	parserRegistry parsers.ParserRegistry
@@ -28,7 +27,6 @@ type CodeAwareTextSplitter struct {
 
 var _ TextSplitter = (*CodeAwareTextSplitter)(nil)
 
-// NewCodeAware creates the splitter.
 func NewCodeAware(
 	registry parsers.ParserRegistry,
 	tokenizer Tokenizer,
@@ -42,7 +40,6 @@ func NewCodeAware(
 		logger = slog.Default()
 	}
 
-	// Apply functional options for configuration
 	splitterOpts := options{
 		chunkSize:       1024,
 		chunkOverlap:    100,
@@ -66,11 +63,9 @@ func NewCodeAware(
 	}, nil
 }
 
-// SplitDocuments is the primary public method.
 func (c *CodeAwareTextSplitter) SplitDocuments(ctx context.Context, docs []schema.Document) ([]schema.Document, error) {
 	finalDocs := make([]schema.Document, 0)
 	for _, doc := range docs {
-		// Use a private helper to do the actual work for each document.
 		chunks, err := c.splitSingleDocument(ctx, doc)
 		if err != nil {
 			c.logger.WarnContext(ctx, "Could not split document, using original.", "source", doc.Metadata["source"], "error", err)
@@ -89,16 +84,15 @@ func (c *CodeAwareTextSplitter) splitSingleDocument(ctx context.Context, doc sch
 		return nil, errors.New("document metadata is missing 'source' key")
 	}
 
-	codeChunks, err := c.chunkContent(ctx, doc.PageContent, source, nil)
+	codeChunks, err := c.ChunkFileWithFileInfo(ctx, doc.PageContent, source, c.modelName, nil, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to chunk document content for source %q: %w", source, err)
 	}
 
-	// Convert the specific CodeChunks into generic schema.Documents
 	splitDocs := make([]schema.Document, 0, len(codeChunks))
 	for _, chunk := range codeChunks {
 		newMetadata := make(map[string]any)
-		for k, v := range doc.Metadata { // Inherit metadata
+		for k, v := range doc.Metadata {
 			newMetadata[k] = v
 		}
 		newMetadata["line_start"] = chunk.LineStart
@@ -111,24 +105,6 @@ func (c *CodeAwareTextSplitter) splitSingleDocument(ctx context.Context, doc sch
 	return splitDocs, nil
 }
 
-func (c *CodeAwareTextSplitter) chunkContent(ctx context.Context, content, filePath string, fileInfo fs.FileInfo) ([]schema.CodeChunk, error) {
-	plugin, err := c.parserRegistry.GetParserForFile(filePath, fileInfo)
-	if err != nil {
-		c.logger.DebugContext(ctx, "No specific parser found, using fallback.", "file", filePath)
-		return nil, err
-	}
-
-	// Construct the options for the plugin
-	// This logic can be enhanced later. For now, it's a simple mapping.
-	opts := &schema.CodeChunkingOptions{
-		ChunkSize: c.chunkSize,
-	}
-
-	// Use the plugin's sophisticated chunking method
-	return plugin.Chunk(content, filePath, opts)
-}
-
-// ChunkFileWithFileInfo chunks content with file info for enhanced language detection.
 func (c *CodeAwareTextSplitter) ChunkFileWithFileInfo(
 	ctx context.Context,
 	content, filePath, modelName string,
@@ -146,7 +122,6 @@ func (c *CodeAwareTextSplitter) ChunkFileWithFileInfo(
 	params := c.calculateEffectiveParameters(ctx, opts, filePath, len(content), modelName)
 	pluginOpts := c.createPluginOptions(opts, params)
 
-	// Try language-specific chunking first
 	if chunks, err := c.tryLanguageSpecificChunking(ctx, content, filePath, fileInfo, pluginOpts, modelName); err == nil && len(chunks) > 0 {
 		validChunks := c.postProcessChunks(ctx, chunks, params, modelName)
 		if len(validChunks) > 0 {
@@ -154,7 +129,6 @@ func (c *CodeAwareTextSplitter) ChunkFileWithFileInfo(
 		}
 	}
 
-	// Fall back to intelligent generic chunking
 	return c.intelligentFallbackChunk(ctx, content, filePath, params, modelName)
 }
 
