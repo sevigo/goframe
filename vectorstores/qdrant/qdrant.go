@@ -890,15 +890,6 @@ func (s *Store) CreateCollection(ctx context.Context, name string, dimension int
 		return ErrCollectionExists
 	}
 
-	// TODO: fix me
-	// opts := qdrant.ParseOptions(options...)
-	// distance := qdrant.Distance_Cosine
-	// if opts.DistanceMetric != "" {
-	// 	if d, ok := parseDistanceMetric(opts.DistanceMetric); ok {
-	// 		distance = d
-	// 	}
-	// }
-
 	_, err = s.client.GetCollectionsClient().Create(ctx, &qdrant.CreateCollection{
 		CollectionName: name,
 		VectorsConfig: &qdrant.VectorsConfig{

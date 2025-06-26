@@ -286,7 +286,7 @@ func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *
 }
 
 // extractVarConstChunks extracts top-level variable and constant declaration chunks
-func (p *GoPlugin) extractVarConstChunks( //nolint:funlen //fixme
+func (p *GoPlugin) extractVarConstChunks(
 	content string,
 	fset *token.FileSet,
 	file *ast.File,
@@ -300,181 +300,183 @@ func (p *GoPlugin) extractVarConstChunks( //nolint:funlen //fixme
 			continue
 		}
 
-		// Only create chunks for exported variables/constants or those with documentation
-		hasExported := false
-		hasDoc := genDecl.Doc != nil && len(genDecl.Doc.List) > 0
-
-		// Check if any of the declarations are exported
-		for _, spec := range genDecl.Specs {
-			if valSpec, valSpecOK := spec.(*ast.ValueSpec); valSpecOK {
-				for _, name := range valSpec.Names {
-					if ast.IsExported(name.Name) {
-						hasExported = true
-						break
-					}
-				}
-				if hasExported {
-					break
-				}
-			}
-		}
-
-		// Skip if not exported and no documentation
-		if !hasExported && !hasDoc {
+		if !p.shouldCreateVarConstChunk(genDecl) {
 			continue
 		}
 
-		// For individual declarations (not grouped), create individual chunks
 		if len(genDecl.Specs) == 1 {
-			spec := genDecl.Specs[0]
-			if valSpec, valSpecOK := spec.(*ast.ValueSpec); valSpecOK && len(valSpec.Names) == 1 {
-				name := valSpec.Names[0]
-
-				startPos := fset.Position(genDecl.Pos())
-				endPos := fset.Position(genDecl.End())
-
-				// Extract content
-				startLine := startPos.Line - 1
-				endLine := min(endPos.Line, len(lines))
-
-				// Include documentation comment if present
-				chunkContent := ""
-				docComment := p.extractDocComment(genDecl.Doc)
-				if docComment != "" {
-					// Preserve original comment format for better recognition
-					chunkContent = p.extractRawDocComment(genDecl.Doc) + "\n\n"
-				}
-				chunkContent += strings.Join(lines[startLine:endLine], "\n")
-
-				declType := "variable"
-				if genDecl.Tok == token.CONST {
-					declType = "constant"
-				}
-
-				// Create annotations
-				annotations := map[string]string{
-					"type":       declType,
-					"names":      name.Name,
-					"count":      "1",
-					"visibility": p.getVisibility(name.Name),
-				}
-
-				// Add documentation if present
-				if docComment != "" {
-					annotations["has_doc"] = "true"
-				}
-
-				// Log the chunk being created
-				p.logger.Debug("Creating individual var/const chunk",
-					"identifier", name.Name,
-					"type", declType,
-					"start", startPos.Line,
-					"end", endPos.Line,
-				)
-
-				// Create chunk
-				chunk := model.CodeChunk{
-					Content:     chunkContent,
-					LineStart:   startPos.Line,
-					LineEnd:     endPos.Line,
-					Type:        declType,
-					Identifier:  name.Name,
-					Annotations: annotations,
-				}
-
-				chunks = append(chunks, chunk)
-				continue
+			if chunk := p.createIndividualVarConstChunk(genDecl, fset, lines); chunk != nil {
+				chunks = append(chunks, *chunk)
 			}
+		} else {
+			chunk := p.createGroupedVarConstChunk(genDecl, fset, lines)
+			chunks = append(chunks, chunk)
 		}
-
-		// For grouped declarations, create a single chunk
-		startPos := fset.Position(genDecl.Pos())
-		endPos := fset.Position(genDecl.End())
-
-		// Extract content
-		startLine := startPos.Line - 1
-		endLine := min(endPos.Line, len(lines))
-
-		// Include documentation comment if present
-		chunkContent := ""
-		docComment := p.extractDocComment(genDecl.Doc)
-		if docComment != "" {
-			// Preserve original comment format for better recognition
-			chunkContent = p.extractRawDocComment(genDecl.Doc) + "\n\n"
-		}
-		chunkContent += strings.Join(lines[startLine:endLine], "\n")
-
-		// Create identifier from all names in the declaration
-		var identifiers []string
-		declType := "variable"
-		if genDecl.Tok == token.CONST {
-			declType = "constant"
-		}
-
-		for _, spec := range genDecl.Specs {
-			if valSpec, valSpecOK := spec.(*ast.ValueSpec); valSpecOK {
-				for _, name := range valSpec.Names {
-					identifiers = append(identifiers, name.Name)
-				}
-			}
-		}
-
-		if len(identifiers) == 0 {
-			continue
-		}
-
-		identifier := strings.Join(identifiers, ", ")
-
-		// Create annotations
-		annotations := map[string]string{
-			"type":       declType,
-			"names":      identifier,
-			"count":      strconv.Itoa(len(identifiers)),
-			"visibility": "mixed", // Default, will be refined below
-		}
-
-		// Add documentation if present
-		if docComment != "" {
-			annotations["has_doc"] = "true"
-		}
-
-		// Determine overall visibility
-		allPublic := true
-		allPrivate := true
-		for _, name := range identifiers {
-			if ast.IsExported(name) {
-				allPrivate = false
-			} else {
-				allPublic = false
-			}
-		}
-
-		if allPublic {
-			annotations["visibility"] = "public"
-		} else if allPrivate {
-			annotations["visibility"] = "private"
-		}
-
-		// Log the chunk being created
-		p.logger.Debug("Creating grouped var/const chunk",
-			"identifier", identifier,
-			"type", declType,
-			"start", startPos.Line,
-			"end", endPos.Line,
-		)
-
-		// Create chunk
-		chunk := model.CodeChunk{
-			Content:     chunkContent,
-			LineStart:   startPos.Line,
-			LineEnd:     endPos.Line,
-			Type:        declType,
-			Identifier:  identifier,
-			Annotations: annotations,
-		}
-
-		chunks = append(chunks, chunk)
 	}
 
 	return chunks
+}
+
+// shouldCreateVarConstChunk determines if a variable/constant declaration should become a chunk
+func (p *GoPlugin) shouldCreateVarConstChunk(genDecl *ast.GenDecl) bool {
+	hasExported := false
+	hasDoc := genDecl.Doc != nil && len(genDecl.Doc.List) > 0
+
+	// Check if any of the declarations are exported
+	for _, spec := range genDecl.Specs {
+		if valSpec, ok := spec.(*ast.ValueSpec); ok {
+			for _, name := range valSpec.Names {
+				if ast.IsExported(name.Name) {
+					hasExported = true
+					break
+				}
+			}
+			if hasExported {
+				break
+			}
+		}
+	}
+
+	return hasExported || hasDoc
+}
+
+// createIndividualVarConstChunk creates a chunk for a single variable/constant declaration
+func (p *GoPlugin) createIndividualVarConstChunk(
+	genDecl *ast.GenDecl,
+	fset *token.FileSet,
+	lines []string,
+) *model.CodeChunk {
+	spec := genDecl.Specs[0]
+	valSpec, ok := spec.(*ast.ValueSpec)
+	if !ok || len(valSpec.Names) != 1 {
+		return nil
+	}
+
+	name := valSpec.Names[0]
+	startPos := fset.Position(genDecl.Pos())
+	endPos := fset.Position(genDecl.End())
+
+	chunkContent := p.buildChunkContent(genDecl, startPos.Line-1, min(endPos.Line, len(lines)), lines)
+	declType := p.getDeclType(genDecl.Tok)
+
+	annotations := map[string]string{
+		"type":       declType,
+		"names":      name.Name,
+		"count":      "1",
+		"visibility": p.getVisibility(name.Name),
+	}
+
+	if genDecl.Doc != nil && len(genDecl.Doc.List) > 0 {
+		annotations["has_doc"] = "true"
+	}
+
+	p.logger.Debug("Creating individual var/const chunk",
+		"identifier", name.Name,
+		"type", declType,
+		"start", startPos.Line,
+		"end", endPos.Line,
+	)
+
+	return &model.CodeChunk{
+		Content:     chunkContent,
+		LineStart:   startPos.Line,
+		LineEnd:     endPos.Line,
+		Type:        declType,
+		Identifier:  name.Name,
+		Annotations: annotations,
+	}
+}
+
+// createGroupedVarConstChunk creates a chunk for grouped variable/constant declarations
+func (p *GoPlugin) createGroupedVarConstChunk(
+	genDecl *ast.GenDecl,
+	fset *token.FileSet,
+	lines []string,
+) model.CodeChunk {
+	startPos := fset.Position(genDecl.Pos())
+	endPos := fset.Position(genDecl.End())
+
+	chunkContent := p.buildChunkContent(genDecl, startPos.Line-1, min(endPos.Line, len(lines)), lines)
+	declType := p.getDeclType(genDecl.Tok)
+	identifiers := p.extractIdentifiers(genDecl)
+	identifier := strings.Join(identifiers, ", ")
+
+	annotations := map[string]string{
+		"type":       declType,
+		"names":      identifier,
+		"count":      strconv.Itoa(len(identifiers)),
+		"visibility": p.determineGroupVisibility(identifiers),
+	}
+
+	if genDecl.Doc != nil && len(genDecl.Doc.List) > 0 {
+		annotations["has_doc"] = "true"
+	}
+
+	p.logger.Debug("Creating grouped var/const chunk",
+		"identifier", identifier,
+		"type", declType,
+		"start", startPos.Line,
+		"end", endPos.Line,
+	)
+
+	return model.CodeChunk{
+		Content:     chunkContent,
+		LineStart:   startPos.Line,
+		LineEnd:     endPos.Line,
+		Type:        declType,
+		Identifier:  identifier,
+		Annotations: annotations,
+	}
+}
+
+// buildChunkContent constructs the content for a chunk including documentation
+func (p *GoPlugin) buildChunkContent(genDecl *ast.GenDecl, startLine, endLine int, lines []string) string {
+	chunkContent := ""
+	if genDecl.Doc != nil && len(genDecl.Doc.List) > 0 {
+		chunkContent = p.extractRawDocComment(genDecl.Doc) + "\n\n"
+	}
+	chunkContent += strings.Join(lines[startLine:endLine], "\n")
+	return chunkContent
+}
+
+// getDeclType returns the string representation of the declaration type
+func (p *GoPlugin) getDeclType(tok token.Token) string {
+	if tok == token.CONST {
+		return "constant"
+	}
+	return "variable"
+}
+
+// extractIdentifiers extracts all identifiers from a GenDecl
+func (p *GoPlugin) extractIdentifiers(genDecl *ast.GenDecl) []string {
+	var identifiers []string
+	for _, spec := range genDecl.Specs {
+		if valSpec, ok := spec.(*ast.ValueSpec); ok {
+			for _, name := range valSpec.Names {
+				identifiers = append(identifiers, name.Name)
+			}
+		}
+	}
+	return identifiers
+}
+
+// determineGroupVisibility determines the visibility for a group of identifiers
+func (p *GoPlugin) determineGroupVisibility(identifiers []string) string {
+	allPublic := true
+	allPrivate := true
+
+	for _, name := range identifiers {
+		if ast.IsExported(name) {
+			allPrivate = false
+		} else {
+			allPublic = false
+		}
+	}
+
+	if allPublic {
+		return "public"
+	} else if allPrivate {
+		return "private"
+	}
+	return "mixed"
 }

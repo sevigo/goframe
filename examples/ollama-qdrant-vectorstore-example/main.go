@@ -244,26 +244,6 @@ func demonstrateVectorStore(
 		}
 	}
 
-	// Demonstrate document deletion
-	if len(documentIDs) > 0 {
-		logger.Info("Demonstrating document deletion")
-		deleteIDs := documentIDs[:min(2, len(documentIDs))]
-
-		// if err := store.DeleteDocuments(ctx, deleteIDs); err != nil {
-		// 	return fmt.Errorf("failed to delete documents: %w", err)
-		// }
-
-		logger.Info("Documents deleted successfully", "count", len(deleteIDs))
-
-		// Verify deletion by searching again
-		results, err := store.SimilaritySearch(ctx, "Tokyo Japan", 10)
-		if err != nil {
-			return fmt.Errorf("failed to verify deletion: %w", err)
-		}
-
-		logger.Info("Search after deletion", "results_found", len(results))
-	}
-
 	return nil
 }
 
