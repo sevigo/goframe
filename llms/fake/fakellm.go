@@ -9,7 +9,6 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
-
 type LLM struct {
 	mu         sync.Mutex
 	responses  []string
@@ -17,7 +16,6 @@ type LLM struct {
 	lastPrompt string
 	callCount  int
 }
-
 
 func NewFakeLLM(responses []string) *LLM {
 	return &LLM{

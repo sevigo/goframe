@@ -17,7 +17,6 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
-
 var (
 	ErrNoAPIKey      = errors.New("gemini: API key is required")
 	ErrInvalidModel  = errors.New("gemini: invalid model specified")
@@ -25,16 +24,13 @@ var (
 	ErrSystemMessage = errors.New("gemini: does not support system messages in the middle of a conversation. Use SystemInstruction option")
 )
 
-
 type LLM struct {
 	client  *genai.GenerativeModel
 	options options
 	logger  *slog.Logger
 }
 
-
 var _ llms.Model = (*LLM)(nil)
-
 
 func New(ctx context.Context, opts ...Option) (*LLM, error) {
 	o := applyOptions(opts...)
@@ -67,11 +63,9 @@ func New(ctx context.Context, opts ...Option) (*LLM, error) {
 	return llm, nil
 }
 
-
 func (g *LLM) Call(ctx context.Context, prompt string, options ...llms.CallOption) (string, error) {
 	return llms.GenerateFromSinglePrompt(ctx, g, prompt, options...)
 }
-
 
 func (g *LLM) GenerateContent(
 	ctx context.Context,
@@ -162,7 +156,6 @@ func (g *LLM) GenerateContent(
 	}, nil
 }
 
-
 func (g *LLM) convertToGeminiMessages(messages []schema.MessageContent) ([]*genai.Content, *genai.Content, error) {
 	geminiContents := make([]*genai.Content, 0, len(messages))
 	var systemInstruction *genai.Content
@@ -206,7 +199,6 @@ func (g *LLM) convertToGeminiMessages(messages []schema.MessageContent) ([]*gena
 	return geminiContents, systemInstruction, nil
 }
 
-
 func (g *LLM) responseToSchema(resp *genai.GenerateContentResponse, duration time.Duration) (*schema.ContentResponse, error) {
 	if len(resp.Candidates) == 0 {
 		return nil, ErrNoContent
@@ -238,7 +230,6 @@ func (g *LLM) responseToSchema(resp *genai.GenerateContentResponse, duration tim
 		},
 	}, nil
 }
-
 
 func (g *LLM) extractContentFromResponse(resp *genai.GenerateContentResponse) string {
 	var builder strings.Builder

@@ -56,12 +56,10 @@ func (c *CodeAwareTextSplitter) buildEnrichedContent(
 	contentBuilder.WriteString(chunk.Content)
 	remainingTokens := maxTokens - mainContentTokens
 
-	// Add parent context
 	if chunk.ParentContext != "" && remainingTokens > 50 {
 		remainingTokens = c.addParentContext(&contentBuilder, chunk.ParentContext, ctx, modelName, remainingTokens)
 	}
 
-	// Add file header
 	if remainingTokens > 30 {
 		fileHeader := c.buildFileContextHeader(metadata)
 		remainingTokens = c.addFileHeader(&contentBuilder, fileHeader, ctx, modelName, remainingTokens)
@@ -89,7 +87,6 @@ func (c *CodeAwareTextSplitter) addParentContext(
 		return remainingTokens - parentTokens
 	}
 
-	// Truncate parent context to fit
 	truncatedParent := c.truncateToTokenLimit(ctx, parentContext, remainingTokens-10, modelName)
 	if len(strings.TrimSpace(truncatedParent)) > 20 {
 		*builder = c.prependContent(builder.String(), truncatedParent+"...")
@@ -156,12 +153,10 @@ func (c *CodeAwareTextSplitter) prependContent(mainContent, contextContent strin
 }
 
 func (c *CodeAwareTextSplitter) truncateToTokenLimit(ctx context.Context, content string, maxTokens int, modelName string) string {
-	// Try token-based splitting first
 	if split, err := c.tokenizer.SplitTextByTokens(ctx, modelName, content, maxTokens); err == nil && len(split) > 0 {
 		return split[0]
 	}
 
-	// Fallback to line-based truncation
 	lines := strings.Split(content, "\n")
 	var result strings.Builder
 

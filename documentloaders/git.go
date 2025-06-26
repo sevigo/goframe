@@ -13,7 +13,6 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
-
 type Loader interface {
 	Load(ctx context.Context) ([]schema.Document, error)
 }
@@ -32,7 +31,7 @@ type gitLoaderOptions struct {
 	Logger      *slog.Logger
 }
 
-
+// GitLoaderOption configures a GitLoader.
 type GitLoaderOption func(*gitLoaderOptions)
 
 // WithLogger sets the logger for the GitLoader.
@@ -208,6 +207,7 @@ func shouldSkipDir(name string) bool {
 	return slices.Contains(skipDirs, name)
 }
 
+// shouldSkipFile returns true for files that shouldn't be loaded.
 func shouldSkipFile(path string, info fs.FileInfo) bool {
 	const maxFileSize = 10 * 1024 * 1024 // 10MB
 	if info.Size() > maxFileSize {
@@ -229,5 +229,6 @@ func shouldSkipFile(path string, info fs.FileInfo) bool {
 		".ppt": true, ".pptx": true,
 		".bin": true, ".dat": true, ".db": true, ".sqlite": true,
 	}
+
 	return binaryExts[ext]
 }

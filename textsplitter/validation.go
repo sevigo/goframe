@@ -84,5 +84,6 @@ func (c *CodeAwareTextSplitter) analyzeContentCharacters(content string) (int, i
 			}
 		}
 	}
+
 	return significantChars, totalNonWhitespaceChars
 }
