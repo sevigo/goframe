@@ -16,8 +16,6 @@ import (
 	"github.com/sevigo/goframe/vectorstores/qdrant"
 )
 
-// RAGExample demonstrates a complete Retrieval-Augmented Generation pipeline
-// using technical documentation as the knowledge base.
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
@@ -26,28 +24,23 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	// Setup the RAG system
 	vectorStore, ragChain, err := setupRAGSystem(logger)
 	if err != nil {
 		logger.Error("Failed to setup RAG system", "error", err)
 		return
 	}
 
-	// Load knowledge base
 	if err := loadKnowledgeBase(ctx, vectorStore, logger); err != nil {
 		logger.Error("Failed to load knowledge base", "error", err)
 		return
 	}
 
-	// Run interactive Q&A session
 	runQASession(ctx, ragChain, logger)
 }
 
-// setupRAGSystem initializes all components needed for RAG
 func setupRAGSystem(logger *slog.Logger) (vectorstores.VectorStore, *chains.RetrievalQA, error) {
 	logger.Info("Setting up RAG system components")
 
-	// Create embedder for document retrieval
 	embedderLLM, err := ollama.New(
 		ollama.WithModel("nomic-embed-text"),
 		ollama.WithLogger(logger),
@@ -61,7 +54,6 @@ func setupRAGSystem(logger *slog.Logger) (vectorstores.VectorStore, *chains.Retr
 		return nil, nil, fmt.Errorf("failed to create embedder: %w", err)
 	}
 
-	// Create vector store for document storage
 	collectionName := fmt.Sprintf("rag_docs_%d", time.Now().Unix())
 	vectorStore, err := qdrant.New(
 		qdrant.WithEmbedder(embedder),
@@ -72,7 +64,6 @@ func setupRAGSystem(logger *slog.Logger) (vectorstores.VectorStore, *chains.Retr
 		return nil, nil, fmt.Errorf("failed to create vector store: %w", err)
 	}
 
-	// Create LLM for answer generation
 	generationLLM, err := ollama.New(
 		ollama.WithModel("gemma3:1b"),
 		ollama.WithLogger(logger),
@@ -88,11 +79,9 @@ func setupRAGSystem(logger *slog.Logger) (vectorstores.VectorStore, *chains.Retr
 	return vectorStore, &ragChain, nil
 }
 
-// loadKnowledgeBase populates the vector store with sample technical documentation
 func loadKnowledgeBase(ctx context.Context, store vectorstores.VectorStore, logger *slog.Logger) error {
 	logger.Info("Loading knowledge base documents")
 
-	// Sample technical documentation
 	documents := []schema.Document{
 		{
 			PageContent: `Go is a programming language developed by Google. It's statically typed, compiled, and designed for simplicity and efficiency. Go features garbage collection, memory safety, and built-in concurrency support through goroutines and channels.`,
@@ -152,7 +141,6 @@ func loadKnowledgeBase(ctx context.Context, store vectorstores.VectorStore, logg
 		},
 	}
 
-	// Add documents to vector store
 	start := time.Now()
 	_, err := store.AddDocuments(ctx, documents)
 	if err != nil {
@@ -167,11 +155,9 @@ func loadKnowledgeBase(ctx context.Context, store vectorstores.VectorStore, logg
 	return nil
 }
 
-// runQASession demonstrates various Q&A scenarios
 func runQASession(ctx context.Context, ragChain *chains.RetrievalQA, logger *slog.Logger) {
 	logger.Info("Starting Q&A session")
 
-	// Sample questions covering different topics
 	questions := []struct {
 		category string
 		question string
@@ -198,7 +184,7 @@ func runQASession(ctx context.Context, ragChain *chains.RetrievalQA, logger *slo
 		},
 		{
 			category: "Outside Knowledge",
-			question: "What is the capital of Mars?", // Should admit it doesn't know
+			question: "What is the capital of Mars?",
 		},
 	}
 

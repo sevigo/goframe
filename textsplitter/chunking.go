@@ -11,7 +11,6 @@ import (
 	model "github.com/sevigo/goframe/schema"
 )
 
-// tryLanguageSpecificChunking attempts to use a language plugin for chunking.
 func (c *CodeAwareTextSplitter) tryLanguageSpecificChunking(
 	ctx context.Context,
 	content, filePath string,
@@ -44,7 +43,7 @@ func (c *CodeAwareTextSplitter) enrichChunksWithTokenCounts(
 			if modelName != "" {
 				chunk.TokenCount = c.tokenizer.CountTokens(ctx, modelName, chunk.Content)
 			} else {
-				chunk.TokenCount = len(chunk.Content) / 4 // Fallback estimate
+				chunk.TokenCount = len(chunk.Content) / 4
 			}
 		}
 
@@ -65,7 +64,6 @@ func (c *CodeAwareTextSplitter) postProcessChunks(ctx context.Context, chunks []
 			continue
 		}
 
-		// Split oversized chunks
 		if chunk.TokenCount > params.ChunkSize*2 {
 			subChunks := c.splitOversizedChunk(ctx, chunk, params, modelName)
 			for _, subChunk := range subChunks {
@@ -81,16 +79,13 @@ func (c *CodeAwareTextSplitter) postProcessChunks(ctx context.Context, chunks []
 	return processedChunks
 }
 
-// splitOversizedChunk splits a chunk that's too large into smaller pieces.
 func (c *CodeAwareTextSplitter) splitOversizedChunk(ctx context.Context, chunk model.CodeChunk, params chunkingParameters, modelName string) []model.CodeChunk {
-	// Try token-based splitting first
 	if modelName != "" {
 		if subChunks := c.tryTokenBasedSplit(ctx, chunk, params, modelName); len(subChunks) > 1 {
 			return subChunks
 		}
 	}
 
-	// Fall back to line-based splitting
 	return c.lineBasedSplit(ctx, chunk, params, modelName)
 }
 
@@ -144,7 +139,6 @@ func (c *CodeAwareTextSplitter) lineBasedSplit(ctx context.Context, chunk model.
 	return subChunks
 }
 
-// createSubChunk creates a new CodeChunk from a part of an original chunk.
 func (c *CodeAwareTextSplitter) createSubChunk(originalChunk model.CodeChunk, content string, startLine, endLine int, chunkIndex int) model.CodeChunk {
 	annotations := make(map[string]string, len(originalChunk.Annotations))
 	maps.Copy(annotations, originalChunk.Annotations)

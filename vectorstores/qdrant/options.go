@@ -18,7 +18,6 @@ const (
 
 var ErrInvalidOptions = errors.New("qdrant: invalid options provided")
 
-// options holds all configuration options for the Qdrant store.
 type options struct {
 	collectionName string
 	qdrantURL      url.URL
@@ -27,7 +26,7 @@ type options struct {
 	contentKey     string
 	logger         *slog.Logger
 	useTLS         bool
-	timeout        int // in seconds
+	timeout        int
 	retryAttempts  int
 	batchSize      int
 }
@@ -109,7 +108,6 @@ func WithContentKey(contentKey string) Option {
 func WithTLS(useTLS bool) Option {
 	return func(opts *options) {
 		opts.useTLS = useTLS
-		// Update URL scheme if already set
 		if opts.qdrantURL.Host != "" {
 			if useTLS {
 				opts.qdrantURL.Scheme = "https"
@@ -147,7 +145,6 @@ func WithBatchSize(size int) Option {
 	}
 }
 
-// applyDefaults sets default values for options that weren't explicitly configured.
 func applyDefaults(opts *options) {
 	if opts.logger == nil {
 		opts.logger = slog.Default()
@@ -158,7 +155,7 @@ func applyDefaults(opts *options) {
 	}
 
 	if opts.timeout == 0 {
-		opts.timeout = 30 // 30 seconds default
+		opts.timeout = 30
 	}
 
 	if opts.retryAttempts == 0 {
@@ -169,7 +166,6 @@ func applyDefaults(opts *options) {
 		opts.batchSize = 100
 	}
 
-	// Set default URL if not provided
 	if opts.qdrantURL.Host == "" {
 		scheme := "http"
 		if opts.useTLS {
@@ -182,7 +178,6 @@ func applyDefaults(opts *options) {
 	}
 }
 
-// validate checks if the options are valid and returns an error if not.
 func (opts *options) validate() error {
 	if strings.TrimSpace(opts.collectionName) == "" {
 		return errors.New("collection name is required")
@@ -200,7 +195,6 @@ func (opts *options) validate() error {
 		return errors.New("batch size must be positive")
 	}
 
-	// Validate URL if provided
 	if opts.qdrantURL.Host != "" {
 		if opts.qdrantURL.Scheme != "http" && opts.qdrantURL.Scheme != "https" {
 			return errors.New("URL scheme must be http or https")
@@ -210,21 +204,17 @@ func (opts *options) validate() error {
 	return nil
 }
 
-// parseOptions processes the provided options and returns a configured options struct.
 func parseOptions(opts ...Option) (options, error) {
 	o := options{}
 
-	// Apply all provided options
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&o)
 		}
 	}
 
-	// Apply defaults for unset values
 	applyDefaults(&o)
 
-	// Validate the final configuration
 	if err := o.validate(); err != nil {
 		return o, err
 	}
@@ -232,7 +222,6 @@ func parseOptions(opts ...Option) (options, error) {
 	return o, nil
 }
 
-// String returns a string representation of the options (excluding sensitive data).
 func (opts *options) String() string {
 	var parts []string
 
@@ -251,7 +240,6 @@ func (opts *options) String() string {
 	return "QdrantOptions{" + strings.Join(parts, ", ") + "}"
 }
 
-// Clone creates a copy of the options.
 func (opts *options) Clone() options {
 	return options{
 		collectionName: opts.collectionName,

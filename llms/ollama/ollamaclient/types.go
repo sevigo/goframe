@@ -53,7 +53,6 @@ type GenerateResponse struct {
 	Done               bool          `json:"done"`
 }
 
-// EmbeddingRequest represents a request to the /api/embeddings endpoint.
 type EmbeddingRequest struct {
 	Model     string  `json:"model"`
 	Prompt    string  `json:"prompt"`

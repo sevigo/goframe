@@ -138,7 +138,6 @@ func (c *CodeAwareTextSplitter) createChunkWithOverlap(ctx context.Context, cont
 	return chunk
 }
 
-// detectChunkType attempts to detect the type of content in a chunk.
 func (c *CodeAwareTextSplitter) detectChunkType(content string) string {
 	lowerContent := strings.ToLower(content)
 

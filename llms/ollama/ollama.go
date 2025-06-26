@@ -437,7 +437,6 @@ func (o *LLM) CountTokens(ctx context.Context, text string) (int, error) {
 	return tokenCount, nil
 }
 
-// determineModel selects the appropriate model based on call options or defaults.
 func (o *LLM) determineModel(opts llms.CallOptions) string {
 	if opts.Model != "" {
 		o.logger.DebugContext(context.Background(), "Using model from call options", "model", opts.Model)

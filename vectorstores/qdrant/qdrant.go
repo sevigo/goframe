@@ -1139,7 +1139,6 @@ func (s *Store) convertFromQdrantValue(value *qdrant.Value) any {
 	}
 }
 
-// buildQdrantFilter converts a generic filter map to a Qdrant Filter.
 func buildQdrantFilter(filters map[string]any) *qdrant.Filter {
 	if len(filters) == 0 {
 		return nil

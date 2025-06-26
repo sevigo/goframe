@@ -7,7 +7,6 @@ import (
 )
 
 // Retriever is a mock retriever for testing purposes.
-// It allows you to set the documents and/or error to be returned.
 type Retriever struct {
 	DocsToReturn []schema.Document
 	ErrToReturn  error
