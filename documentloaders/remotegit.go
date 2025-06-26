@@ -29,8 +29,6 @@ func NewRemoteGitRepoLoader(repoURL string, registry parsers.ParserRegistry, log
 	}
 }
 
-// Load implements the Loader interface. It clones the repo, loads the documents,
-// and cleans up the temporary directory.
 func (l *RemoteGitRepoLoader) Load(ctx context.Context) ([]schema.Document, error) {
 	cloner := gitutil.NewCloner(l.Logger)
 	tempPath, cleanup, err := cloner.Clone(ctx, l.RepoURL)

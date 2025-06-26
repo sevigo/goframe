@@ -17,7 +17,6 @@ type options struct {
 // Option is a function type for configuring Ollama client options.
 type Option func(*options)
 
-// applyOptions creates a new options instance with defaults and applies the provided options.
 func applyOptions(opts ...Option) options {
 	o := options{
 		logger: slog.Default(),

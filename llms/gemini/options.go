@@ -40,7 +40,6 @@ func WithAPIKey(apiKey string) Option {
 	}
 }
 
-// WithLogger sets the logger.
 func WithLogger(logger *slog.Logger) Option {
 	return func(opts *options) {
 		if logger != nil {

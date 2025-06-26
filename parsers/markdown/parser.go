@@ -472,7 +472,6 @@ func (p *MarkdownPlugin) isTableRow(line string) bool {
 	return hasContent
 }
 
-// isListItem helper method for validation/testing
 func (p *MarkdownPlugin) isListItem(line string) bool {
 	trimmed := strings.TrimSpace(line)
 	if len(trimmed) == 0 {

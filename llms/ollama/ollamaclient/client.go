@@ -214,7 +214,6 @@ func (c *Client) handleResponse(response *http.Response, respData any) error {
 	return nil
 }
 
-// checkError examines the HTTP response for API errors and returns an appropriate error.
 func (c *Client) checkError(response *http.Response, body []byte) error {
 	if response.StatusCode < http.StatusBadRequest {
 		return nil

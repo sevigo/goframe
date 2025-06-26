@@ -184,7 +184,7 @@ func runQASession(ctx context.Context, ragChain *chains.RetrievalQA, logger *slo
 		},
 		{
 			category: "Outside Knowledge",
-			question: "What is the capital of Mars?", // Should admit it doesn't know
+			question: "What is the capital of Mars?",
 		},
 	}
 

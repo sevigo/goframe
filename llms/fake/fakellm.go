@@ -9,8 +9,7 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
-// LLM represents a fake LLM implementation for testing purposes.
-// It cycles through predefined responses and records calls for inspection.
+
 type LLM struct {
 	mu         sync.Mutex
 	responses  []string
@@ -19,14 +18,14 @@ type LLM struct {
 	callCount  int
 }
 
-// NewFakeLLM creates a new fake LLM instance with the provided responses.
+
 func NewFakeLLM(responses []string) *LLM {
 	return &LLM{
 		responses: responses,
 	}
 }
 
-// GenerateContent returns the next predefined response in the cycle, implementing the llms.Model interface.
+// GenerateContent returns the next predefined response in the cycle.
 func (f *LLM) GenerateContent(
 	_ context.Context,
 	messages []schema.MessageContent,

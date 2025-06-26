@@ -141,7 +141,7 @@ func createSampleDocuments() []schema.Document {
 	}
 }
 
-// demonstrateVectorStore shows various vector store operations with proper error handling
+// demonstrateVectorStore shows various vector store operations
 func demonstrateVectorStore(
 	ctx context.Context,
 	store vectorstores.VectorStore,

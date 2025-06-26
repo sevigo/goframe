@@ -46,7 +46,6 @@ func (c RetrievalQA) Call(ctx context.Context, query string) (string, error) {
 	}
 	context := strings.Join(docContents, "\n\n---\n\n")
 
-	// Create RAG prompt with retrieved context
 	prompt := prompts.DefaultRAGPrompt.Format(map[string]string{
 		"context": context,
 		"query":   query,

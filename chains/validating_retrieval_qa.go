@@ -195,7 +195,6 @@ func (c *ValidatingRetrievalQA) generateRAGAnswer(ctx context.Context, query, co
 	return c.GeneratorLLM.Call(ctx, ragPrompt)
 }
 
-// generateDirectAnswer creates an answer using only the query, without context.
 func (c *ValidatingRetrievalQA) generateDirectAnswer(ctx context.Context, query string) (string, error) {
 	return c.GeneratorLLM.Call(ctx, query)
 }
