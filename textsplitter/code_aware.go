@@ -86,12 +86,14 @@ func (c *CodeAwareTextSplitter) SplitDocuments(ctx context.Context, docs []schem
 func (c *CodeAwareTextSplitter) splitSingleDocument(ctx context.Context, doc schema.Document) ([]schema.Document, error) {
 	source, ok := doc.Metadata["source"].(string)
 	if !ok {
-		return nil, errors.New("document metadata is missing 'source' key")
+		c.logger.WarnContext(ctx, "Document metadata is missing 'source' key, using fallback 'unknown'.")
+		source = "unknown"
 	}
 
-	codeChunks, err := c.chunkContent(ctx, doc.PageContent, source, nil)
+	// codeChunks, err := c.chunkContent(ctx, doc.PageContent, source, nil)
+	codeChunks, err := c.ChunkFileWithFileInfo(ctx, doc.PageContent, source, c.modelName, nil, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to chunk document content for source %q: %w", source, err)
 	}
 
 	// Convert the specific CodeChunks into generic schema.Documents
@@ -109,23 +111,6 @@ func (c *CodeAwareTextSplitter) splitSingleDocument(ctx context.Context, doc sch
 		splitDocs = append(splitDocs, schema.NewDocument(chunk.Content, newMetadata))
 	}
 	return splitDocs, nil
-}
-
-func (c *CodeAwareTextSplitter) chunkContent(ctx context.Context, content, filePath string, fileInfo fs.FileInfo) ([]schema.CodeChunk, error) {
-	plugin, err := c.parserRegistry.GetParserForFile(filePath, fileInfo)
-	if err != nil {
-		c.logger.DebugContext(ctx, "No specific parser found, using fallback.", "file", filePath)
-		return nil, err
-	}
-
-	// Construct the options for the plugin
-	// This logic can be enhanced later. For now, it's a simple mapping.
-	opts := &schema.CodeChunkingOptions{
-		ChunkSize: c.chunkSize,
-	}
-
-	// Use the plugin's sophisticated chunking method
-	return plugin.Chunk(content, filePath, opts)
 }
 
 // ChunkFileWithFileInfo chunks content with file info for enhanced language detection.
