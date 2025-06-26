@@ -49,23 +49,19 @@ func (p *MarkdownPlugin) ExtractMetadata(
 		}
 	}
 
-	// Parse with goldmark if there's content to parse
 	if contentToParse != "" {
 		source := []byte(contentToParse)
 		reader := text.NewReader(source)
 		docNode := p.markdown.Parser().Parse(reader)
 
-		// Extract metadata from AST
 		p.extractASTMetadata(docNode, source, lineOffset, &metadata)
 	}
 
-	// Calculate document statistics
 	stats := p.calculateDocumentStats(lines)
 	for key, value := range stats {
 		metadata.Properties[key] = value
 	}
 
-	// If still no title, use filename
 	if metadata.Properties["title"] == "" {
 		metadata.Properties["title"] = p.deriveTitleFromFilename(path)
 	}

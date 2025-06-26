@@ -32,10 +32,8 @@ type gitLoaderOptions struct {
 	Logger      *slog.Logger
 }
 
-// GitLoaderOption configures a GitLoader.
 type GitLoaderOption func(*gitLoaderOptions)
 
-// WithLogger sets the logger for the GitLoader.
 func WithLogger(logger *slog.Logger) GitLoaderOption {
 	return func(opts *gitLoaderOptions) {
 		if logger != nil {
@@ -44,7 +42,6 @@ func WithLogger(logger *slog.Logger) GitLoaderOption {
 	}
 }
 
-// WithIncludeExts sets a whitelist of file extensions to load.
 func WithIncludeExts(exts []string) GitLoaderOption {
 	return func(opts *gitLoaderOptions) {
 		if opts.IncludeExts == nil {
@@ -208,7 +205,6 @@ func shouldSkipDir(name string) bool {
 	return slices.Contains(skipDirs, name)
 }
 
-// shouldSkipFile returns true for files that shouldn't be loaded.
 func shouldSkipFile(path string, info fs.FileInfo) bool {
 	const maxFileSize = 10 * 1024 * 1024 // 10MB
 	if info.Size() > maxFileSize {

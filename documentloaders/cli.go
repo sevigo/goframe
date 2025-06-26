@@ -21,7 +21,6 @@ func NewCLICommandLoader(command string, args ...string) *CLICommandLoader {
 }
 
 func (l *CLICommandLoader) Load(ctx context.Context) ([]schema.Document, error) {
-	// Only allow base command names, no paths
 	command := filepath.Base(l.Command)
 	cmd := exec.CommandContext(ctx, command, l.Args...)
 	output, err := cmd.Output()
