@@ -13,13 +13,12 @@ func (p *CSVPlugin) ExtractMetadata(content string, path string) (model.FileMeta
 	metadata := model.FileMetadata{
 		Language:    "csv",
 		FilePath:    path,
-		Imports:     []string{}, // CSV files don't have imports
+		Imports:     []string{},
 		Definitions: []model.CodeEntityDefinition{},
 		Symbols:     []model.CodeSymbol{},
 		Properties:  map[string]string{},
 	}
 
-	// Parse CSV structure for metadata
 	structure, err := p.parseCSVStructure(content, path)
 	if err != nil {
 		metadata.Properties["error"] = err.Error()
@@ -29,15 +28,11 @@ func (p *CSVPlugin) ExtractMetadata(content string, path string) (model.FileMeta
 
 	metadata.Properties["valid"] = "true"
 
-	// Basic file statistics
 	lines := strings.Split(content, "\n")
 	metadata.Properties["total_lines"] = strconv.Itoa(len(lines))
 	metadata.Properties["size_bytes"] = strconv.Itoa(len(content))
 
-	// CSV-specific metadata
 	p.extractCSVMetadata(structure, &metadata)
-
-	// Analyze data types in columns
 	p.analyzeDataTypes(structure, &metadata)
 
 	return metadata, nil
@@ -64,7 +59,6 @@ func (p *CSVPlugin) extractCSVMetadata(structure *CSVStructure, metadata *model.
 		metadata.Properties["delimiter_name"] = "other"
 	}
 
-	// Add headers as symbols if they exist
 	if structure.HasHeaders {
 		metadata.Properties["headers"] = strings.Join(structure.Headers, ",")
 
@@ -78,7 +72,6 @@ func (p *CSVPlugin) extractCSVMetadata(structure *CSVStructure, metadata *model.
 			}
 			metadata.Symbols = append(metadata.Symbols, symbol)
 
-			// Add header as definition
 			def := model.CodeEntityDefinition{
 				Type:       "column",
 				Name:       header,
@@ -91,7 +84,6 @@ func (p *CSVPlugin) extractCSVMetadata(structure *CSVStructure, metadata *model.
 		}
 	}
 
-	// Calculate data density
 	if structure.RowCount > 0 && structure.ColumnCount > 0 {
 		totalCells := structure.RowCount * structure.ColumnCount
 		emptyCells := p.countEmptyCells(structure)
@@ -115,7 +107,6 @@ func (p *CSVPlugin) analyzeDataTypes(structure *CSVStructure, metadata *model.Fi
 
 	metadata.Properties["column_types"] = strings.Join(columnTypes, ",")
 
-	// Count types
 	typeCounts := make(map[string]int)
 	for _, colType := range columnTypes {
 		typeCounts[colType]++
@@ -163,35 +154,29 @@ func (p *CSVPlugin) detectColumnType(structure *CSVStructure, columnIndex int) s
 			continue
 		}
 
-		// Check for boolean
 		if p.isBooleanValue(cell) {
 			typeScores["boolean"]++
 			continue
 		}
 
-		// Check for integer
 		if p.isIntegerValue(cell) {
 			typeScores["integer"]++
 			continue
 		}
 
-		// Check for float
 		if p.isFloatValue(cell) {
 			typeScores["float"]++
 			continue
 		}
 
-		// Check for date
 		if p.isDateValue(cell) {
 			typeScores["date"]++
 			continue
 		}
 
-		// Default to text
 		typeScores["text"]++
 	}
 
-	// Find the type with highest score
 	maxScore := 0
 	detectedType := "text"
 

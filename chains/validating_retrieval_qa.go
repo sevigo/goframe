@@ -23,14 +23,12 @@ type ValidatingRetrievalQA struct {
 
 type ValidatingRetrievalQAOption func(*ValidatingRetrievalQA)
 
-// WithValidator sets the LLM model used for context validation. This is required.
 func WithValidator(llm llms.Model) ValidatingRetrievalQAOption {
 	return func(c *ValidatingRetrievalQA) {
 		c.ValidatorLLM = llm
 	}
 }
 
-// WithLogger sets a custom logger.
 func WithLogger(logger *slog.Logger) ValidatingRetrievalQAOption {
 	return func(c *ValidatingRetrievalQA) {
 		c.logger = logger

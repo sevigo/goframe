@@ -6,7 +6,6 @@ import (
 	"net/url"
 )
 
-// options holds configuration settings for the Ollama client.
 type options struct {
 	model           string
 	ollamaServerURL *url.URL

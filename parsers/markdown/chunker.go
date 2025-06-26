@@ -19,33 +19,23 @@ type HeadingSection struct {
 
 // Chunk breaks Markdown into semantic chunks based on hierarchical structure
 func (p *MarkdownPlugin) Chunk(content string, path string, opt *model.CodeChunkingOptions) ([]model.CodeChunk, error) {
-	// Parse the markdown into structured elements
 	doc := p.parseMarkdown(content)
 
-	// Ensure doc.Title has a fallback from filename if not set by frontmatter or H1
 	if doc.Title == "" {
 		doc.Title = p.deriveTitleFromFilename(path)
 	}
 
-	// Build hierarchical structure
 	sections := p.buildHierarchicalSections(doc)
-
-	// Convert sections to chunks
 	chunks := p.sectionsToChunks(sections, doc, path)
 
-	// If no chunks were created from sections, but there is content,
-	// create a single chunk for the entire document.
-	// This typically happens for plain text files without any markdown headings,
-	// or files where parsing didn't yield distinct sections.
 	if len(chunks) == 0 && content != "" {
 		lines := strings.Split(content, "\n")
-		// doc.Title should already be populated (from frontmatter, H1, or filename)
 		chunk := model.CodeChunk{
 			Content:    content,
 			LineStart:  1,
 			LineEnd:    len(lines),
 			Type:       "document",
-			Identifier: doc.Title, // Use the pre-populated doc.Title
+			Identifier: doc.Title,
 			Annotations: map[string]string{
 				"type": "document",
 			},
@@ -57,7 +47,6 @@ func (p *MarkdownPlugin) Chunk(content string, path string, opt *model.CodeChunk
 	return chunks, nil
 }
 
-// buildHierarchicalSections creates a hierarchical structure from flat elements
 func (p *MarkdownPlugin) buildHierarchicalSections(doc *DocumentStructure) []*HeadingSection {
 	var sections []*HeadingSection
 	var stack []*HeadingSection
@@ -80,7 +69,6 @@ func (p *MarkdownPlugin) buildHierarchicalSections(doc *DocumentStructure) []*He
 	for i := range doc.Elements {
 		elementAtIndex := &doc.Elements[i]
 		if elementAtIndex.Type == "heading" {
-			// Flush accumulated non-heading elements to the current section on stack or as a pre-section
 			if len(currentElements) > 0 {
 				if len(stack) > 0 {
 					activeSection := stack[len(stack)-1]
@@ -92,7 +80,6 @@ func (p *MarkdownPlugin) buildHierarchicalSections(doc *DocumentStructure) []*He
 						}
 					}
 				} else {
-					// Content before the first heading (this shouldn't include frontmatter if handled below)
 					preSection := &HeadingSection{
 						Elements:  currentElements,
 						LineStart: currentElements[0].LineStart,
@@ -103,13 +90,11 @@ func (p *MarkdownPlugin) buildHierarchicalSections(doc *DocumentStructure) []*He
 				currentElements = []MarkdownElement{}
 			}
 
-			// Adjust stack for the new heading's level
 			newLevel := elementAtIndex.Level
 			for len(stack) > 0 && stack[len(stack)-1].Heading.Level >= newLevel {
-				stack = stack[:len(stack)-1] // Pop sections of same or higher level
+				stack = stack[:len(stack)-1]
 			}
 
-			// Create new section for this heading
 			newSection := &HeadingSection{
 				Heading:   elementAtIndex,
 				Elements:  []MarkdownElement{},
@@ -118,16 +103,14 @@ func (p *MarkdownPlugin) buildHierarchicalSections(doc *DocumentStructure) []*He
 				LineEnd:   elementAtIndex.LineEnd,
 			}
 
-			// If frontmatter exists and this is the very first "structural" section, prepend frontmatter to it.
 			if frontmatterToPrepend != nil && len(stack) == 0 && len(sections) == 0 {
 				newSection.Elements = append(newSection.Elements, *frontmatterToPrepend)
 				if frontmatterToPrepend.LineStart < newSection.LineStart {
 					newSection.LineStart = frontmatterToPrepend.LineStart
 				}
-				frontmatterToPrepend = nil // Consumed
+				frontmatterToPrepend = nil
 			}
 
-			// Add to parent's children or to root sections
 			if len(stack) > 0 {
 				parent := stack[len(stack)-1]
 				parent.Children = append(parent.Children, newSection)
@@ -140,7 +123,6 @@ func (p *MarkdownPlugin) buildHierarchicalSections(doc *DocumentStructure) []*He
 		}
 	}
 
-	// Handle any remaining elements after the last heading
 	if len(currentElements) > 0 {
 		if len(stack) > 0 {
 			activeSection := stack[len(stack)-1]
@@ -170,7 +152,6 @@ func (p *MarkdownPlugin) buildHierarchicalSections(doc *DocumentStructure) []*He
 		}
 	}
 
-	// If only frontmatter existed and nothing else
 	if frontmatterToPrepend != nil && len(sections) == 0 && len(stack) == 0 && len(currentElements) == 0 {
 		section := &HeadingSection{
 			Elements:  []MarkdownElement{*frontmatterToPrepend},
@@ -180,28 +161,23 @@ func (p *MarkdownPlugin) buildHierarchicalSections(doc *DocumentStructure) []*He
 		sections = append(sections, section)
 	}
 
-	// Update section line ranges recursively to ensure they encompass all children and elements.
 	p.updateSectionRanges(sections)
 
 	return sections
 }
 
-// updateSectionRanges updates the line ranges for all sections recursively
 func (p *MarkdownPlugin) updateSectionRanges(sections []*HeadingSection) {
 	for _, section := range sections {
-		p.updateSectionRange(section) // Update children first, then parent
+		p.updateSectionRange(section)
 	}
 }
 
-// updateSectionRange updates the line range for a single section based on its direct elements and children
 func (p *MarkdownPlugin) updateSectionRange(section *HeadingSection) {
-	// Recursively update children first to ensure their ranges are finalized
 	p.updateSectionRanges(section.Children)
 
-	minLine := -1 // Use -1 to indicate not yet found
+	minLine := -1
 	maxLine := -1
 
-	// Consider the heading of the current section
 	if section.Heading != nil {
 		minLine = section.Heading.LineStart
 		maxLine = section.Heading.LineEnd
@@ -217,7 +193,6 @@ func (p *MarkdownPlugin) updateSectionRange(section *HeadingSection) {
 		}
 	}
 
-	// Consider all child sections (their ranges are already updated recursively)
 	for _, child := range section.Children {
 		if minLine == -1 || child.LineStart < minLine {
 			minLine = child.LineStart
@@ -227,13 +202,10 @@ func (p *MarkdownPlugin) updateSectionRange(section *HeadingSection) {
 		}
 	}
 
-	// Apply the determined range to the section
-	if minLine != -1 { // Only update if any content/structure was found
+	if minLine != -1 {
 		section.LineStart = minLine
 		section.LineEnd = maxLine
 	} else {
-		// If a section truly has no content (e.g., a heading with no text, no elements, no children),
-		// set its range to 0 or leave it as default to indicate emptiness.
 		section.LineStart = 0
 		section.LineEnd = 0
 	}

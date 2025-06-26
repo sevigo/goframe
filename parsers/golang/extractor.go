@@ -72,13 +72,9 @@ func (p *GoPlugin) extractFunctionMetadata(fset *token.FileSet, file *ast.File, 
 		startPos := fset.Position(fn.Pos())
 		endPos := fset.Position(fn.End())
 
-		// Get function name
 		fnName := fn.Name.Name
-
-		// Determine if it's a method
 		isMethod := fn.Recv != nil && len(fn.Recv.List) > 0
 
-		// Create definition
 		def := model.CodeEntityDefinition{
 			Type:       "function",
 			Name:       fnName,
@@ -88,21 +84,18 @@ func (p *GoPlugin) extractFunctionMetadata(fset *token.FileSet, file *ast.File, 
 			Signature:  p.getFunctionSignature(fn),
 		}
 
-		// Add receiver information for methods
 		if isMethod {
 			def.Type = "method"
 			recv := p.getReceiverType(fn.Recv.List[0].Type)
 			def.Signature = fmt.Sprintf("(%s) %s", recv, def.Signature[5:]) // Remove "func " prefix
 		}
 
-		// Add documentation if present
 		if fn.Doc != nil {
 			def.Documentation = p.extractDocComment(fn.Doc)
 		}
 
 		metadata.Definitions = append(metadata.Definitions, def)
 
-		// Add as symbol
 		symbol := model.CodeSymbol{
 			Name:      fnName,
 			Type:      def.Type,
@@ -132,7 +125,6 @@ func (p *GoPlugin) extractTypeMetadata(fset *token.FileSet, file *ast.File, meta
 			startPos := fset.Position(typeSpec.Pos())
 			endPos := fset.Position(typeSpec.End())
 
-			// Determine type kind (struct, interface, etc.)
 			typeKind := "type"
 			var additionalInfo string
 
@@ -160,7 +152,6 @@ func (p *GoPlugin) extractTypeMetadata(fset *token.FileSet, file *ast.File, meta
 				typeKind = "function_type"
 			}
 
-			// Create CodeEntityDefinition
 			def := model.CodeEntityDefinition{
 				Type:       typeKind,
 				Name:       typeSpec.Name.Name,

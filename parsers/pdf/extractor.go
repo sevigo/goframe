@@ -115,12 +115,10 @@ func (p *PDFPlugin) extractTextFromPDF(filePath string) ([]textExtractionResult,
 
 // extractPageText extracts text from a single PDF page
 func (p *PDFPlugin) extractPageText(page pdf.Page, pageNum int, filePath string) string {
-	// Method 1: GetPlainText (primary method)
 	if pageContent, err := page.GetPlainText(nil); err == nil && strings.TrimSpace(pageContent) != "" {
 		return p.cleanExtractedText(pageContent)
 	}
 
-	// Method 2: Token-based extraction with improved spacing
 	var textBuilder bytes.Buffer
 	content := page.Content()
 
@@ -128,7 +126,6 @@ func (p *PDFPlugin) extractPageText(page pdf.Page, pageNum int, filePath string)
 		for i, token := range content.Text {
 			textBuilder.WriteString(token.S)
 
-			// Add space if tokens are separate and current token doesn't end with space
 			if i < len(content.Text)-1 && !strings.HasSuffix(token.S, " ") && !strings.HasSuffix(token.S, "\n") {
 				textBuilder.WriteString(" ")
 			}
@@ -146,23 +143,19 @@ func (p *PDFPlugin) extractPageText(page pdf.Page, pageNum int, filePath string)
 
 // cleanExtractedText normalizes extracted text
 func (p *PDFPlugin) cleanExtractedText(text string) string {
-	// Remove excessive whitespace while preserving paragraph breaks
 	text = regexp.MustCompile(`[ \t]+`).ReplaceAllString(text, " ")
 	text = regexp.MustCompile(`\n[ \t]*\n`).ReplaceAllString(text, "\n\n")
 	text = regexp.MustCompile(`\n{3,}`).ReplaceAllString(text, "\n\n")
 
-	// Fix common OCR/extraction issues
 	text = strings.ReplaceAll(text, "ﬂ", "fl")
 	text = strings.ReplaceAll(text, `"`, `\"`)
 
 	return strings.TrimSpace(text)
 }
 
-// identifyMajorSections tries to find section headers in the full text
 func (p *PDFPlugin) identifyMajorSections(fullTextWithMarkers string, filePath string, opts *internal_model.CodeChunkingOptions) []internal_model.CodeChunk {
 	var sections []internal_model.CodeChunk
 
-	// Try each pattern until we find sections
 	for _, pattern := range sectionPatterns {
 		sections = p.findSectionsWithPattern(fullTextWithMarkers, pattern, filePath, opts)
 		if len(sections) > 0 {
@@ -171,7 +164,6 @@ func (p *PDFPlugin) identifyMajorSections(fullTextWithMarkers string, filePath s
 		}
 	}
 
-	// If no patterns worked, try to identify sections by formatting
 	if len(sections) == 0 {
 		sections = p.identifyFormattedSections(fullTextWithMarkers, filePath, opts)
 	}
@@ -179,7 +171,6 @@ func (p *PDFPlugin) identifyMajorSections(fullTextWithMarkers string, filePath s
 	return sections
 }
 
-// findSectionsWithPattern finds sections using a specific regex pattern
 func (p *PDFPlugin) findSectionsWithPattern(
 	fullTextWithMarkers string,
 	pattern *regexp.Regexp,
@@ -207,7 +198,6 @@ func (p *PDFPlugin) findSectionsWithPattern(
 
 		sectionContent = strings.TrimSpace(sectionContent)
 
-		// Skip very small sections
 		if len(sectionContent) < opts.MinCharsPerChunk {
 			continue
 		}
@@ -227,7 +217,6 @@ func (p *PDFPlugin) findSectionsWithPattern(
 			},
 		}
 
-		// Infer page number
 		textUpToSectionContent := fullTextWithMarkers[:matchIndices[1]]
 		pageMatches := regexp.MustCompile(`--- Page (\d+) ---`).FindAllStringSubmatch(textUpToSectionContent, -1)
 		if len(pageMatches) > 0 {
@@ -240,7 +229,6 @@ func (p *PDFPlugin) findSectionsWithPattern(
 	return sections
 }
 
-// identifyFormattedSections identifies sections based on formatting
 func (p *PDFPlugin) identifyFormattedSections(fullTextWithMarkers string, _ string, opts *internal_model.CodeChunkingOptions) []internal_model.CodeChunk {
 	var sections []internal_model.CodeChunk
 	lines := strings.Split(fullTextWithMarkers, "\n")
@@ -251,7 +239,6 @@ func (p *PDFPlugin) identifyFormattedSections(fullTextWithMarkers string, _ stri
 	for i, line := range lines {
 		trimmedLine := strings.TrimSpace(line)
 
-		// Skip empty lines and page markers
 		if trimmedLine == "" || strings.Contains(trimmedLine, "--- Page") {
 			if currentSection != nil {
 				sectionContent.WriteString(line + "\n")
@@ -259,9 +246,7 @@ func (p *PDFPlugin) identifyFormattedSections(fullTextWithMarkers string, _ stri
 			continue
 		}
 
-		// Check if this line looks like a section header
 		if p.isLikelySectionHeader(trimmedLine) {
-			// Save previous section if exists
 			if currentSection != nil {
 				currentSection.Content = strings.TrimSpace(sectionContent.String())
 				if len(currentSection.Content) >= opts.MinCharsPerChunk {
@@ -270,7 +255,6 @@ func (p *PDFPlugin) identifyFormattedSections(fullTextWithMarkers string, _ stri
 				}
 			}
 
-			// Start new section
 			currentSection = &internal_model.CodeChunk{
 				Identifier: sanitizeIdentifier(trimmedLine),
 				Type:       "document_section",
@@ -286,7 +270,6 @@ func (p *PDFPlugin) identifyFormattedSections(fullTextWithMarkers string, _ stri
 		}
 	}
 
-	// Don't forget the last section
 	if currentSection != nil {
 		currentSection.Content = strings.TrimSpace(sectionContent.String())
 		if len(currentSection.Content) >= opts.MinCharsPerChunk {
@@ -298,14 +281,11 @@ func (p *PDFPlugin) identifyFormattedSections(fullTextWithMarkers string, _ stri
 	return sections
 }
 
-// isLikelySectionHeader checks if a line is likely a section header
 func (p *PDFPlugin) isLikelySectionHeader(line string) bool {
-	// Skip very long lines (unlikely to be headers)
 	if len(line) > 100 {
 		return false
 	}
 
-	// Skip very short lines
 	if len(line) < 5 {
 		return false
 	}
@@ -315,7 +295,6 @@ func (p *PDFPlugin) isLikelySectionHeader(line string) bool {
 		return false
 	}
 
-	// Check for common header patterns
 	patterns := []string{
 		`^\d+\.`,         // "1. Introduction"
 		`^Chapter\s+\d+`, // "Chapter 1"
@@ -328,7 +307,6 @@ func (p *PDFPlugin) isLikelySectionHeader(line string) bool {
 		}
 	}
 
-	// Check if mostly uppercase (potential header)
 	uppercaseCount := 0
 	letterCount := 0
 	for _, r := range line {
@@ -347,7 +325,6 @@ func (p *PDFPlugin) isLikelySectionHeader(line string) bool {
 	return false
 }
 
-// splitContentIntoParagraphs splits text into paragraph-based chunks
 func (p *PDFPlugin) splitContentIntoParagraphs(text string, lineOffset int, pageNum int, filePath string, sectionIdentifier string, opts *internal_model.CodeChunkingOptions) []internal_model.CodeChunk {
 	var chunks []internal_model.CodeChunk
 	paraRegex := regexp.MustCompile(paragraphSeparatorRegex)
@@ -394,7 +371,6 @@ func (p *PDFPlugin) splitContentIntoParagraphs(text string, lineOffset int, page
 	return chunks
 }
 
-// splitOversizedChunks ensures no chunk exceeds max size limits
 func (p *PDFPlugin) splitOversizedChunks(chunks []internal_model.CodeChunk, _ string, opts *internal_model.CodeChunkingOptions) []internal_model.CodeChunk {
 	var finalChunks []internal_model.CodeChunk
 	for _, chunk := range chunks {

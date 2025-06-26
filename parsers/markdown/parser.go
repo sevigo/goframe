@@ -26,7 +26,6 @@ type MarkdownElement struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
-// FrontMatter represents the parsed frontmatter
 type FrontMatter struct {
 	Content    string
 	Properties map[string]string
@@ -38,7 +37,7 @@ type FrontMatter struct {
 type DocumentStructure struct {
 	FrontMatter *FrontMatter
 	Elements    []MarkdownElement
-	Title       string // Derived title
+	Title       string
 }
 
 // parseMarkdown parses markdown content using goldmark into structured elements
@@ -48,7 +47,6 @@ func (p *MarkdownPlugin) parseMarkdown(content string) *DocumentStructure {
 		Elements: make([]MarkdownElement, 0),
 	}
 
-	// Parse frontmatter first
 	contentToParse := content
 	startLineOffset := 0
 
@@ -57,7 +55,6 @@ func (p *MarkdownPlugin) parseMarkdown(content string) *DocumentStructure {
 		if frontMatter != nil {
 			doc.FrontMatter = frontMatter
 			startLineOffset = endIdx + 1
-			// Remove frontmatter from content to parse
 			if startLineOffset < len(lines) {
 				contentToParse = strings.Join(lines[startLineOffset:], "\n")
 			} else {
@@ -66,28 +63,23 @@ func (p *MarkdownPlugin) parseMarkdown(content string) *DocumentStructure {
 		}
 	}
 
-	// Parse the markdown content using goldmark
 	if contentToParse != "" {
 		source := []byte(contentToParse)
 		reader := text.NewReader(source)
 		docNode := p.markdown.Parser().Parse(reader)
 
-		// Convert goldmark AST to our MarkdownElement structure
 		elements := p.convertASTToElements(docNode, source, lines, startLineOffset)
 		doc.Elements = elements
 	}
 
-	// Determine document title
 	doc.Title = p.deriveTitle(doc)
 
 	return doc
 }
 
-// convertASTToElements converts goldmark AST nodes to MarkdownElement structures
 func (p *MarkdownPlugin) convertASTToElements(node ast.Node, source []byte, originalLines []string, lineOffset int) []MarkdownElement {
 	var elements []MarkdownElement
 
-	// Iterate through all direct children of the document
 	for child := node.FirstChild(); child != nil; child = child.NextSibling() {
 		element := p.nodeToElement(child, source, originalLines, lineOffset)
 		if element != nil {
@@ -100,29 +92,21 @@ func (p *MarkdownPlugin) convertASTToElements(node ast.Node, source []byte, orig
 
 // nodeToElement converts a goldmark AST node to a MarkdownElement
 func (p *MarkdownPlugin) nodeToElement(node ast.Node, source []byte, originalLines []string, lineOffset int) *MarkdownElement {
-	// Try to get line segments from the node
 	segment := node.Lines()
 
-	// If no line segments, try to extract position from the node itself
-	// This handles cases where goldmark doesn't populate Lines() for certain node types
 	if segment.Len() == 0 {
-		// For nodes without line segments, we'll try to determine their position
-		// by using the source position if available, or by estimation
 		return p.nodeToElementWithoutSegments(node, source, originalLines, lineOffset)
 	}
 
-	// Calculate line numbers in the source (0-based for array access)
 	sourceStartLine := p.segmentToLineNumber(segment.At(0), source)
 	sourceEndLine := p.segmentToLineNumber(segment.At(segment.Len()-1), source)
 
-	// Calculate actual line numbers in the original document (1-based)
 	actualStartLine := sourceStartLine + lineOffset + 1
 	actualEndLine := sourceEndLine + lineOffset + 1
 
-	// Extract content from original lines to preserve formatting
 	var contentLines []string
-	startIdx := actualStartLine - 1 // Convert to 0-based index
-	endIdx := actualEndLine - 1     // Convert to 0-based index
+	startIdx := actualStartLine - 1
+	endIdx := actualEndLine - 1
 
 	if startIdx >= 0 && endIdx < len(originalLines) && startIdx <= endIdx {
 		contentLines = originalLines[startIdx : endIdx+1]
@@ -132,22 +116,17 @@ func (p *MarkdownPlugin) nodeToElement(node ast.Node, source []byte, originalLin
 	return p.createElementForNode(node, content, actualStartLine, actualEndLine, source)
 }
 
-// nodeToElementWithoutSegments handles nodes that don't have line segments but need raw markdown content.
-// This function aims to extract the original markdown content for structured blocks
-// even if the block itself doesn't report line segments directly, by finding the full byte span.
 func (p *MarkdownPlugin) nodeToElementWithoutSegments(node ast.Node, source []byte, originalLines []string, lineOffset int) *MarkdownElement {
-	minOffset := len(source) // Initialize with max possible to find min
-	maxOffset := 0           // Initialize with min possible to find max
+	minOffset := len(source)
+	maxOffset := 0
 	hasContent := false
 
-	// Walk the node's subtree to find the full byte span covered by its content.
 	_ = ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
 		}
 
 		// Prioritize getting the full segment of a child block if it has one.
-		// This captures the raw markdown of a sub-block if it's self-contained.
 		if n.Lines().Len() > 0 {
 			seg := n.Lines().At(0)
 			if seg.Start < minOffset {
@@ -158,10 +137,9 @@ func (p *MarkdownPlugin) nodeToElementWithoutSegments(node ast.Node, source []by
 				maxOffset = seg.Stop
 			}
 			hasContent = true
-			return ast.WalkSkipChildren, nil // Skip children as we've captured this block's full range.
+			return ast.WalkSkipChildren, nil
 		}
 
-		// Fallback for text nodes (which don't usually have a .Lines() method themselves for their parent block)
 		if n.Kind() == ast.KindText {
 			textNode := n.(*ast.Text) //nolint:errcheck //ok
 			segment := textNode.Segment
@@ -375,10 +353,8 @@ func (p *MarkdownPlugin) parseFrontMatter(lines []string) (*FrontMatter, int) {
 
 	if err := yaml.Unmarshal([]byte(yamlContent), &yamlData); err != nil {
 		p.logger.Debug("Failed to parse YAML frontmatter", "error", err)
-		// Fall back to simple key-value parsing
 		p.parseSimpleFrontMatter(lines[1:endIdx], frontMatter)
 	} else {
-		// Convert YAML data to string properties
 		for key, value := range yamlData {
 			frontMatter.Properties[key] = fmt.Sprintf("%v", value)
 		}
@@ -420,21 +396,19 @@ func (p *MarkdownPlugin) parseSimpleFrontMatter(lines []string, frontMatter *Fro
 
 // deriveTitle determines the document title from various sources
 func (p *MarkdownPlugin) deriveTitle(doc *DocumentStructure) string {
-	// First, check frontmatter
 	if doc.FrontMatter != nil {
 		if title, exists := doc.FrontMatter.Properties["title"]; exists && title != "" {
 			return title
 		}
 	}
 
-	// Then, check for first H1 heading
 	for _, element := range doc.Elements {
 		if element.Type == "heading" && element.Level == 1 {
 			return element.Identifier
 		}
 	}
 
-	return "" // Will be derived from filename later
+	return ""
 }
 
 // isTableRow helper method for validation/testing
