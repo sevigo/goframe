@@ -84,7 +84,7 @@ func (g *GitLoader) Load(ctx context.Context) ([]schema.Document, error) {
 	err := filepath.WalkDir(g.path, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			g.logger.WarnContext(ctx, "Skipping unreadable path", "path", path, "error", err)
-			return nil // Continue walking.
+			return nil
 		}
 
 		if d.IsDir() {
