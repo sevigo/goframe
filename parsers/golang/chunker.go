@@ -12,33 +12,23 @@ import (
 	model "github.com/sevigo/goframe/schema"
 )
 
-// Chunk breaks Go code into semantic chunks
 func (p *GoPlugin) Chunk(content string, path string, opts *model.CodeChunkingOptions) ([]model.CodeChunk, error) {
 	var chunks []model.CodeChunk
 
-	// Parse the Go file
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "", content, parser.ParseComments)
 	if err != nil {
-		// Return error to let LanguageAwareChunker handle fallback
 		return nil, fmt.Errorf("failed to parse Go file: %w", err)
 	}
 
-	// Extract functions as chunks
 	chunks = append(chunks, p.extractFunctionChunks(content, fset, file)...)
-
-	// Extract type declarations as chunks
 	chunks = append(chunks, p.extractTypeChunks(content, fset, file)...)
-
-	// Extract top-level variable and constant declarations as chunks
 	chunks = append(chunks, p.extractVarConstChunks(content, fset, file)...)
 
-	// If no semantic chunks found, return error to trigger fallback
 	if len(chunks) == 0 {
 		return nil, errors.New("no semantic chunks found in Go file")
 	}
 
-	// Log the total chunks created
 	p.logger.Debug("Created chunks for Go file", "count", len(chunks), "path", path)
 	for i, chunk := range chunks {
 		p.logger.Debug("Chunk info",
@@ -52,7 +42,6 @@ func (p *GoPlugin) Chunk(content string, path string, opts *model.CodeChunkingOp
 	return chunks, nil
 }
 
-// extractFunctionChunks extracts function and method chunks
 func (p *GoPlugin) extractFunctionChunks(content string, fset *token.FileSet, file *ast.File) []model.CodeChunk {
 	var chunks []model.CodeChunk
 	lines := strings.Split(content, "\n")
@@ -66,14 +55,12 @@ func (p *GoPlugin) extractFunctionChunks(content string, fset *token.FileSet, fi
 		startPos := fset.Position(fn.Pos())
 		endPos := fset.Position(fn.End())
 
-		// Get function name with receiver if it exists
 		var identifier string
 		if fn.Recv != nil && len(fn.Recv.List) > 0 {
 			receiverText := p.getExactReceiverText(content, fset, fn.Recv)
 			if receiverText != "" {
 				identifier = fmt.Sprintf("%s %s", receiverText, fn.Name.Name)
 			} else {
-				// Fallback to constructed receiver text
 				recv := p.getReceiverType(fn.Recv.List[0].Type)
 				identifier = fmt.Sprintf("(%s) %s", recv, fn.Name.Name)
 			}
@@ -169,7 +156,6 @@ func (p *GoPlugin) buildParentContext(file *ast.File, fn *ast.FuncDecl) string {
 	return context.String()
 }
 
-// extractTypeChunks extracts type declaration chunks
 func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *ast.File) []model.CodeChunk {
 	var chunks []model.CodeChunk
 	lines := strings.Split(content, "\n")
@@ -189,11 +175,9 @@ func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *
 			startPos := fset.Position(genDecl.Pos())
 			endPos := fset.Position(genDecl.End())
 
-			// Extract content
 			startLine := startPos.Line - 1
 			endLine := min(endPos.Line, len(lines))
 
-			// Include documentation comment if present
 			chunkContent := ""
 			docComment := p.extractDocComment(genDecl.Doc)
 			if docComment != "" {
@@ -201,7 +185,6 @@ func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *
 			}
 			chunkContent += strings.Join(lines[startLine:endLine], "\n")
 
-			// Create annotations
 			typeName := typeSpec.Name.Name
 			annotations := map[string]string{
 				"type":       "type_declaration",
@@ -209,12 +192,10 @@ func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *
 				"visibility": p.getVisibility(typeName),
 			}
 
-			// Add documentation if present
 			if docComment != "" {
 				annotations["has_doc"] = "true"
 			}
 
-			// Add struct fields if it's a struct
 			if structType, structTypeOK := typeSpec.Type.(*ast.StructType); structTypeOK {
 				annotations["structure_type"] = "struct"
 
@@ -222,7 +203,6 @@ func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *
 					fieldCount := len(structType.Fields.List)
 					annotations["field_count"] = strconv.Itoa(fieldCount)
 
-					// Extract field names for better context
 					var fieldNames []string
 					for _, field := range structType.Fields.List {
 						for _, name := range field.Names {
