@@ -1,4 +1,3 @@
-// goframe/gitutil/cloner.go
 package gitutil
 
 import (
@@ -25,7 +24,6 @@ func NewCloner(logger *slog.Logger) *Cloner {
 
 // Clone checks out a remote repository to a temporary local directory.
 func (c *Cloner) Clone(ctx context.Context, repoURL string) (string, func(), error) {
-	// Create a temporary directory
 	tempPath, err := os.MkdirTemp("", "goframe-repo-*")
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to create temp directory: %w", err)
@@ -33,17 +31,15 @@ func (c *Cloner) Clone(ctx context.Context, repoURL string) (string, func(), err
 
 	c.Logger.InfoContext(ctx, "Cloning repository", "url", repoURL, "path", tempPath)
 
-	// Define the cleanup function. It captures tempPath.
 	cleanupFunc := func() {
 		c.Logger.Info("Cleaning up temporary repository", "path", tempPath)
 		_ = os.RemoveAll(tempPath)
 	}
 
-	// Clone the repository
 	_, err = git.PlainCloneContext(ctx, tempPath, false, &git.CloneOptions{
 		URL:      repoURL,
-		Progress: nil, // Can add a progress writer here if needed
-		Depth:    1,   // Shallow clone for efficiency
+		Progress: nil,
+		Depth:    1,
 	})
 
 	if err != nil {
