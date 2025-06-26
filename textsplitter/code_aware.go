@@ -115,7 +115,6 @@ func (c *CodeAwareTextSplitter) chunkContent(ctx context.Context, content, fileP
 	plugin, err := c.parserRegistry.GetParserForFile(filePath, fileInfo)
 	if err != nil {
 		c.logger.DebugContext(ctx, "No specific parser found, using fallback.", "file", filePath)
-		// Your fallback logic would go here, for now, we return an error.
 		return nil, err
 	}
 

@@ -40,63 +40,6 @@ type Retriever interface {
 	GetRelevantDocuments(ctx context.Context, query string) ([]Document, error)
 }
 
-type ChatMessage interface {
-	GetType() ChatMessageType
-	GetContent() string
-}
-
-type SystemChatMessage struct {
-	Content string
-}
-
-func NewSystemChatMessage(content string) SystemChatMessage {
-	return SystemChatMessage{Content: content}
-}
-
-func (m SystemChatMessage) GetType() ChatMessageType {
-	return ChatMessageTypeSystem
-}
-
-func (m SystemChatMessage) GetContent() string {
-	return m.Content
-}
-
-type HumanChatMessage struct {
-	Content string
-}
-
-func NewHumanChatMessage(content string) HumanChatMessage {
-	return HumanChatMessage{Content: content}
-}
-
-func (m HumanChatMessage) GetType() ChatMessageType {
-	return ChatMessageTypeHuman
-}
-
-func (m HumanChatMessage) GetContent() string {
-	return m.Content
-}
-
-type AIChatMessage struct {
-	Content string
-}
-
-func NewAIChatMessage(content string) AIChatMessage {
-	return AIChatMessage{Content: content}
-}
-
-func (m AIChatMessage) GetType() ChatMessageType {
-	return ChatMessageTypeAI
-}
-
-func (m AIChatMessage) GetContent() string {
-	return m.Content
-}
-
-func ChatMessageToString(msg ChatMessage) string {
-	return fmt.Sprintf("[%s]: %s", msg.GetType(), msg.GetContent())
-}
-
 type CollectionInfo struct {
 	Name           string `json:"name"`
 	PointsCount    uint64 `json:"points_count"`

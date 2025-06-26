@@ -27,14 +27,14 @@ func main() {
 	defer cancel()
 
 	// Setup the RAG system
-	ragChain, err := setupRAGSystem(logger)
+	vectorStore, ragChain, err := setupRAGSystem(logger)
 	if err != nil {
 		logger.Error("Failed to setup RAG system", "error", err)
 		return
 	}
 
 	// Load knowledge base
-	if err := loadKnowledgeBase(ctx, ragChain.Retriever.(*VectorStoreRetriever), logger); err != nil { //nolint:errcheck //fixme
+	if err := loadKnowledgeBase(ctx, vectorStore, logger); err != nil {
 		logger.Error("Failed to load knowledge base", "error", err)
 		return
 	}
@@ -43,22 +43,8 @@ func main() {
 	runQASession(ctx, ragChain, logger)
 }
 
-// TODO: The VectorStoreRetriever: In examples/ollama-retrieval-qa/main.go,
-// you define a VectorStoreRetriever struct. This is a crucial piece of glue code
-// that adapts a VectorStore to a schema.Retriever.
-// Recommendation: This struct should not live in an example. It's a core utility. Move it to the vectorstores package itself (e.g., in vectorstores/retriever.go). Your ToRetriever function in that file is a great start, but the implementation is hidden. Making the struct and its creation public and central will make the library much easier to use.
-// VectorStoreRetriever wraps a vector store to implement the Retriever interface
-type VectorStoreRetriever struct {
-	store vectorstores.VectorStore
-}
-
-// GetRelevantDocuments retrieves documents relevant to the query
-func (r *VectorStoreRetriever) GetRelevantDocuments(ctx context.Context, query string) ([]schema.Document, error) {
-	return r.store.SimilaritySearch(ctx, query, 3, vectorstores.WithScoreThreshold(0.6))
-}
-
 // setupRAGSystem initializes all components needed for RAG
-func setupRAGSystem(logger *slog.Logger) (*chains.RetrievalQA, error) {
+func setupRAGSystem(logger *slog.Logger) (vectorstores.VectorStore, *chains.RetrievalQA, error) {
 	logger.Info("Setting up RAG system components")
 
 	// Create embedder for document retrieval
@@ -67,12 +53,12 @@ func setupRAGSystem(logger *slog.Logger) (*chains.RetrievalQA, error) {
 		ollama.WithLogger(logger),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create embedder LLM: %w", err)
+		return nil, nil, fmt.Errorf("failed to create embedder LLM: %w", err)
 	}
 
 	embedder, err := embeddings.NewEmbedder(embedderLLM)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create embedder: %w", err)
+		return nil, nil, fmt.Errorf("failed to create embedder: %w", err)
 	}
 
 	// Create vector store for document storage
@@ -83,7 +69,7 @@ func setupRAGSystem(logger *slog.Logger) (*chains.RetrievalQA, error) {
 		qdrant.WithLogger(logger),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create vector store: %w", err)
+		return nil, nil, fmt.Errorf("failed to create vector store: %w", err)
 	}
 
 	// Create LLM for answer generation
@@ -92,19 +78,18 @@ func setupRAGSystem(logger *slog.Logger) (*chains.RetrievalQA, error) {
 		ollama.WithLogger(logger),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create generation LLM: %w", err)
+		return nil, nil, fmt.Errorf("failed to create generation LLM: %w", err)
 	}
 
-	// Create retriever and RAG chain
-	retriever := &VectorStoreRetriever{store: vectorStore}
+	retriever := vectorstores.ToRetriever(vectorStore, 3, vectorstores.WithScoreThreshold(0.6))
 	ragChain := chains.NewRetrievalQA(retriever, generationLLM)
 
 	logger.Info("RAG system setup completed", "collection", collectionName)
-	return &ragChain, nil
+	return vectorStore, &ragChain, nil
 }
 
 // loadKnowledgeBase populates the vector store with sample technical documentation
-func loadKnowledgeBase(ctx context.Context, retriever *VectorStoreRetriever, logger *slog.Logger) error {
+func loadKnowledgeBase(ctx context.Context, store vectorstores.VectorStore, logger *slog.Logger) error {
 	logger.Info("Loading knowledge base documents")
 
 	// Sample technical documentation
@@ -169,7 +154,7 @@ func loadKnowledgeBase(ctx context.Context, retriever *VectorStoreRetriever, log
 
 	// Add documents to vector store
 	start := time.Now()
-	_, err := retriever.store.AddDocuments(ctx, documents)
+	_, err := store.AddDocuments(ctx, documents)
 	if err != nil {
 		return fmt.Errorf("failed to add documents to vector store: %w", err)
 	}
