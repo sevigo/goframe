@@ -14,7 +14,6 @@ type Cloner struct {
 	Logger *slog.Logger
 }
 
-// NewCloner creates a new GitCloner.
 func NewCloner(logger *slog.Logger) *Cloner {
 	if logger == nil {
 		logger = slog.Default()
@@ -22,7 +21,7 @@ func NewCloner(logger *slog.Logger) *Cloner {
 	return &Cloner{Logger: logger}
 }
 
-// Clone checks out a remote repository to a temporary local directory.
+// Clone checks out a remote repository to a temporary directory.
 func (c *Cloner) Clone(ctx context.Context, repoURL string) (string, func(), error) {
 	tempPath, err := os.MkdirTemp("", "goframe-repo-*")
 	if err != nil {

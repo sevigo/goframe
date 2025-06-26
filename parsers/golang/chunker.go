@@ -9,52 +9,31 @@ import (
 	"strconv"
 	"strings"
 
-	model "github.com/sevigo/goframe/schema"
+	"github.com/sevigo/goframe/schema"
 )
 
-// Chunk breaks Go code into semantic chunks
-func (p *GoPlugin) Chunk(content string, path string, opts *model.CodeChunkingOptions) ([]model.CodeChunk, error) {
-	var chunks []model.CodeChunk
+func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingOptions) ([]schema.CodeChunk, error) {
+	var chunks []schema.CodeChunk
 
-	// Parse the Go file
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "", content, parser.ParseComments)
 	if err != nil {
-		// Return error to let LanguageAwareChunker handle fallback
 		return nil, fmt.Errorf("failed to parse Go file: %w", err)
 	}
 
-	// Extract functions as chunks
 	chunks = append(chunks, p.extractFunctionChunks(content, fset, file)...)
-
-	// Extract type declarations as chunks
 	chunks = append(chunks, p.extractTypeChunks(content, fset, file)...)
-
-	// Extract top-level variable and constant declarations as chunks
 	chunks = append(chunks, p.extractVarConstChunks(content, fset, file)...)
 
-	// If no semantic chunks found, return error to trigger fallback
 	if len(chunks) == 0 {
 		return nil, errors.New("no semantic chunks found in Go file")
-	}
-
-	// Log the total chunks created
-	p.logger.Debug("Created chunks for Go file", "count", len(chunks), "path", path)
-	for i, chunk := range chunks {
-		p.logger.Debug("Chunk info",
-			"index", i,
-			"type", chunk.Type,
-			"identifier", chunk.Identifier,
-			"lines", fmt.Sprintf("%d-%d", chunk.LineStart, chunk.LineEnd),
-		)
 	}
 
 	return chunks, nil
 }
 
-// extractFunctionChunks extracts function and method chunks
-func (p *GoPlugin) extractFunctionChunks(content string, fset *token.FileSet, file *ast.File) []model.CodeChunk {
-	var chunks []model.CodeChunk
+func (p *GoPlugin) extractFunctionChunks(content string, fset *token.FileSet, file *ast.File) []schema.CodeChunk {
+	var chunks []schema.CodeChunk
 	lines := strings.Split(content, "\n")
 
 	for _, decl := range file.Decls {
@@ -66,14 +45,12 @@ func (p *GoPlugin) extractFunctionChunks(content string, fset *token.FileSet, fi
 		startPos := fset.Position(fn.Pos())
 		endPos := fset.Position(fn.End())
 
-		// Get function name with receiver if it exists
 		var identifier string
 		if fn.Recv != nil && len(fn.Recv.List) > 0 {
 			receiverText := p.getExactReceiverText(content, fset, fn.Recv)
 			if receiverText != "" {
 				identifier = fmt.Sprintf("%s %s", receiverText, fn.Name.Name)
 			} else {
-				// Fallback to constructed receiver text
 				recv := p.getReceiverType(fn.Recv.List[0].Type)
 				identifier = fmt.Sprintf("(%s) %s", recv, fn.Name.Name)
 			}
@@ -81,11 +58,9 @@ func (p *GoPlugin) extractFunctionChunks(content string, fset *token.FileSet, fi
 			identifier = fn.Name.Name
 		}
 
-		// Extract content between the start and end positions
-		startLine := startPos.Line - 1 // 0-based index for slicing
+		startLine := startPos.Line - 1
 		endLine := min(endPos.Line, len(lines))
 
-		// Include documentation comment if present
 		chunkContent := ""
 		docComment := p.extractDocComment(fn.Doc)
 		if docComment != "" {
@@ -93,13 +68,11 @@ func (p *GoPlugin) extractFunctionChunks(content string, fset *token.FileSet, fi
 		}
 		chunkContent += strings.Join(lines[startLine:endLine], "\n")
 
-		// Create annotations
 		annotations := map[string]string{
 			"type": "function",
 			"name": fn.Name.Name,
 		}
 
-		// Add receiver type if method
 		if fn.Recv != nil && len(fn.Recv.List) > 0 {
 			recv := p.getReceiverType(fn.Recv.List[0].Type)
 			annotations["receiver"] = recv
@@ -108,27 +81,13 @@ func (p *GoPlugin) extractFunctionChunks(content string, fset *token.FileSet, fi
 			annotations["is_method"] = "false"
 		}
 
-		// Add function signature
 		annotations["signature"] = p.getFunctionSignature(fn)
-
-		// Add visibility
 		annotations["visibility"] = p.getVisibility(fn.Name.Name)
-
-		// Add documentation if present
 		if docComment != "" {
 			annotations["has_doc"] = "true"
 		}
 
-		// Log the chunk being created
-		p.logger.Debug("Creating function chunk",
-			"identifier", identifier,
-			"start", startPos.Line,
-			"end", endPos.Line,
-			"hasReceiver", fn.Recv != nil,
-		)
-
-		// Create chunk
-		chunk := model.CodeChunk{
+		chunk := schema.CodeChunk{
 			Content:       chunkContent,
 			LineStart:     startPos.Line,
 			LineEnd:       endPos.Line,
@@ -136,7 +95,7 @@ func (p *GoPlugin) extractFunctionChunks(content string, fset *token.FileSet, fi
 			Identifier:    identifier,
 			Annotations:   annotations,
 			ParentContext: p.buildParentContext(file, fn),
-			ContextLevel:  2, // function level
+			ContextLevel:  2,
 		}
 
 		chunks = append(chunks, chunk)
@@ -145,33 +104,26 @@ func (p *GoPlugin) extractFunctionChunks(content string, fset *token.FileSet, fi
 	return chunks
 }
 
-// Update buildParentContext to remove import redundancy
 func (p *GoPlugin) buildParentContext(file *ast.File, fn *ast.FuncDecl) string {
 	var context strings.Builder
 
-	// Add package context
 	if file.Name != nil {
 		context.WriteString(fmt.Sprintf("// Package: %s\n", file.Name.Name))
 	}
 
-	// Add receiver context for methods (this is the key structural info)
 	if fn.Recv != nil && len(fn.Recv.List) > 0 {
 		recv := p.getReceiverType(fn.Recv.List[0].Type)
 		context.WriteString(fmt.Sprintf("// Method of: %s\n", recv))
-
-		// Add any related type methods context if useful
 		context.WriteString(fmt.Sprintf("// Function: %s\n", fn.Name.Name))
 	} else {
-		// For standalone functions, add function signature context
 		context.WriteString(fmt.Sprintf("// Function: %s\n", fn.Name.Name))
 	}
 
 	return context.String()
 }
 
-// extractTypeChunks extracts type declaration chunks
-func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *ast.File) []model.CodeChunk {
-	var chunks []model.CodeChunk
+func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *ast.File) []schema.CodeChunk {
+	var chunks []schema.CodeChunk
 	lines := strings.Split(content, "\n")
 
 	for _, decl := range file.Decls {
@@ -189,11 +141,9 @@ func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *
 			startPos := fset.Position(genDecl.Pos())
 			endPos := fset.Position(genDecl.End())
 
-			// Extract content
 			startLine := startPos.Line - 1
 			endLine := min(endPos.Line, len(lines))
 
-			// Include documentation comment if present
 			chunkContent := ""
 			docComment := p.extractDocComment(genDecl.Doc)
 			if docComment != "" {
@@ -201,7 +151,6 @@ func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *
 			}
 			chunkContent += strings.Join(lines[startLine:endLine], "\n")
 
-			// Create annotations
 			typeName := typeSpec.Name.Name
 			annotations := map[string]string{
 				"type":       "type_declaration",
@@ -209,12 +158,10 @@ func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *
 				"visibility": p.getVisibility(typeName),
 			}
 
-			// Add documentation if present
 			if docComment != "" {
 				annotations["has_doc"] = "true"
 			}
 
-			// Add struct fields if it's a struct
 			if structType, structTypeOK := typeSpec.Type.(*ast.StructType); structTypeOK {
 				annotations["structure_type"] = "struct"
 
@@ -222,7 +169,6 @@ func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *
 					fieldCount := len(structType.Fields.List)
 					annotations["field_count"] = strconv.Itoa(fieldCount)
 
-					// Extract field names for better context
 					var fieldNames []string
 					for _, field := range structType.Fields.List {
 						for _, name := range field.Names {
@@ -235,7 +181,6 @@ func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *
 				}
 			}
 
-			// Add interface methods if it's an interface
 			if interfaceType, interfaceTypeOK := typeSpec.Type.(*ast.InterfaceType); interfaceTypeOK {
 				annotations["structure_type"] = "interface"
 
@@ -243,7 +188,6 @@ func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *
 					methodCount := len(interfaceType.Methods.List)
 					annotations["method_count"] = strconv.Itoa(methodCount)
 
-					// Extract method names for better context
 					var methodNames []string
 					for _, method := range interfaceType.Methods.List {
 						for _, name := range method.Names {
@@ -256,20 +200,11 @@ func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *
 				}
 			}
 
-			// Handle other type kinds
 			if _, isAlias := typeSpec.Type.(*ast.Ident); isAlias {
 				annotations["structure_type"] = "alias"
 			}
 
-			// Log the chunk being created
-			p.logger.Debug("Creating type declaration chunk",
-				"identifier", typeName,
-				"start", startPos.Line,
-				"end", endPos.Line,
-			)
-
-			// Create chunk
-			chunk := model.CodeChunk{
+			chunk := schema.CodeChunk{
 				Content:     chunkContent,
 				LineStart:   startPos.Line,
 				LineEnd:     endPos.Line,
@@ -285,13 +220,12 @@ func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *
 	return chunks
 }
 
-// extractVarConstChunks extracts top-level variable and constant declaration chunks
 func (p *GoPlugin) extractVarConstChunks(
 	content string,
 	fset *token.FileSet,
 	file *ast.File,
-) []model.CodeChunk {
-	var chunks []model.CodeChunk
+) []schema.CodeChunk {
+	var chunks []schema.CodeChunk
 	lines := strings.Split(content, "\n")
 
 	for _, decl := range file.Decls {
@@ -317,12 +251,10 @@ func (p *GoPlugin) extractVarConstChunks(
 	return chunks
 }
 
-// shouldCreateVarConstChunk determines if a variable/constant declaration should become a chunk
 func (p *GoPlugin) shouldCreateVarConstChunk(genDecl *ast.GenDecl) bool {
 	hasExported := false
 	hasDoc := genDecl.Doc != nil && len(genDecl.Doc.List) > 0
 
-	// Check if any of the declarations are exported
 	for _, spec := range genDecl.Specs {
 		if valSpec, ok := spec.(*ast.ValueSpec); ok {
 			for _, name := range valSpec.Names {
@@ -340,12 +272,11 @@ func (p *GoPlugin) shouldCreateVarConstChunk(genDecl *ast.GenDecl) bool {
 	return hasExported || hasDoc
 }
 
-// createIndividualVarConstChunk creates a chunk for a single variable/constant declaration
 func (p *GoPlugin) createIndividualVarConstChunk(
 	genDecl *ast.GenDecl,
 	fset *token.FileSet,
 	lines []string,
-) *model.CodeChunk {
+) *schema.CodeChunk {
 	spec := genDecl.Specs[0]
 	valSpec, ok := spec.(*ast.ValueSpec)
 	if !ok || len(valSpec.Names) != 1 {
@@ -370,14 +301,7 @@ func (p *GoPlugin) createIndividualVarConstChunk(
 		annotations["has_doc"] = "true"
 	}
 
-	p.logger.Debug("Creating individual var/const chunk",
-		"identifier", name.Name,
-		"type", declType,
-		"start", startPos.Line,
-		"end", endPos.Line,
-	)
-
-	return &model.CodeChunk{
+	return &schema.CodeChunk{
 		Content:     chunkContent,
 		LineStart:   startPos.Line,
 		LineEnd:     endPos.Line,
@@ -387,12 +311,11 @@ func (p *GoPlugin) createIndividualVarConstChunk(
 	}
 }
 
-// createGroupedVarConstChunk creates a chunk for grouped variable/constant declarations
 func (p *GoPlugin) createGroupedVarConstChunk(
 	genDecl *ast.GenDecl,
 	fset *token.FileSet,
 	lines []string,
-) model.CodeChunk {
+) schema.CodeChunk {
 	startPos := fset.Position(genDecl.Pos())
 	endPos := fset.Position(genDecl.End())
 
@@ -412,14 +335,7 @@ func (p *GoPlugin) createGroupedVarConstChunk(
 		annotations["has_doc"] = "true"
 	}
 
-	p.logger.Debug("Creating grouped var/const chunk",
-		"identifier", identifier,
-		"type", declType,
-		"start", startPos.Line,
-		"end", endPos.Line,
-	)
-
-	return model.CodeChunk{
+	return schema.CodeChunk{
 		Content:     chunkContent,
 		LineStart:   startPos.Line,
 		LineEnd:     endPos.Line,
@@ -429,7 +345,6 @@ func (p *GoPlugin) createGroupedVarConstChunk(
 	}
 }
 
-// buildChunkContent constructs the content for a chunk including documentation
 func (p *GoPlugin) buildChunkContent(genDecl *ast.GenDecl, startLine, endLine int, lines []string) string {
 	chunkContent := ""
 	if genDecl.Doc != nil && len(genDecl.Doc.List) > 0 {
@@ -439,7 +354,6 @@ func (p *GoPlugin) buildChunkContent(genDecl *ast.GenDecl, startLine, endLine in
 	return chunkContent
 }
 
-// getDeclType returns the string representation of the declaration type
 func (p *GoPlugin) getDeclType(tok token.Token) string {
 	if tok == token.CONST {
 		return "constant"
@@ -447,7 +361,6 @@ func (p *GoPlugin) getDeclType(tok token.Token) string {
 	return "variable"
 }
 
-// extractIdentifiers extracts all identifiers from a GenDecl
 func (p *GoPlugin) extractIdentifiers(genDecl *ast.GenDecl) []string {
 	var identifiers []string
 	for _, spec := range genDecl.Specs {
@@ -460,7 +373,6 @@ func (p *GoPlugin) extractIdentifiers(genDecl *ast.GenDecl) []string {
 	return identifiers
 }
 
-// determineGroupVisibility determines the visibility for a group of identifiers
 func (p *GoPlugin) determineGroupVisibility(identifiers []string) string {
 	allPublic := true
 	allPrivate := true

@@ -19,15 +19,12 @@ type LLM struct {
 	callCount  int
 }
 
-// NewFakeLLM creates a new fake LLM instance with the provided responses.
 func NewFakeLLM(responses []string) *LLM {
 	return &LLM{
 		responses: responses,
 	}
 }
 
-// GenerateContent returns the next predefined response in the cycle.
-// It implements the llms interface and records the call and prompt content.
 func (f *LLM) GenerateContent(
 	_ context.Context,
 	messages []schema.MessageContent,
@@ -57,7 +54,6 @@ func (f *LLM) GenerateContent(
 	}, nil
 }
 
-// Call provides a simplified interface for generating responses from a string prompt.
 func (f *LLM) Call(
 	ctx context.Context,
 	prompt string,
@@ -82,7 +78,6 @@ func (f *LLM) Call(
 	return resp.Choices[0].Content, nil
 }
 
-// Reset resets the response index and call tracking.
 func (f *LLM) Reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -91,21 +86,18 @@ func (f *LLM) Reset() {
 	f.lastPrompt = ""
 }
 
-// AddResponse appends a new response to the list of available responses.
 func (f *LLM) AddResponse(response string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.responses = append(f.responses, response)
 }
 
-// LastPrompt returns the last prompt sent to the LLM and whether one exists.
 func (f *LLM) LastPrompt() (string, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.lastPrompt, f.lastPrompt != ""
 }
 
-// GetCallCount returns the number of times the LLM has been called.
 func (f *LLM) GetCallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -14,30 +14,22 @@ import (
 	"github.com/sevigo/goframe/vectorstores/qdrant"
 )
 
-// Example demonstrates comprehensive usage of the Qdrant vector store
-// with the Ollama embedding model for semantic document search.
 func main() {
-	// Setup structured logging
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
 
-	// Create context with timeout for all operations
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	// Initialize the vector store
-	store, cleanup, err := setupVectorStore(ctx, logger)
+	store, err := setupVectorStore(logger)
 	if err != nil {
 		logger.Error("Failed to setup vector store", "error", err)
 		return
 	}
-	defer cleanup()
 
-	// Load sample documents
 	documents := createSampleDocuments()
 
-	// Demonstrate core functionality
 	if err := demonstrateVectorStore(ctx, store, documents, logger); err != nil {
 		logger.Error("Demo failed", "error", err)
 		return
@@ -46,49 +38,37 @@ func main() {
 	logger.Info("Vector store demo completed successfully")
 }
 
-// setupVectorStore creates and configures a Qdrant vector store with Ollama embeddings
-func setupVectorStore(ctx context.Context, logger *slog.Logger) (vectorstores.VectorStore, func(), error) {
+func setupVectorStore(logger *slog.Logger) (vectorstores.VectorStore, error) {
 	logger.Info("Initializing vector store components")
 
-	// Create Ollama embedder with a dedicated embedding model
 	ollamaEmbedder, err := ollama.New(
 		ollama.WithModel("nomic-embed-text"),
 		ollama.WithLogger(logger),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create ollama embedder: %w", err)
+		return nil, fmt.Errorf("failed to create ollama embedder: %w", err)
 	}
 
 	embedder, err := embeddings.NewEmbedder(ollamaEmbedder)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create embedder: %w", err)
+		return nil, fmt.Errorf("failed to create embedder: %w", err)
 	}
 
-	// Create Qdrant vector store with meaningful collection name
 	collectionName := fmt.Sprintf("cities_demo_%d", time.Now().Unix())
 	store, err := qdrant.New(
 		qdrant.WithEmbedder(embedder),
 		qdrant.WithCollectionName(collectionName),
 		qdrant.WithLogger(logger),
-		qdrant.WithBatchSize(50), // Efficient batch processing
+		qdrant.WithBatchSize(50),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create qdrant store: %w", err)
-	}
-
-	// Cleanup function to remove test collection
-	cleanup := func() {
-		logger.Info("Cleaning up test collection", "collection", collectionName)
-		// if err := store.DeleteCollection(ctx, collectionName); err != nil {
-		// 	logger.Warn("Failed to cleanup test collection", "error", err)
-		// }
+		return nil, fmt.Errorf("failed to create qdrant store: %w", err)
 	}
 
 	logger.Info("Vector store initialized successfully", "collection", collectionName)
-	return store, cleanup, nil
+	return store, nil
 }
 
-// createSampleDocuments returns a diverse set of sample documents for testing
 func createSampleDocuments() []schema.Document {
 	return []schema.Document{
 		{
@@ -161,14 +141,12 @@ func createSampleDocuments() []schema.Document {
 	}
 }
 
-// demonstrateVectorStore shows various vector store operations with proper error handling
 func demonstrateVectorStore(
 	ctx context.Context,
 	store vectorstores.VectorStore,
 	documents []schema.Document,
 	logger *slog.Logger,
 ) error {
-	// Add documents to the vector store
 	logger.Info("Adding documents to vector store", "count", len(documents))
 
 	start := time.Now()
@@ -183,10 +161,8 @@ func demonstrateVectorStore(
 		"duration", addDuration,
 		"docs_per_second", float64(len(documents))/addDuration.Seconds())
 
-	// Wait a moment for indexing to complete
 	time.Sleep(1 * time.Second)
 
-	// Run various search scenarios
 	searchScenarios := []struct {
 		name        string
 		query       string
@@ -247,7 +223,6 @@ func demonstrateVectorStore(
 	return nil
 }
 
-// searchScenario represents a search test case
 type searchScenario struct {
 	name        string
 	query       string
@@ -256,7 +231,6 @@ type searchScenario struct {
 	expectCount int
 }
 
-// runSearchScenario executes a single search scenario with detailed logging
 func runSearchScenario(ctx context.Context, store vectorstores.VectorStore, scenario searchScenario, logger *slog.Logger) error {
 	logger.Info("Running search scenario",
 		"name", scenario.name,
@@ -272,13 +246,11 @@ func runSearchScenario(ctx context.Context, store vectorstores.VectorStore, scen
 
 	duration := time.Since(start)
 
-	// Log search results
 	logger.Info("Search completed",
 		"scenario", scenario.name,
 		"results_found", len(results),
 		"duration", duration)
 
-	// Display top results
 	fmt.Printf("\n=== %s ===\n", scenario.name)
 	fmt.Printf("Query: %q\n", scenario.query)
 	fmt.Printf("Results (%d found):\n", len(results))
@@ -300,7 +272,6 @@ func runSearchScenario(ctx context.Context, store vectorstores.VectorStore, scen
 		fmt.Println("  No results found.")
 	}
 
-	// Validate expectations if set
 	if scenario.expectCount > 0 && len(results) != scenario.expectCount {
 		logger.Warn("Unexpected result count",
 			"scenario", scenario.name,

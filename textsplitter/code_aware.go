@@ -90,7 +90,6 @@ func (c *CodeAwareTextSplitter) splitSingleDocument(ctx context.Context, doc sch
 		source = "unknown"
 	}
 
-	// codeChunks, err := c.chunkContent(ctx, doc.PageContent, source, nil)
 	codeChunks, err := c.ChunkFileWithFileInfo(ctx, doc.PageContent, source, c.modelName, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to chunk document content for source %q: %w", source, err)

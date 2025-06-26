@@ -32,11 +32,9 @@ type LLM struct {
 	logger  *slog.Logger
 }
 
-// Compile-time interface check
 var _ llms.Model = (*LLM)(nil)
 
-// New creates a new Gemini LLM client.
-// It requires a GEMINI_API_KEY environment variable or the WithAPIKey option.
+// New creates a new Gemini LLM client, requiring a GEMINI_API_KEY or WithAPIKey option.
 func New(ctx context.Context, opts ...Option) (*LLM, error) {
 	o := applyOptions(opts...)
 
@@ -69,12 +67,10 @@ func New(ctx context.Context, opts ...Option) (*LLM, error) {
 	return llm, nil
 }
 
-// Call implements simple prompt-based text generation.
 func (g *LLM) Call(ctx context.Context, prompt string, options ...llms.CallOption) (string, error) {
 	return llms.GenerateFromSinglePrompt(ctx, g, prompt, options...)
 }
 
-// GenerateContent handles structured message-based content generation.
 func (g *LLM) GenerateContent(
 	ctx context.Context,
 	messages []schema.MessageContent,
@@ -83,20 +79,17 @@ func (g *LLM) GenerateContent(
 	start := time.Now()
 	g.logger.DebugContext(ctx, "Starting Gemini content generation", "message_count", len(messages))
 
-	// Apply call options
 	callOpts := &llms.CallOptions{}
 	for _, opt := range options {
 		opt(callOpts)
 	}
 
-	// Prepare Gemini-specific client instance with call options
 	client := g.client
 	if callOpts.Temperature > 0 {
 		client.Temperature = new(float32)
 		*client.Temperature = float32(callOpts.Temperature)
 	}
 
-	// Convert messages to Gemini's format
 	history, systemInstruction, err := g.convertToGeminiMessages(messages)
 	if err != nil {
 		return nil, err
@@ -117,7 +110,6 @@ func (g *LLM) GenerateContent(
 	isStreamingFunc := callOpts.StreamingFunc != nil
 
 	if !isStreamingFunc {
-		// Non-streaming generation
 		resp, err := session.SendMessage(ctx, prompt.Parts...)
 		duration := time.Since(start)
 		if err != nil {
@@ -127,7 +119,6 @@ func (g *LLM) GenerateContent(
 		return g.responseToSchema(resp, duration)
 	}
 
-	// Streaming generation
 	iter := session.SendMessageStream(ctx, prompt.Parts...)
 	var fullResponse strings.Builder
 	var finalResp *genai.GenerateContentResponse
@@ -171,7 +162,6 @@ func (g *LLM) GenerateContent(
 	}, nil
 }
 
-// convertToGeminiMessages converts the framework's message schema to Gemini's.
 func (g *LLM) convertToGeminiMessages(messages []schema.MessageContent) ([]*genai.Content, *genai.Content, error) {
 	geminiContents := make([]*genai.Content, 0, len(messages))
 	var systemInstruction *genai.Content
@@ -184,7 +174,6 @@ func (g *LLM) convertToGeminiMessages(messages []schema.MessageContent) ([]*gena
 		case schema.ChatMessageTypeAI:
 			role = "model"
 		case schema.ChatMessageTypeSystem:
-			// System instructions must be at the start.
 			if i == 0 {
 				systemInstruction = &genai.Content{
 					Parts: []genai.Part{genai.Text(msg.GetTextContent())},
@@ -215,7 +204,6 @@ func (g *LLM) convertToGeminiMessages(messages []schema.MessageContent) ([]*gena
 	return geminiContents, systemInstruction, nil
 }
 
-// responseToSchema converts a Gemini response to the framework's schema.
 func (g *LLM) responseToSchema(resp *genai.GenerateContentResponse, duration time.Duration) (*schema.ContentResponse, error) {
 	if len(resp.Candidates) == 0 {
 		return nil, ErrNoContent
@@ -248,12 +236,12 @@ func (g *LLM) responseToSchema(resp *genai.GenerateContentResponse, duration tim
 	}, nil
 }
 
-// extractContentFromResponse safely extracts text from a Gemini response.
 func (g *LLM) extractContentFromResponse(resp *genai.GenerateContentResponse) string {
 	var builder strings.Builder
 	if resp == nil || len(resp.Candidates) == 0 {
 		return ""
 	}
+
 	for _, cand := range resp.Candidates {
 		if cand.Content != nil {
 			for _, part := range cand.Content.Parts {
@@ -263,5 +251,6 @@ func (g *LLM) extractContentFromResponse(resp *genai.GenerateContentResponse) st
 			}
 		}
 	}
+
 	return builder.String()
 }
