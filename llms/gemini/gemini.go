@@ -83,20 +83,17 @@ func (g *LLM) GenerateContent(
 	start := time.Now()
 	g.logger.DebugContext(ctx, "Starting Gemini content generation", "message_count", len(messages))
 
-	// Apply call options
 	callOpts := &llms.CallOptions{}
 	for _, opt := range options {
 		opt(callOpts)
 	}
 
-	// Prepare Gemini-specific client instance with call options
 	client := g.client
 	if callOpts.Temperature > 0 {
 		client.Temperature = new(float32)
 		*client.Temperature = float32(callOpts.Temperature)
 	}
 
-	// Convert messages to Gemini's format
 	history, systemInstruction, err := g.convertToGeminiMessages(messages)
 	if err != nil {
 		return nil, err
@@ -114,10 +111,7 @@ func (g *LLM) GenerateContent(
 	session := client.StartChat()
 	session.History = chatHistory
 
-	isStreamingFunc := callOpts.StreamingFunc != nil
-
-	if !isStreamingFunc {
-		// Non-streaming generation
+	if callOpts.StreamingFunc == nil {
 		resp, err := session.SendMessage(ctx, prompt.Parts...)
 		duration := time.Since(start)
 		if err != nil {
@@ -127,7 +121,6 @@ func (g *LLM) GenerateContent(
 		return g.responseToSchema(resp, duration)
 	}
 
-	// Streaming generation
 	iter := session.SendMessageStream(ctx, prompt.Parts...)
 	var fullResponse strings.Builder
 	var finalResp *genai.GenerateContentResponse

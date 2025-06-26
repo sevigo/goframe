@@ -77,7 +77,6 @@ func (c *CodeAwareTextSplitter) SplitDocuments(ctx context.Context, docs []schem
 	return finalDocs, nil
 }
 
-// splitSingleDocument contains the core logic for processing one document.
 func (c *CodeAwareTextSplitter) splitSingleDocument(ctx context.Context, doc schema.Document) ([]schema.Document, error) {
 	source, ok := doc.Metadata["source"].(string)
 	if !ok {

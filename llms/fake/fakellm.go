@@ -26,8 +26,7 @@ func NewFakeLLM(responses []string) *LLM {
 	}
 }
 
-// GenerateContent returns the next predefined response in the cycle.
-// It implements the llms interface and records the call and prompt content.
+// GenerateContent returns the next predefined response in the cycle, implementing the llms.Model interface.
 func (f *LLM) GenerateContent(
 	_ context.Context,
 	messages []schema.MessageContent,
@@ -40,13 +39,11 @@ func (f *LLM) GenerateContent(
 		return nil, errors.New("no responses configured")
 	}
 
-	// Record the prompt content and increment call count
 	if len(messages) > 0 {
 		f.lastPrompt = messages[0].GetTextContent()
 	}
 	f.callCount++
 
-	// Get current response and advance index
 	response := f.responses[f.index]
 	f.index = (f.index + 1) % len(f.responses)
 
@@ -57,7 +54,7 @@ func (f *LLM) GenerateContent(
 	}, nil
 }
 
-// Call provides a simplified interface for generating responses from a string prompt.
+// Call is a simplified interface for generating responses from a string prompt.
 func (f *LLM) Call(
 	ctx context.Context,
 	prompt string,
@@ -82,7 +79,7 @@ func (f *LLM) Call(
 	return resp.Choices[0].Content, nil
 }
 
-// Reset resets the response index and call tracking.
+// Reset resets the response index and call count.
 func (f *LLM) Reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -91,21 +88,21 @@ func (f *LLM) Reset() {
 	f.lastPrompt = ""
 }
 
-// AddResponse appends a new response to the list of available responses.
+// AddResponse appends a new response to the list.
 func (f *LLM) AddResponse(response string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.responses = append(f.responses, response)
 }
 
-// LastPrompt returns the last prompt sent to the LLM and whether one exists.
+// LastPrompt returns the last prompt sent to the LLM.
 func (f *LLM) LastPrompt() (string, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.lastPrompt, f.lastPrompt != ""
 }
 
-// GetCallCount returns the number of times the LLM has been called.
+// GetCallCount returns the number of times the LLM was called.
 func (f *LLM) GetCallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
