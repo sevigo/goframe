@@ -18,7 +18,6 @@ type Loader interface {
 	Load(ctx context.Context) ([]schema.Document, error)
 }
 
-// It uses a ParserRegistry to apply language-specific chunking strategies.
 type GitLoader struct {
 	path           string
 	parserRegistry parsers.ParserRegistry
@@ -27,7 +26,6 @@ type GitLoader struct {
 
 type GitLoaderOption func(*GitLoader)
 
-// WithLogger sets a custom logger.
 func WithLogger(logger *slog.Logger) GitLoaderOption {
 	return func(g *GitLoader) {
 		g.logger = logger
@@ -207,7 +205,6 @@ func shouldSkipDir(name string) bool {
 	return slices.Contains(skipDirs, name)
 }
 
-// This includes binary files and very large files.
 func shouldSkipFile(path string, info fs.FileInfo) bool {
 	const maxFileSize = 10 * 1024 * 1024 // 10MB
 	if info.Size() > maxFileSize {
