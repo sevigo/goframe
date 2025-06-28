@@ -5,14 +5,12 @@ import (
 	"time"
 )
 
-// StatusError represents an error response from the Ollama API.
 type StatusError struct {
 	Status       string `json:"status,omitempty"`
 	ErrorMessage string `json:"error"`
 	StatusCode   int    `json:"code,omitempty"`
 }
 
-// Error implements the error interface for StatusError.
 func (e StatusError) Error() string {
 	switch {
 	case e.Status != "" && e.ErrorMessage != "":
@@ -26,7 +24,6 @@ func (e StatusError) Error() string {
 	}
 }
 
-// GenerateRequest represents a request to the /api/generate endpoint.
 type GenerateRequest struct {
 	Model     string  `json:"model"`
 	Prompt    string  `json:"prompt"`
@@ -38,7 +35,6 @@ type GenerateRequest struct {
 	Options   Options `json:"options,omitempty"`
 }
 
-// GenerateResponse represents a response from the /api/generate endpoint.
 type GenerateResponse struct {
 	CreatedAt          time.Time     `json:"created_at"`
 	Model              string        `json:"model"`
@@ -60,18 +56,15 @@ type EmbeddingRequest struct {
 	KeepAlive string  `json:"keep_alive,omitempty"`
 }
 
-// EmbeddingResponse represents a response from the /api/embeddings endpoint.
 type EmbeddingResponse struct {
 	Embedding []float64 `json:"embedding"`
 }
 
-// PullRequest represents a request to the /api/pull endpoint.
 type PullRequest struct {
 	Model  string `json:"model"`
 	Stream bool   `json:"stream,omitempty"`
 }
 
-// Options contains configuration parameters for generation requests.
 type Options struct {
 	Stop             []string `json:"stop,omitempty"`
 	RepeatLastN      int      `json:"repeat_last_n,omitempty"`
