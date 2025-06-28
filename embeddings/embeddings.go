@@ -60,6 +60,12 @@ func (e *EmbedderImpl) EmbedDocuments(ctx context.Context, texts []string) ([][]
 		return [][]float32{}, nil
 	}
 
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
 	processedTexts := make([]string, len(texts))
 	for i, text := range texts {
 		processedTexts[i] = e.preprocessText(text)
@@ -69,11 +75,22 @@ func (e *EmbedderImpl) EmbedDocuments(ctx context.Context, texts []string) ([][]
 	batchResults := make([][][]float32, len(batchedTexts))
 	errCh := make(chan error, len(batchedTexts))
 
+	const maxConcurrent = 8 
+	semaphore := make(chan struct{}, maxConcurrent)
+
 	var wg sync.WaitGroup
 	for i, batch := range batchedTexts {
 		wg.Add(1)
 		go func(i int, batch []string) {
 			defer wg.Done()
+
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			if ctx.Err() != nil {
+				return
+			}
+			
 			embeddings, err := e.client.EmbedDocuments(ctx, batch)
 			if err != nil {
 				errCh <- fmt.Errorf("error embedding batch %d: %w", i, err)
@@ -90,6 +107,10 @@ func (e *EmbedderImpl) EmbedDocuments(ctx context.Context, texts []string) ([][]
 		if err != nil {
 			return nil, err
 		}
+	}
+    
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 
 	allEmbeddings := make([][]float32, 0, len(texts))
