@@ -199,95 +199,67 @@ func (o *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, 
 		return [][]float32{}, nil
 	}
 
-	if err := o.EnsureModel(ctx); err != nil {
-		return nil, fmt.Errorf("embedding model preparation failed: %w", err)
-	}
+	o.logger.DebugContext(ctx, "Creating batch embeddings", "document_count", len(texts))
 
-	type result struct {
-		index     int
-		embedding []float32
-		err       error
-	}
-	resultCh := make(chan result, len(texts))
-
-	const maxConcurrency = 5
-	sem := make(chan struct{}, maxConcurrency)
-
-	for i, text := range texts {
-		select {
-		case sem <- struct{}{}:
-		case <-ctx.Done():
-			goto afterLoop
-		}
-		go func(i int, text string) {
-			defer func() { <-sem }()
-			embedding, err := o.createSingleEmbedding(ctx, text)
-			resultCh <- result{i, embedding, err}
-		}(i, text)
-	}
-afterLoop:
-
-	embeddings := make([][]float32, len(texts))
-	var firstErr error
-
-	for range texts {
-		res := <-resultCh
-		if res.err != nil && firstErr == nil {
-			firstErr = res.err
-		}
-		embeddings[res.index] = res.embedding
-	}
-
-	if firstErr != nil {
-		return nil, firstErr
-	}
-
-	// Defensive check on count
-	if len(texts) != len(embeddings) {
-		o.logger.ErrorContext(ctx, "Embedding count mismatch",
-			"expected", len(texts), "got", len(embeddings))
-		return nil, ErrIncompleteEmbedding
-	}
-
-	return embeddings, nil
-}
-
-func (o *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
-	o.logger.DebugContext(ctx, "Creating query embedding", "text_length", len(text))
-
-	if err := o.EnsureModel(ctx); err != nil {
-		return nil, fmt.Errorf("query embedding model preparation failed: %w", err)
-	}
-
-	return o.createSingleEmbedding(ctx, text)
-}
-
-func (o *LLM) createSingleEmbedding(ctx context.Context, text string) ([]float32, error) {
-	if text == "" {
-		return []float32{}, nil
-	}
-
-	req := &ollamaclient.EmbeddingRequest{
-		Model:  o.options.model,
-		Prompt: text,
+	req := &api.EmbedRequest{
+		Model: o.options.model,
+		Input: texts,
 	}
 
 	start := time.Now()
-	resp, err := o.client.Embeddings(ctx, req)
+	resp, err := o.client.Embed(ctx, req)
 	duration := time.Since(start)
 
 	if err != nil {
-		o.logger.ErrorContext(ctx, "Embedding API call failed",
-			"error", err, "text_length", len(text), "duration", duration)
-		return nil, fmt.Errorf("embedding generation failed: %w", err)
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			o.logger.InfoContext(ctx, "Embedding model not found, attempting to pull.", "model", o.options.model)
+			if pullErr := o.EnsureModel(ctx); pullErr != nil {
+				return nil, fmt.Errorf("failed to pull model after embedding attempt: %w", pullErr)
+			}
+			resp, err = o.client.Embed(ctx, req)
+			if err != nil {
+				return nil, fmt.Errorf("embedding failed even after pulling model: %w", err)
+			}
+		} else {
+			o.logger.ErrorContext(ctx, "Batch embed API call failed", "error", err, "duration", duration)
+			return nil, fmt.Errorf("batch embedding generation failed: %w", err)
+		}
 	}
 
-	if len(resp.Embedding) == 0 {
-		o.logger.WarnContext(ctx, "Received empty embedding response", "text_length", len(text))
+	if len(resp.Embeddings) != len(texts) {
+		o.logger.ErrorContext(ctx, "Embedding count mismatch", "expected", len(texts), "got", len(resp.Embeddings))
+		return nil, ErrIncompleteEmbedding
+	}
+
+	return resp.Embeddings, nil
+}
+
+func (o *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	req := &api.EmbedRequest{
+		Model: o.options.model,
+		Input: text,
+	}
+
+	resp, err := o.client.Embed(ctx, req)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			if pullErr := o.EnsureModel(ctx); pullErr != nil {
+				return nil, fmt.Errorf("failed to pull model: %w", pullErr)
+			}
+			resp, err = o.client.Embed(ctx, req)
+			if err != nil {
+				return nil, fmt.Errorf("query embedding failed after pull: %w", err)
+			}
+		} else {
+			return nil, err
+		}
+	}
+
+	if len(resp.Embeddings) != 1 {
 		return nil, ErrEmptyResponse
 	}
 
-	return ollamaclient.ConvertEmbeddingToFloat32(resp.Embedding), nil
+	return resp.Embeddings[0], nil
 }
 
 func (o *LLM) EnsureModel(ctx context.Context) error {
@@ -355,25 +327,49 @@ func (o *LLM) PullModel(ctx context.Context, progressFn func(api.ProgressRespons
 }
 
 func (o *LLM) GetModelDetails(ctx context.Context) (*schema.ModelDetails, error) {
-	o.logger.DebugContext(ctx, "Retrieving model details")
+	o.detailsMutex.RLock()
+	if o.details != nil {
+		cachedDetails := o.details
+		o.detailsMutex.RUnlock()
+		return cachedDetails, nil
+	}
+	o.detailsMutex.RUnlock()
 
+	o.detailsMutex.Lock()
+	defer o.detailsMutex.Unlock()
+
+	if o.details != nil {
+		return o.details, nil
+	}
+
+	o.logger.DebugContext(ctx, "Model details not cached, fetching from API...")
+	details, err := o.fetchModelDetails(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	o.details = details
+	return o.details, nil
+}
+
+func (o *LLM) fetchModelDetails(ctx context.Context) (*schema.ModelDetails, error) {
 	showResp, err := o.client.Show(ctx, &api.ShowRequest{Name: o.options.model})
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "not found") {
-			o.logger.WarnContext(ctx, "Model not found when getting details")
+			o.logger.WarnContext(ctx, "Model not found when fetching details")
 			return nil, ErrModelNotFound
 		}
 		return nil, fmt.Errorf("failed to retrieve model information: %w", err)
 	}
 
 	var dim int64
-	testEmb, err := o.createSingleEmbedding(ctx, "dimension test")
+	testEmb, err := o.EmbedQuery(ctx, "test")
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "does not support") {
-			o.logger.DebugContext(ctx, "Model does not support embeddings, setting dimension to 0")
+			o.logger.DebugContext(ctx, "Model does not support embeddings; dimension set to 0")
 			dim = 0
 		} else {
-			o.logger.ErrorContext(ctx, "Failed to determine embedding dimension", "error", err)
+			o.logger.ErrorContext(ctx, "Failed to perform test embedding for dimension check", "error", err)
 			return nil, fmt.Errorf("failed to determine embedding dimension: %w", err)
 		}
 	} else {
@@ -388,15 +384,11 @@ func (o *LLM) GetModelDetails(ctx context.Context) (*schema.ModelDetails, error)
 		Dimension:     dim,
 	}
 
-	o.logger.InfoContext(ctx, "Model details retrieved",
+	o.logger.InfoContext(ctx, "Model details retrieved and cached",
 		"family", details.Family,
 		"parameters", details.ParameterSize,
 		"quantization", details.Quantization,
 		"dimension", details.Dimension)
-
-	o.detailsMutex.Lock()
-	o.details = details
-	o.detailsMutex.Unlock()
 
 	return details, nil
 }
@@ -413,8 +405,31 @@ func (o *LLM) CountTokens(ctx context.Context, text string) (int, error) {
 	if text == "" {
 		return 0, nil
 	}
-	tokens := strings.Fields(text)
-	return len(tokens), nil
+	o.logger.DebugContext(ctx, "Counting tokens", "text_length", len(text))
+
+	stream := false
+	req := &ollamaclient.GenerateRequest{
+		Model:  o.options.model,
+		Prompt: text,
+		Stream: &stream,
+		Options: map[string]any{
+			"num_predict": 0,
+		},
+	}
+
+	var tokenCount int
+	err := o.client.Generate(ctx, req, func(resp ollamaclient.GenerateResponse) error {
+		if resp.Done {
+			tokenCount = resp.PromptEvalCount
+		}
+		return nil
+	})
+
+	if err != nil {
+		return 0, fmt.Errorf("token counting via generation failed: %w", err)
+	}
+
+	return tokenCount, nil
 }
 
 func (o *LLM) determineModel(opts llms.CallOptions) string {
