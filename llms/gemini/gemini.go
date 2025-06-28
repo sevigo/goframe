@@ -73,7 +73,6 @@ func (g *LLM) GenerateContent(
 	options ...llms.CallOption,
 ) (*schema.ContentResponse, error) {
 	start := time.Now()
-	g.logger.DebugContext(ctx, "Starting Gemini content generation", "message_count", len(messages))
 
 	callOpts := &llms.CallOptions{}
 	for _, opt := range options {

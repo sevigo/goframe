@@ -160,7 +160,6 @@ func (s *Store) AddDocumentsBatch(
 	}
 
 	embedStart := time.Now()
-	s.logger.DebugContext(ctx, "Stage 1: Generating embeddings for all documents...")
 	texts := make([]string, totalDocs)
 	for i, doc := range docs {
 		texts[i] = doc.PageContent
@@ -186,7 +185,6 @@ func (s *Store) AddDocumentsBatch(
 		}
 	}
 
-	s.logger.DebugContext(ctx, "Stage 2: Upserting points to Qdrant in batches...")
 	upsertResult, err := s.upsertPointsInBatches(ctx, collectionName, points, progressCallback)
 	if err != nil {
 		if upsertResult != nil && len(upsertResult.ProcessedIDs) > 0 {
@@ -212,8 +210,6 @@ func (s *Store) upsertPointsInBatches(
 	batchSize := s.batchConfig.BatchSize
 	numBatches := int(math.Ceil(float64(totalPoints) / float64(batchSize)))
 	start := time.Now()
-
-	s.logger.DebugContext(ctx, "Processing point upserts in parallel", "total_batches", numBatches, "batch_size", batchSize)
 
 	semaphore := make(chan struct{}, s.batchConfig.MaxConcurrency)
 	resultsChan := make(chan BatchResult, numBatches)
@@ -284,7 +280,6 @@ func (s *Store) upsertWithRetry(ctx context.Context, collectionName string, poin
 
 	for attempt := 0; attempt <= s.batchConfig.RetryAttempts; attempt++ {
 		if attempt > 0 {
-			s.logger.DebugContext(ctx, "Retrying upsert operation", "attempt", attempt, "delay", delay, "point_count", len(points))
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
@@ -356,10 +351,6 @@ func (s *Store) SimilaritySearch(
 	numDocuments int,
 	options ...vectorstores.Option,
 ) ([]schema.Document, error) {
-	start := time.Now()
-	s.logger.DebugContext(ctx, "Starting similarity search",
-		"query_length", len(query), "num_documents", numDocuments)
-
 	if strings.TrimSpace(query) == "" {
 		s.logger.WarnContext(ctx, "Empty query provided")
 		return []schema.Document{}, nil
@@ -415,12 +406,6 @@ func (s *Store) SimilaritySearch(
 	for _, point := range results {
 		docs = append(docs, s.payloadToDocument(point.GetPayload()))
 	}
-
-	totalDuration := time.Since(start)
-	s.logger.InfoContext(ctx, "Similarity search completed",
-		"collection", collectionName, "query_length", len(query),
-		"results_found", len(docs), "embed_duration", embedDuration,
-		"search_duration", searchDuration, "total_duration", totalDuration)
 
 	return docs, nil
 }
@@ -643,15 +628,12 @@ func (s *Store) DeleteCollection(ctx context.Context, name string) error {
 }
 
 func (s *Store) Health(ctx context.Context) error {
-	s.logger.DebugContext(ctx, "Checking Qdrant health")
-
 	_, err := s.client.GetCollectionsClient().List(ctx, &qdrant.ListCollectionsRequest{})
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Health check failed", "error", err)
 		return fmt.Errorf("qdrant health check failed: %w", err)
 	}
 
-	s.logger.DebugContext(ctx, "Qdrant health check passed")
 	return nil
 }
 
@@ -679,7 +661,6 @@ func (s *Store) ensureCollection(ctx context.Context, collectionName string) err
 	}
 
 	if exists {
-		s.logger.DebugContext(ctx, "Collection already exists", "collection", collectionName)
 		return nil
 	}
 
@@ -740,9 +721,6 @@ func (s *Store) documentToPayload(doc schema.Document) map[string]*qdrant.Value 
 	for key, value := range doc.Metadata {
 		if qValue := s.convertToQdrantValue(value); qValue != nil {
 			payload[key] = qValue
-		} else {
-			s.logger.DebugContext(context.Background(), "Skipping unsupported metadata type",
-				"key", key, "type", fmt.Sprintf("%T", value))
 		}
 	}
 	return payload

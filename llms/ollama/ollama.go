@@ -199,8 +199,6 @@ func (o *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, 
 		return [][]float32{}, nil
 	}
 
-	o.logger.DebugContext(ctx, "Creating batch embeddings", "document_count", len(texts))
-
 	req := &api.EmbedRequest{
 		Model: o.options.model,
 		Input: texts,
@@ -405,7 +403,6 @@ func (o *LLM) CountTokens(ctx context.Context, text string) (int, error) {
 	if text == "" {
 		return 0, nil
 	}
-	o.logger.DebugContext(ctx, "Counting tokens", "text_length", len(text))
 
 	stream := false
 	req := &ollamaclient.GenerateRequest{
