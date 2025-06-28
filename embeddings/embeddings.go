@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 type Embedder interface {
@@ -17,6 +18,8 @@ type EmbedderImpl struct {
 	client Embedder
 	opts   options
 }
+
+var ErrEmptyText = errors.New("text cannot be empty")
 
 func NewEmbedder(client Embedder, opts ...Option) (Embedder, error) {
 	embedderOpts := options{
@@ -32,6 +35,10 @@ func NewEmbedder(client Embedder, opts ...Option) (Embedder, error) {
 		embedderOpts.BatchSize = 32
 	}
 
+	if _, ok := client.(*EmbedderImpl); ok {
+		return nil, errors.New("cannot wrap an already-wrapped EmbedderImpl")
+	}
+
 	return &EmbedderImpl{
 		client: client,
 		opts:   embedderOpts,
@@ -40,20 +47,12 @@ func NewEmbedder(client Embedder, opts ...Option) (Embedder, error) {
 
 func (e *EmbedderImpl) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	if strings.TrimSpace(text) == "" {
-		return nil, errors.New("text cannot be empty")
+		return nil, ErrEmptyText
 	}
 
 	processedText := e.preprocessText(text)
 
-	embeddings, err := e.client.EmbedDocuments(ctx, []string{processedText})
-	if err != nil {
-		return nil, fmt.Errorf("error embedding query: %w", err)
-	}
-	if len(embeddings) == 0 {
-		return nil, errors.New("embedding client returned no vectors for query")
-	}
-
-	return embeddings[0], nil
+	return e.client.EmbedQuery(ctx, processedText)
 }
 
 func (e *EmbedderImpl) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error) {
@@ -67,14 +66,35 @@ func (e *EmbedderImpl) EmbedDocuments(ctx context.Context, texts []string) ([][]
 	}
 
 	batchedTexts := batchTexts(processedTexts, e.opts.BatchSize)
-	allEmbeddings := make([][]float32, 0, len(texts))
+	batchResults := make([][][]float32, len(batchedTexts))
+	errCh := make(chan error, len(batchedTexts))
 
-	for _, batch := range batchedTexts {
-		batchEmbeddings, err := e.client.EmbedDocuments(ctx, batch)
+	var wg sync.WaitGroup
+	for i, batch := range batchedTexts {
+		wg.Add(1)
+		go func(i int, batch []string) {
+			defer wg.Done()
+			embeddings, err := e.client.EmbedDocuments(ctx, batch)
+			if err != nil {
+				errCh <- fmt.Errorf("error embedding batch %d: %w", i, err)
+				return
+			}
+			batchResults[i] = embeddings
+		}(i, batch)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
 		if err != nil {
-			return nil, fmt.Errorf("error embedding document batch: %w", err)
+			return nil, err
 		}
-		allEmbeddings = append(allEmbeddings, batchEmbeddings...)
+	}
+
+	allEmbeddings := make([][]float32, 0, len(texts))
+	for _, batch := range batchResults {
+		allEmbeddings = append(allEmbeddings, batch...)
 	}
 
 	return allEmbeddings, nil
@@ -92,7 +112,7 @@ func (e *EmbedderImpl) preprocessText(text string) string {
 }
 
 func batchTexts(texts []string, batchSize int) [][]string {
-	if batchSize <= 0 || len(texts) <= batchSize {
+	if batchSize <= 0 {
 		return [][]string{texts}
 	}
 

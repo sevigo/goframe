@@ -174,7 +174,6 @@ func (o *LLM) convertToOllamaMessages(messages []schema.MessageContent) ([]api.M
 			switch part := p.(type) {
 			case schema.TextContent:
 				if foundText {
-					// Ollama's chat endpoint takes one content string, so we concatenate them.
 					textContent += "\n" + part.Text
 				} else {
 					textContent = part.Text
@@ -191,7 +190,6 @@ func (o *LLM) convertToOllamaMessages(messages []schema.MessageContent) ([]api.M
 	return chatMsgs, nil
 }
 
-// typeToRole converts message type to the role string Ollama API expects.
 func typeToRole(typ schema.ChatMessageType) string {
 	switch typ {
 	case schema.ChatMessageTypeSystem:
@@ -244,7 +242,6 @@ func (o *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	return o.createSingleEmbedding(ctx, text)
 }
 
-// createSingleEmbedding handles the actual embedding creation with detailed logging.
 func (o *LLM) createSingleEmbedding(ctx context.Context, text string) ([]float32, error) {
 	if text == "" {
 		return []float32{}, nil

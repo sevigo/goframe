@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/ollama/ollama/api"
@@ -17,16 +19,26 @@ import (
 const (
 	DefaultOllamaURL = "http://127.0.0.1:11434"
 	DefaultTimeout   = 10 * time.Minute
-	MaxBufferSize    = 512 * 1000
 )
 
-// Client is a HTTP client for the Ollama API that supports both streaming and non-streaming requests.
 type Client struct {
 	baseURL    *url.URL
 	httpClient *http.Client
 }
 
-// NewClient creates a new Ollama client with the provided configuration.
+var jsonBufferPool = sync.Pool{
+	New: func() any {
+		return new(bytes.Buffer)
+	},
+}
+
+type closerFunc func()
+
+func (f closerFunc) Close() error {
+	f()
+	return nil
+}
+
 func NewClient(baseURL *url.URL, httpClient *http.Client) (*Client, error) {
 	if baseURL == nil {
 		var err error
@@ -39,6 +51,13 @@ func NewClient(baseURL *url.URL, httpClient *http.Client) (*Client, error) {
 	if httpClient == nil {
 		httpClient = &http.Client{
 			Timeout: DefaultTimeout,
+			Transport: &http.Transport{
+				MaxIdleConns:       100,
+				IdleConnTimeout:    90 * time.Second,
+				DisableCompression: false,
+				MaxConnsPerHost:    100,
+				ForceAttemptHTTP2:  true,
+			},
 		}
 	}
 
@@ -49,22 +68,9 @@ func NewClient(baseURL *url.URL, httpClient *http.Client) (*Client, error) {
 }
 
 func NewDefaultClient() (*Client, error) {
-	baseURL, err := getDefaultURL()
-	if err != nil {
-		return nil, err
-	}
-
-	httpClient := &http.Client{
-		Timeout: DefaultTimeout,
-	}
-
-	return &Client{
-		baseURL:    baseURL,
-		httpClient: httpClient,
-	}, nil
+	return NewClient(nil, nil)
 }
 
-// getDefaultURL returns the default Ollama URL from environment or default constant.
 func getDefaultURL() (*url.URL, error) {
 	host := os.Getenv("OLLAMA_URL")
 	if host == "" {
@@ -79,8 +85,6 @@ func getDefaultURL() (*url.URL, error) {
 	return baseURL, nil
 }
 
-// Generate makes a streaming request to the /api/generate endpoint.
-// The callback function is called for each response chunk received.
 func (c *Client) Generate(ctx context.Context, req *GenerateRequest, callback func(GenerateResponse) error) error {
 	return c.streamRequest(ctx, http.MethodPost, "/api/generate", req, func(data []byte) error {
 		var resp GenerateResponse
@@ -91,7 +95,6 @@ func (c *Client) Generate(ctx context.Context, req *GenerateRequest, callback fu
 	})
 }
 
-// Embeddings makes a non-streaming request to the /api/embeddings endpoint.
 func (c *Client) Embeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error) {
 	var resp EmbeddingResponse
 	err := c.doRequest(ctx, http.MethodPost, "/api/embeddings", req, &resp)
@@ -101,7 +104,6 @@ func (c *Client) Embeddings(ctx context.Context, req *EmbeddingRequest) (*Embedd
 	return &resp, nil
 }
 
-// List makes a request to the /api/tags endpoint to list available models.
 func (c *Client) List(ctx context.Context) (*api.ListResponse, error) {
 	var resp api.ListResponse
 	err := c.doRequest(ctx, http.MethodGet, "/api/tags", nil, &resp)
@@ -111,7 +113,6 @@ func (c *Client) List(ctx context.Context) (*api.ListResponse, error) {
 	return &resp, nil
 }
 
-// Show makes a request to the /api/show endpoint to get model information.
 func (c *Client) Show(ctx context.Context, req *api.ShowRequest) (*api.ShowResponse, error) {
 	var resp api.ShowResponse
 	err := c.doRequest(ctx, http.MethodPost, "/api/show", req, &resp)
@@ -121,7 +122,6 @@ func (c *Client) Show(ctx context.Context, req *api.ShowRequest) (*api.ShowRespo
 	return &resp, nil
 }
 
-// Pull makes a streaming request to the /api/pull endpoint to download a model.
 func (c *Client) Pull(ctx context.Context, req *PullRequest, callback func(api.ProgressResponse) error) error {
 	return c.streamRequest(ctx, http.MethodPost, "/api/pull", req, func(data []byte) error {
 		var resp api.ProgressResponse
@@ -145,12 +145,16 @@ func (c *Client) doRequest(ctx context.Context, method, path string, reqData, re
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if closer, ok := reqBody.(io.Closer); ok {
+			_ = closer.Close()
+		}
+	}()
 
 	request, err := c.buildRequest(ctx, method, path, reqBody)
 	if err != nil {
 		return err
 	}
-
 	c.setJSONHeaders(request)
 
 	response, err := c.httpClient.Do(request)
@@ -159,16 +163,40 @@ func (c *Client) doRequest(ctx context.Context, method, path string, reqData, re
 	}
 	defer response.Body.Close()
 
-	return c.handleResponse(response, respData)
+	if err := c.checkError(response); err != nil {
+		return err
+	}
+
+	if respData != nil {
+		if err := json.NewDecoder(response.Body).Decode(respData); err != nil {
+			return fmt.Errorf("failed to decode response: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (c *Client) prepareRequestBody(reqData any) (io.Reader, error) {
-	data, err := json.Marshal(reqData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request data: %w", err)
+	buf, ok := jsonBufferPool.Get().(*bytes.Buffer)
+	if !ok {
+		return nil, errors.New("failed get data from buffer")
+	}
+	buf.Reset()
+
+	if err := json.NewEncoder(buf).Encode(reqData); err != nil {
+		jsonBufferPool.Put(buf)
+		return nil, fmt.Errorf("failed to encode request data: %w", err)
 	}
 
-	return bytes.NewReader(data), nil
+	return struct {
+		io.Reader
+		io.Closer
+	}{
+		Reader: buf,
+		Closer: closerFunc(func() {
+			jsonBufferPool.Put(buf)
+		}),
+	}, nil
 }
 
 func (c *Client) buildRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
@@ -187,26 +215,7 @@ func (c *Client) setJSONHeaders(request *http.Request) {
 	request.Header.Set("Accept", "application/json")
 }
 
-func (c *Client) handleResponse(response *http.Response, respData any) error {
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	if err := c.checkError(response, body); err != nil {
-		return err
-	}
-
-	if len(body) > 0 && respData != nil {
-		if err := json.Unmarshal(body, respData); err != nil {
-			return fmt.Errorf("failed to unmarshal response: %w", err)
-		}
-	}
-
-	return nil
-}
-
-func (c *Client) checkError(response *http.Response, body []byte) error {
+func (c *Client) checkError(response *http.Response) error {
 	if response.StatusCode < http.StatusBadRequest {
 		return nil
 	}
@@ -215,8 +224,8 @@ func (c *Client) checkError(response *http.Response, body []byte) error {
 		Error string `json:"error"`
 	}
 
-	if err := json.Unmarshal(body, &apiError); err != nil {
-		return fmt.Errorf("ollama API error (status %d): %s", response.StatusCode, string(body))
+	if err := json.NewDecoder(response.Body).Decode(&apiError); err != nil {
+		return fmt.Errorf("ollama API error (status %d): %s", response.StatusCode, http.StatusText(response.StatusCode))
 	}
 
 	return fmt.Errorf("ollama API error (status %d): %s", response.StatusCode, apiError.Error)
