@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,7 +17,6 @@ import (
 
 const (
 	MaxBufferSize = 512 * 1024
-
 )
 
 var bufferPool = sync.Pool{
@@ -62,7 +62,10 @@ func (c *Client) GenerateChat(ctx context.Context, req *api.ChatRequest, fn api.
 }
 
 func (c *Client) streamRequest(ctx context.Context, method, path string, reqData any, callback func([]byte) error) error {
-	buf := bufferPool.Get().(*bytes.Buffer)
+	buf, ok := bufferPool.Get().(*bytes.Buffer)
+	if !ok {
+		return errors.New("failed get data from buffer")
+	}
 	buf.Reset()
 	defer bufferPool.Put(buf)
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -146,7 +147,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, reqData, re
 	}
 	defer func() {
 		if closer, ok := reqBody.(io.Closer); ok {
-			closer.Close()
+			_ = closer.Close()
 		}
 	}()
 
@@ -176,7 +177,10 @@ func (c *Client) doRequest(ctx context.Context, method, path string, reqData, re
 }
 
 func (c *Client) prepareRequestBody(reqData any) (io.Reader, error) {
-	buf := jsonBufferPool.Get().(*bytes.Buffer)
+	buf, ok := jsonBufferPool.Get().(*bytes.Buffer)
+	if !ok {
+		return nil, errors.New("failed get data from buffer")
+	}
 	buf.Reset()
 
 	if err := json.NewEncoder(buf).Encode(reqData); err != nil {

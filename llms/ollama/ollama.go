@@ -242,7 +242,6 @@ func (o *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	return o.createSingleEmbedding(ctx, text)
 }
 
-// createSingleEmbedding handles the actual embedding creation with detailed logging.
 func (o *LLM) createSingleEmbedding(ctx context.Context, text string) ([]float32, error) {
 	if text == "" {
 		return []float32{}, nil
