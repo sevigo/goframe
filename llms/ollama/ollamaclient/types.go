@@ -25,14 +25,14 @@ func (e StatusError) Error() string {
 }
 
 type GenerateRequest struct {
-	Model     string  `json:"model"`
-	Prompt    string  `json:"prompt"`
-	System    string  `json:"system,omitempty"`
-	Template  string  `json:"template,omitempty"`
-	Context   []int   `json:"context,omitempty"`
-	Stream    *bool   `json:"stream,omitempty"`
-	KeepAlive string  `json:"keep_alive,omitempty"`
-	Options   Options `json:"options,omitempty"`
+	Model     string         `json:"model"`
+	Prompt    string         `json:"prompt"`
+	System    string         `json:"system,omitempty"`
+	Template  string         `json:"template,omitempty"`
+	Context   []int          `json:"context,omitempty"`
+	Stream    *bool          `json:"stream,omitempty"`
+	KeepAlive string         `json:"keep_alive,omitempty"`
+	Options   map[string]any `json:"options,omitempty"`
 }
 
 type GenerateResponse struct {
@@ -49,13 +49,6 @@ type GenerateResponse struct {
 	Done               bool          `json:"done"`
 }
 
-type EmbeddingRequest struct {
-	Model     string  `json:"model"`
-	Prompt    string  `json:"prompt"`
-	Options   Options `json:"options,omitempty"`
-	KeepAlive string  `json:"keep_alive,omitempty"`
-}
-
 type EmbeddingResponse struct {
 	Embedding []float64 `json:"embedding"`
 }
@@ -65,7 +58,18 @@ type PullRequest struct {
 	Stream bool   `json:"stream,omitempty"`
 }
 
+type Runner struct {
+	NumCtx    int   `json:"num_ctx,omitempty"`
+	NumBatch  int   `json:"num_batch,omitempty"`
+	NumGPU    int   `json:"num_gpu,omitempty"`
+	MainGPU   int   `json:"main_gpu,omitempty"`
+	UseMMap   *bool `json:"use_mmap,omitempty"`
+	NumThread int   `json:"num_thread,omitempty"`
+}
+
 type Options struct {
+	Runner
+
 	Stop             []string `json:"stop,omitempty"`
 	RepeatLastN      int      `json:"repeat_last_n,omitempty"`
 	Seed             int      `json:"seed,omitempty"`

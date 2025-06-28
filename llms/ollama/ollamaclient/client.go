@@ -95,11 +95,11 @@ func (c *Client) Generate(ctx context.Context, req *GenerateRequest, callback fu
 	})
 }
 
-func (c *Client) Embeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error) {
-	var resp EmbeddingResponse
-	err := c.doRequest(ctx, http.MethodPost, "/api/embeddings", req, &resp)
+func (c *Client) Embed(ctx context.Context, req *api.EmbedRequest) (*api.EmbedResponse, error) {
+	var resp api.EmbedResponse
+	err := c.doRequest(ctx, http.MethodPost, "/api/embed", req, &resp)
 	if err != nil {
-		return nil, fmt.Errorf("embeddings request failed: %w", err)
+		return nil, fmt.Errorf("embed request failed: %w", err)
 	}
 	return &resp, nil
 }
