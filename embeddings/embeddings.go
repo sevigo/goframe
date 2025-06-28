@@ -75,7 +75,7 @@ func (e *EmbedderImpl) EmbedDocuments(ctx context.Context, texts []string) ([][]
 	batchResults := make([][][]float32, len(batchedTexts))
 	errCh := make(chan error, len(batchedTexts))
 
-	const maxConcurrent = 8 
+	const maxConcurrent = 8
 	semaphore := make(chan struct{}, maxConcurrent)
 
 	var wg sync.WaitGroup
@@ -90,7 +90,7 @@ func (e *EmbedderImpl) EmbedDocuments(ctx context.Context, texts []string) ([][]
 			if ctx.Err() != nil {
 				return
 			}
-			
+
 			embeddings, err := e.client.EmbedDocuments(ctx, batch)
 			if err != nil {
 				errCh <- fmt.Errorf("error embedding batch %d: %w", i, err)
@@ -108,7 +108,7 @@ func (e *EmbedderImpl) EmbedDocuments(ctx context.Context, texts []string) ([][]
 			return nil, err
 		}
 	}
-    
+
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}

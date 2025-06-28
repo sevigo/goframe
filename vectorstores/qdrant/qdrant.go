@@ -1,4 +1,3 @@
-// File: ./vectorstores/qdrant/qdrant.go
 package qdrant
 
 import (
@@ -235,7 +234,7 @@ func (s *Store) upsertPointsInBatches(
 
 			batchIDs := make([]string, len(batchPoints))
 			for j, p := range batchPoints {
-				batchIDs[j] = p.Id.GetUuid()
+				batchIDs[j] = p.GetId().GetUuid()
 			}
 
 			err := s.upsertWithRetry(ctx, collectionName, batchPoints)
