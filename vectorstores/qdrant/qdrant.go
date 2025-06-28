@@ -1,3 +1,4 @@
+// File: ./vectorstores/qdrant/qdrant.go
 package qdrant
 
 import (
@@ -21,7 +22,6 @@ import (
 	"github.com/sevigo/goframe/vectorstores"
 )
 
-// Enhanced errors
 var (
 	ErrMissingEmbedder       = errors.New("qdrant: embedder is required but not provided")
 	ErrMissingCollectionName = errors.New("qdrant: collection name is required")
@@ -35,33 +35,29 @@ var (
 	ErrPartialBatchFailure   = errors.New("qdrant: some batches failed to process")
 )
 
-// Batch configuration constants
 const (
-	DefaultBatchSize      = 100  // Default batch size for operations
-	MaxBatchSize          = 1000 // Maximum batch size
-	DefaultMaxConcurrency = 5    // Default concurrent batch workers
-	DefaultRetryAttempts  = 3    // Default retry attempts for failed batches
+	DefaultBatchSize      = 100
+	MaxBatchSize          = 1000
+	DefaultMaxConcurrency = 8
+	DefaultRetryAttempts  = 3
 	DefaultRetryDelay     = time.Second
 	DefaultMaxRetryDelay  = 30 * time.Second
 )
 
-// BatchConfig holds configuration for batch operations
-type BatchConfig struct {
-	BatchSize      int           `json:"batch_size"`
-	MaxConcurrency int           `json:"max_concurrency"`
-	RetryAttempts  int           `json:"retry_attempts"`
-	RetryDelay     time.Duration `json:"retry_delay"`
-	MaxRetryDelay  time.Duration `json:"max_retry_delay"`
-	ParallelEmbed  bool          `json:"parallel_embed"`
-}
-
-// BatchResult contains the results of a batch operation
 type BatchResult struct {
 	TotalProcessed int           `json:"total_processed"`
 	TotalFailed    int           `json:"total_failed"`
 	Duration       time.Duration `json:"duration"`
 	Errors         []error       `json:"errors,omitempty"`
 	ProcessedIDs   []string      `json:"processed_ids,omitempty"`
+}
+
+type BatchConfig struct {
+	BatchSize      int           `json:"batch_size"`
+	MaxConcurrency int           `json:"max_concurrency"`
+	RetryAttempts  int           `json:"retry_attempts"`
+	RetryDelay     time.Duration `json:"retry_delay"`
+	MaxRetryDelay  time.Duration `json:"max_retry_delay"`
 }
 
 type Store struct {
@@ -74,7 +70,6 @@ type Store struct {
 	mu             sync.RWMutex
 }
 
-// Compile-time interface check
 var _ vectorstores.VectorStore = (*Store)(nil)
 
 func New(opts ...Option) (vectorstores.VectorStore, error) {
@@ -82,25 +77,18 @@ func New(opts ...Option) (vectorstores.VectorStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid options: %w", err)
 	}
-
-	logger := storeOptions.logger.With("component", "qdrant_store",
-		"collection", storeOptions.collectionName)
-
+	logger := storeOptions.logger.With("component", "qdrant_store", "collection", storeOptions.collectionName)
 	client, err := createQdrantClient(storeOptions, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Qdrant client: %w", err)
 	}
-
-	// Initialize default batch configuration
 	batchConfig := BatchConfig{
 		BatchSize:      DefaultBatchSize,
 		MaxConcurrency: DefaultMaxConcurrency,
 		RetryAttempts:  DefaultRetryAttempts,
 		RetryDelay:     DefaultRetryDelay,
 		MaxRetryDelay:  DefaultMaxRetryDelay,
-		ParallelEmbed:  true,
 	}
-
 	store := &Store{
 		client:         client,
 		embedder:       storeOptions.embedder,
@@ -109,20 +97,13 @@ func New(opts ...Option) (vectorstores.VectorStore, error) {
 		options:        storeOptions,
 		batchConfig:    batchConfig,
 	}
-
-	logger.Info("Qdrant store initialized successfully",
-		"config", storeOptions.String(),
-		"batch_config", fmt.Sprintf("%+v", batchConfig))
-
+	logger.Info("Qdrant store initialized successfully", "config", storeOptions.String(), "batch_config", fmt.Sprintf("%+v", batchConfig))
 	return store, nil
 }
 
-// SetBatchConfig updates the batch configuration
 func (s *Store) SetBatchConfig(config BatchConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	// Validate and set defaults
 	if config.BatchSize <= 0 {
 		config.BatchSize = DefaultBatchSize
 	}
@@ -141,24 +122,19 @@ func (s *Store) SetBatchConfig(config BatchConfig) {
 	if config.MaxRetryDelay <= 0 {
 		config.MaxRetryDelay = DefaultMaxRetryDelay
 	}
-
 	s.batchConfig = config
 	s.logger.Info("Batch configuration updated", "config", fmt.Sprintf("%+v", config))
 }
-
-// GetBatchConfig returns the current batch configuration
 func (s *Store) GetBatchConfig() BatchConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.batchConfig
 }
 
-// AddDocuments with enhanced batch processing
 func (s *Store) AddDocuments(ctx context.Context, docs []schema.Document, options ...vectorstores.Option) ([]string, error) {
 	return s.AddDocumentsBatch(ctx, docs, nil, options...)
 }
 
-// AddDocumentsBatch provides comprehensive batch document insertion with progress tracking
 func (s *Store) AddDocumentsBatch(
 	ctx context.Context,
 	docs []schema.Document,
@@ -166,15 +142,12 @@ func (s *Store) AddDocumentsBatch(
 	options ...vectorstores.Option,
 ) ([]string, error) {
 	totalDocs := len(docs)
-
-	s.logger.InfoContext(ctx, "Starting batch document addition",
-		"total_documents", totalDocs,
-		"batch_size", s.batchConfig.BatchSize,
-		"max_concurrency", s.batchConfig.MaxConcurrency)
-
 	if totalDocs == 0 {
 		return []string{}, nil
 	}
+
+	start := time.Now()
+	s.logger.InfoContext(ctx, "Starting optimized document addition pipeline", "total_documents", totalDocs)
 
 	if s.embedder == nil {
 		return nil, ErrMissingEmbedder
@@ -183,420 +156,161 @@ func (s *Store) AddDocumentsBatch(
 	opts := vectorstores.ParseOptions(options...)
 	collectionName := s.getCollectionName(opts)
 
-	// Ensure collection exists
 	if err := s.ensureCollection(ctx, collectionName); err != nil {
 		return nil, fmt.Errorf("collection preparation failed: %w", err)
 	}
 
-	// Use batch processing for large document sets
-	if totalDocs > s.batchConfig.BatchSize {
-		return s.processBatchesParallel(ctx, docs, collectionName, progressCallback)
+	embedStart := time.Now()
+	s.logger.DebugContext(ctx, "Stage 1: Generating embeddings for all documents...")
+	texts := make([]string, totalDocs)
+	for i, doc := range docs {
+		texts[i] = doc.PageContent
+	}
+	vectors, err := s.embedder.EmbedDocuments(ctx, texts)
+	if err != nil {
+		return nil, fmt.Errorf("document embedding stage failed: %w", err)
+	}
+	if len(vectors) != totalDocs {
+		return nil, fmt.Errorf("embedder returned %d vectors for %d documents", len(vectors), totalDocs)
+	}
+	s.logger.InfoContext(ctx, "Embedding stage complete", "duration", time.Since(embedStart))
+
+	points := make([]*qdrant.PointStruct, totalDocs)
+	allIDs := make([]string, totalDocs)
+	for i, doc := range docs {
+		docID := s.generateDocumentID(doc)
+		allIDs[i] = docID
+		points[i] = &qdrant.PointStruct{
+			Id:      &qdrant.PointId{PointIdOptions: &qdrant.PointId_Uuid{Uuid: docID}},
+			Vectors: &qdrant.Vectors{VectorsOptions: &qdrant.Vectors_Vector{Vector: &qdrant.Vector{Data: vectors[i]}}},
+			Payload: s.documentToPayload(doc),
+		}
 	}
 
-	// Process small sets directly
-	return s.processSingleBatch(ctx, docs, collectionName)
+	s.logger.DebugContext(ctx, "Stage 2: Upserting points to Qdrant in batches...")
+	upsertResult, err := s.upsertPointsInBatches(ctx, collectionName, points, progressCallback)
+	if err != nil {
+		if upsertResult != nil && len(upsertResult.ProcessedIDs) > 0 {
+			s.logger.WarnContext(ctx, "Partial success in document addition", "processed", len(upsertResult.ProcessedIDs), "failed_batches", len(upsertResult.Errors))
+			return upsertResult.ProcessedIDs, err
+		}
+		return nil, err
+	}
+
+	s.logger.InfoContext(ctx, "Document addition pipeline completed successfully",
+		"total_processed", upsertResult.TotalProcessed, "duration", time.Since(start))
+
+	return allIDs, nil
 }
 
-// processBatchesParallel handles large document sets with parallel batch processing
-func (s *Store) processBatchesParallel(
+func (s *Store) upsertPointsInBatches(
 	ctx context.Context,
-	docs []schema.Document,
 	collectionName string,
+	points []*qdrant.PointStruct,
 	progressCallback func(processed, total int, duration time.Duration),
-) ([]string, error) {
-	start := time.Now()
-	totalDocs := len(docs)
+) (*BatchResult, error) {
+	totalPoints := len(points)
 	batchSize := s.batchConfig.BatchSize
-	numBatches := int(math.Ceil(float64(totalDocs) / float64(batchSize)))
+	numBatches := int(math.Ceil(float64(totalPoints) / float64(batchSize)))
+	start := time.Now()
 
-	s.logger.InfoContext(ctx, "Processing documents in parallel batches",
-		"total_batches", numBatches, "batch_size", batchSize)
+	s.logger.DebugContext(ctx, "Processing point upserts in parallel", "total_batches", numBatches, "batch_size", batchSize)
 
-	// Create batches
-	batches := make([][]schema.Document, 0, numBatches)
-	for i := 0; i < totalDocs; i += batchSize {
-		end := i + batchSize
-		if end > totalDocs {
-			end = totalDocs
-		}
-		batches = append(batches, docs[i:end])
-	}
-
-	// Semaphore for concurrency control
 	semaphore := make(chan struct{}, s.batchConfig.MaxConcurrency)
-
-	// Results collection
-	type batchResult struct {
-		index int
-		ids   []string
-		err   error
-	}
-
-	resultsChan := make(chan batchResult, numBatches)
+	resultsChan := make(chan BatchResult, numBatches)
 	var wg sync.WaitGroup
 
-	// Process batches concurrently
-	for i, batch := range batches {
+	for i := 0; i < totalPoints; i += batchSize {
 		wg.Add(1)
-		go func(batchIndex int, batchDocs []schema.Document) {
+		go func(batchIndex int, startIdx int) {
 			defer wg.Done()
-
-			// Acquire semaphore
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
 
-			ids, err := s.processSingleBatchWithRetry(ctx, batchDocs, collectionName)
-			resultsChan <- batchResult{index: batchIndex, ids: ids, err: err}
-
-			// Progress callback
-			if progressCallback != nil {
-				processed := (batchIndex + 1) * len(batchDocs)
-				if processed > totalDocs {
-					processed = totalDocs
-				}
-				progressCallback(processed, totalDocs, time.Since(start))
+			endIdx := startIdx + batchSize
+			if endIdx > totalPoints {
+				endIdx = totalPoints
 			}
-		}(i, batch)
+			batchPoints := points[startIdx:endIdx]
+
+			batchIDs := make([]string, len(batchPoints))
+			for j, p := range batchPoints {
+				batchIDs[j] = p.Id.GetUuid()
+			}
+
+			err := s.upsertWithRetry(ctx, collectionName, batchPoints)
+			if err != nil {
+				resultsChan <- BatchResult{TotalFailed: len(batchPoints), Errors: []error{err}}
+			} else {
+				resultsChan <- BatchResult{TotalProcessed: len(batchPoints), ProcessedIDs: batchIDs}
+			}
+		}(i/batchSize, i)
 	}
 
-	// Wait for all batches to complete
 	go func() {
 		wg.Wait()
 		close(resultsChan)
 	}()
 
-	// Collect results
-	results := make([]batchResult, numBatches)
-	var errors []error
-	totalProcessed := 0
-
-	for result := range resultsChan {
-		results[result.index] = result
-		if result.err != nil {
-			errors = append(errors, fmt.Errorf("batch %d failed: %w", result.index, result.err))
-		} else {
-			totalProcessed += len(result.ids)
+	finalResult := &BatchResult{ProcessedIDs: make([]string, 0, totalPoints)}
+	var processedCount int
+	for res := range resultsChan {
+		finalResult.TotalProcessed += res.TotalProcessed
+		finalResult.TotalFailed += res.TotalFailed
+		finalResult.ProcessedIDs = append(finalResult.ProcessedIDs, res.ProcessedIDs...)
+		if len(res.Errors) > 0 {
+			finalResult.Errors = append(finalResult.Errors, res.Errors...)
+		}
+		processedCount += len(res.ProcessedIDs) + res.TotalFailed
+		if progressCallback != nil {
+			progressCallback(processedCount, totalPoints, time.Since(start))
 		}
 	}
+	finalResult.Duration = time.Since(start)
 
-	// Combine all successful IDs
-	allIDs := make([]string, 0, totalProcessed)
-	for _, result := range results {
-		if result.err == nil {
-			allIDs = append(allIDs, result.ids...)
+	if finalResult.TotalFailed > 0 {
+		err := ErrPartialBatchFailure
+		if finalResult.TotalProcessed == 0 {
+			err = fmt.Errorf("all upsert batches failed: %v", finalResult.Errors)
 		}
+		return finalResult, err
 	}
 
-	duration := time.Since(start)
-	s.logger.InfoContext(ctx, "Batch processing completed",
-		"total_processed", totalProcessed,
-		"total_failed", len(errors),
-		"duration", duration,
-		"throughput_docs_per_sec", float64(totalProcessed)/duration.Seconds())
-
-	if len(errors) > 0 {
-		if totalProcessed == 0 {
-			return nil, fmt.Errorf("all batches failed: %v", errors)
-		}
-		// Partial success - return what we have but include error info
-		s.logger.WarnContext(ctx, "Partial batch failure", "errors", len(errors))
-	}
-
-	return allIDs, nil
+	return finalResult, nil
 }
 
-// processSingleBatchWithRetry processes a single batch with retry logic
-func (s *Store) processSingleBatchWithRetry(
-	ctx context.Context,
-	docs []schema.Document,
-	collectionName string,
-) ([]string, error) {
+func (s *Store) upsertWithRetry(ctx context.Context, collectionName string, points []*qdrant.PointStruct) error {
 	var lastErr error
 	delay := s.batchConfig.RetryDelay
 
 	for attempt := 0; attempt <= s.batchConfig.RetryAttempts; attempt++ {
 		if attempt > 0 {
-			s.logger.DebugContext(ctx, "Retrying batch operation",
-				"attempt", attempt, "delay", delay, "batch_size", len(docs))
-
+			s.logger.DebugContext(ctx, "Retrying upsert operation", "attempt", attempt, "delay", delay, "point_count", len(points))
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return ctx.Err()
 			}
-
-			// Exponential backoff with jitter
 			delay = time.Duration(float64(delay) * 1.5)
 			if delay > s.batchConfig.MaxRetryDelay {
 				delay = s.batchConfig.MaxRetryDelay
 			}
 		}
 
-		ids, err := s.processSingleBatch(ctx, docs, collectionName)
+		wait := true
+		_, err := s.client.GetPointsClient().Upsert(ctx, &qdrant.UpsertPoints{
+			CollectionName: collectionName,
+			Wait:           &wait,
+			Points:         points,
+		})
 		if err == nil {
-			if attempt > 0 {
-				s.logger.InfoContext(ctx, "Batch operation succeeded after retry",
-					"attempt", attempt, "batch_size", len(docs))
-			}
-			return ids, nil
+			return nil
 		}
-
 		lastErr = err
-		s.logger.WarnContext(ctx, "Batch operation failed",
-			"attempt", attempt, "error", err, "batch_size", len(docs))
 	}
-
-	return nil, fmt.Errorf("batch failed after %d attempts: %w", s.batchConfig.RetryAttempts+1, lastErr)
+	return fmt.Errorf("upsert failed after %d attempts: %w", s.batchConfig.RetryAttempts+1, lastErr)
 }
 
-// processSingleBatch handles a single batch of documents
-func (s *Store) processSingleBatch(ctx context.Context, docs []schema.Document, collectionName string) ([]string, error) {
-	if len(docs) == 0 {
-		return []string{}, nil
-	}
-
-	start := time.Now()
-
-	// Extract texts and validate
-	texts := make([]string, len(docs))
-	for i, doc := range docs {
-		texts[i] = doc.PageContent
-	}
-
-	// Generate embeddings
-	embedStart := time.Now()
-	var vectors [][]float32
-	var err error
-
-	if s.batchConfig.ParallelEmbed && len(texts) > 10 {
-		vectors, err = s.embedDocumentsParallel(ctx, texts)
-	} else {
-		vectors, err = s.embedder.EmbedDocuments(ctx, texts)
-	}
-	embedDuration := time.Since(embedStart)
-
-	if err != nil {
-		return nil, fmt.Errorf("document embedding failed: %w", err)
-	}
-
-	if len(vectors) != len(docs) {
-		return nil, fmt.Errorf("embedder returned %d vectors for %d documents", len(vectors), len(docs))
-	}
-
-	// Prepare points for insertion
-	points := make([]*qdrant.PointStruct, len(docs))
-	ids := make([]string, len(docs))
-
-	for i, doc := range docs {
-		docID := s.generateDocumentID(doc)
-		ids[i] = docID
-
-		points[i] = &qdrant.PointStruct{
-			Id: &qdrant.PointId{
-				PointIdOptions: &qdrant.PointId_Uuid{Uuid: docID},
-			},
-			Vectors: &qdrant.Vectors{
-				VectorsOptions: &qdrant.Vectors_Vector{
-					Vector: &qdrant.Vector{Data: vectors[i]},
-				},
-			},
-			Payload: s.documentToPayload(doc),
-		}
-	}
-
-	// Insert points with optimized settings
-	insertStart := time.Now()
-	wait := true
-	_, err = s.client.GetPointsClient().Upsert(ctx, &qdrant.UpsertPoints{
-		CollectionName: collectionName,
-		Wait:           &wait,
-		Points:         points,
-		Ordering:       nil, // Let Qdrant optimize
-	})
-	insertDuration := time.Since(insertStart)
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to upsert points to qdrant: %w", err)
-	}
-
-	totalDuration := time.Since(start)
-	s.logger.DebugContext(ctx, "Batch processed successfully",
-		"batch_size", len(docs),
-		"embed_duration", embedDuration,
-		"insert_duration", insertDuration,
-		"total_duration", totalDuration,
-		"throughput_docs_per_sec", float64(len(docs))/totalDuration.Seconds())
-
-	return ids, nil
-}
-
-// embedDocumentsParallel provides parallel embedding for better performance
-func (s *Store) embedDocumentsParallel(ctx context.Context, texts []string) ([][]float32, error) {
-	// Split texts into smaller chunks for parallel processing
-	chunkSize := 50
-	numChunks := int(math.Ceil(float64(len(texts)) / float64(chunkSize)))
-
-	if numChunks == 1 {
-		return s.embedder.EmbedDocuments(ctx, texts)
-	}
-
-	type chunkResult struct {
-		index   int
-		vectors [][]float32
-		err     error
-	}
-
-	resultsChan := make(chan chunkResult, numChunks)
-	semaphore := make(chan struct{}, 3) // Limit concurrent embedding requests
-
-	var wg sync.WaitGroup
-	for i := range numChunks {
-		wg.Add(1)
-		go func(chunkIndex int) {
-			defer wg.Done()
-
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
-			start := chunkIndex * chunkSize
-			end := start + chunkSize
-			if end > len(texts) {
-				end = len(texts)
-			}
-
-			vectors, err := s.embedder.EmbedDocuments(ctx, texts[start:end])
-			resultsChan <- chunkResult{index: chunkIndex, vectors: vectors, err: err}
-		}(i)
-	}
-
-	go func() {
-		wg.Wait()
-		close(resultsChan)
-	}()
-
-	// Collect results
-	results := make([]chunkResult, numChunks)
-	for result := range resultsChan {
-		results[result.index] = result
-		if result.err != nil {
-			return nil, fmt.Errorf("parallel embedding chunk %d failed: %w", result.index, result.err)
-		}
-	}
-
-	// Combine all vectors
-	allVectors := make([][]float32, 0, len(texts))
-	for _, result := range results {
-		allVectors = append(allVectors, result.vectors...)
-	}
-
-	return allVectors, nil
-}
-
-// BatchDeleteDocuments provides efficient batch deletion
-func (s *Store) BatchDeleteDocuments(
-	ctx context.Context,
-	ids []string,
-	progressCallback func(processed, total int),
-	options ...vectorstores.Option,
-) error {
-	if len(ids) == 0 {
-		return nil
-	}
-
-	start := time.Now()
-	s.logger.InfoContext(ctx, "Starting batch document deletion", "count", len(ids))
-
-	opts := vectorstores.ParseOptions(options...)
-	collectionName := s.getCollectionName(opts)
-
-	// Process in batches
-	batchSize := s.batchConfig.BatchSize
-	var errors []error
-	processed := 0
-
-	for i := 0; i < len(ids); i += batchSize {
-		end := i + batchSize
-		if end > len(ids) {
-			end = len(ids)
-		}
-
-		batchIDs := ids[i:end]
-		if err := s.deleteBatch(ctx, batchIDs, collectionName); err != nil {
-			errors = append(errors, fmt.Errorf("batch %d-%d failed: %w", i, end-1, err))
-		} else {
-			processed += len(batchIDs)
-		}
-
-		if progressCallback != nil {
-			progressCallback(processed, len(ids))
-		}
-	}
-
-	duration := time.Since(start)
-	s.logger.InfoContext(ctx, "Batch deletion completed",
-		"processed", processed, "failed", len(errors), "duration", duration)
-
-	if len(errors) > 0 && processed == 0 {
-		return fmt.Errorf("all deletion batches failed: %v", errors)
-	}
-
-	return nil
-}
-
-// deleteBatch handles deletion of a single batch
-func (s *Store) deleteBatch(ctx context.Context, ids []string, collectionName string) error {
-	pointIds := make([]*qdrant.PointId, len(ids))
-	for i, id := range ids {
-		pointIds[i] = &qdrant.PointId{
-			PointIdOptions: &qdrant.PointId_Uuid{Uuid: id},
-		}
-	}
-
-	wait := true
-	_, err := s.client.GetPointsClient().Delete(ctx, &qdrant.DeletePoints{
-		CollectionName: collectionName,
-		Wait:           &wait,
-		Points: &qdrant.PointsSelector{
-			PointsSelectorOneOf: &qdrant.PointsSelector_Points{
-				Points: &qdrant.PointsIdsList{Ids: pointIds},
-			},
-		},
-	})
-
-	return err
-}
-
-// GetBatchStats returns statistics about batch operations
-func (s *Store) GetBatchStats(ctx context.Context, collectionName string) (map[string]interface{}, error) {
-	if collectionName == "" {
-		collectionName = s.collectionName
-	}
-
-	info, err := s.client.GetCollectionsClient().Get(ctx, &qdrant.GetCollectionInfoRequest{
-		CollectionName: collectionName,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get collection info: %w", err)
-	}
-
-	stats := map[string]interface{}{
-		"collection_name":  collectionName,
-		"points_count":     info.GetResult().GetPointsCount(),
-		"vectors_count":    info.GetResult().GetVectorsCount(),
-		"indexed_vectors":  info.GetResult().GetIndexedVectorsCount(),
-		"status":           info.GetResult().GetStatus().String(),
-		"optimizer_status": info.GetResult().GetOptimizerStatus(),
-		"batch_size":       s.batchConfig.BatchSize,
-		"max_concurrency":  s.batchConfig.MaxConcurrency,
-	}
-
-	return stats, nil
-}
-
-// Keep all existing methods from the original implementation...
-// [The rest of your original methods remain unchanged]
-
-// createQdrantClient handles the creation of Qdrant client with proper error handling.
 func createQdrantClient(opts options, logger *slog.Logger) (*qdrant.Client, error) {
 	if opts.qdrantURL.Host == "" {
 		logger.Debug("Creating default Qdrant client")
@@ -637,7 +351,6 @@ func createQdrantClient(opts options, logger *slog.Logger) (*qdrant.Client, erro
 	return client, nil
 }
 
-// SimilaritySearch performs vector similarity search with comprehensive logging.
 func (s *Store) SimilaritySearch(
 	ctx context.Context,
 	query string,
@@ -676,7 +389,6 @@ func (s *Store) SimilaritySearch(
 		return nil, fmt.Errorf("failed to embed query: %w", err)
 	}
 
-	// Perform search
 	searchStart := time.Now()
 	searchResult, err := s.client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
 		CollectionName: collectionName,
@@ -699,7 +411,6 @@ func (s *Store) SimilaritySearch(
 		return nil, fmt.Errorf("qdrant search failed: %w", err)
 	}
 
-	// Process results
 	results := searchResult.GetResult()
 	docs := make([]schema.Document, 0, len(results))
 	for _, point := range results {
@@ -715,7 +426,6 @@ func (s *Store) SimilaritySearch(
 	return docs, nil
 }
 
-// SimilaritySearchWithScores performs similarity search returning documents with similarity scores.
 func (s *Store) SimilaritySearchWithScores(
 	ctx context.Context,
 	query string,
@@ -742,7 +452,6 @@ func (s *Store) SimilaritySearchWithScores(
 	opts := vectorstores.ParseOptions(options...)
 	collectionName := s.getCollectionName(opts)
 
-	// Embed query
 	queryVector, err := s.embedder.EmbedQuery(ctx, query)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Query embedding failed for scored search", "error", err)
@@ -751,7 +460,6 @@ func (s *Store) SimilaritySearchWithScores(
 
 	filter := buildQdrantFilter(opts.Filters)
 
-	// Perform search with scores
 	searchResult, err := s.client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
 		CollectionName: collectionName,
 		Vector:         queryVector,
@@ -771,7 +479,6 @@ func (s *Store) SimilaritySearchWithScores(
 		return nil, fmt.Errorf("qdrant search failed: %w", err)
 	}
 
-	// Process results with scores
 	results := searchResult.GetResult()
 	docsWithScore := make([]vectorstores.DocumentWithScore, len(results))
 
@@ -799,7 +506,6 @@ func (s *Store) SimilaritySearchWithScores(
 	return docsWithScore, nil
 }
 
-// DeleteDocuments removes documents from the vector store by their IDs.
 func (s *Store) DeleteDocuments(ctx context.Context, ids []string, options ...vectorstores.Option) error {
 	start := time.Now()
 	s.logger.DebugContext(ctx, "Starting document deletion", "count", len(ids))
@@ -812,7 +518,6 @@ func (s *Store) DeleteDocuments(ctx context.Context, ids []string, options ...ve
 	opts := vectorstores.ParseOptions(options...)
 	collectionName := s.getCollectionName(opts)
 
-	// Convert string IDs to Qdrant point IDs
 	pointIds := make([]*qdrant.PointId, len(ids))
 	for i, id := range ids {
 		pointIds[i] = &qdrant.PointId{
@@ -843,7 +548,6 @@ func (s *Store) DeleteDocuments(ctx context.Context, ids []string, options ...ve
 	return nil
 }
 
-// ListCollections returns all collection names in the Qdrant instance.
 func (s *Store) ListCollections(ctx context.Context) ([]string, error) {
 	start := time.Now()
 	s.logger.DebugContext(ctx, "Listing collections")
@@ -867,7 +571,6 @@ func (s *Store) ListCollections(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
-// CreateCollection creates a new collection with specified parameters.
 func (s *Store) CreateCollection(ctx context.Context, name string, dimension int, options ...vectorstores.Option) error {
 	start := time.Now()
 	s.logger.InfoContext(ctx, "Creating collection", "name", name, "dimension", dimension)
@@ -880,7 +583,6 @@ func (s *Store) CreateCollection(ctx context.Context, name string, dimension int
 		return fmt.Errorf("dimension must be positive, got %d", dimension)
 	}
 
-	// Check if collection already exists
 	exists, err := s.collectionExists(ctx, name)
 	if err != nil {
 		return fmt.Errorf("failed to check collection existence: %w", err)
@@ -914,7 +616,6 @@ func (s *Store) CreateCollection(ctx context.Context, name string, dimension int
 	return nil
 }
 
-// DeleteCollection removes a collection and all its data.
 func (s *Store) DeleteCollection(ctx context.Context, name string) error {
 	start := time.Now()
 	s.logger.InfoContext(ctx, "Deleting collection", "name", name)
@@ -942,11 +643,9 @@ func (s *Store) DeleteCollection(ctx context.Context, name string) error {
 	return nil
 }
 
-// Health checks the health of the Qdrant connection.
 func (s *Store) Health(ctx context.Context) error {
 	s.logger.DebugContext(ctx, "Checking Qdrant health")
 
-	// Try to list collections as a health check
 	_, err := s.client.GetCollectionsClient().List(ctx, &qdrant.ListCollectionsRequest{})
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Health check failed", "error", err)
@@ -957,22 +656,16 @@ func (s *Store) Health(ctx context.Context) error {
 	return nil
 }
 
-// Helper methods
-
-// generateDocumentID creates a unique ID for a document.
 func (s *Store) generateDocumentID(doc schema.Document) string {
-	// Use custom ID if provided in metadata
 	if id, exists := doc.Metadata["id"]; exists {
 		if idStr, ok := id.(string); ok && idStr != "" {
 			return idStr
 		}
 	}
 
-	// Generate UUID
 	return uuid.New().String()
 }
 
-// getCollectionName determines the collection name from options or store default.
 func (s *Store) getCollectionName(opts vectorstores.Options) string {
 	if opts.NameSpace != "" {
 		return opts.NameSpace
@@ -980,7 +673,6 @@ func (s *Store) getCollectionName(opts vectorstores.Options) string {
 	return s.collectionName
 }
 
-// ensureCollection ensures the specified collection exists, creating it if necessary.
 func (s *Store) ensureCollection(ctx context.Context, collectionName string) error {
 	exists, err := s.collectionExists(ctx, collectionName)
 	if err != nil {
@@ -1019,7 +711,6 @@ func (s *Store) ensureCollection(ctx context.Context, collectionName string) err
 		return fmt.Errorf("failed to create qdrant collection: %w", err)
 	}
 
-	// Brief wait for collection initialization
 	select {
 	case <-time.After(500 * time.Millisecond):
 	case <-ctx.Done():
@@ -1030,7 +721,6 @@ func (s *Store) ensureCollection(ctx context.Context, collectionName string) err
 	return nil
 }
 
-// collectionExists checks if a collection exists.
 func (s *Store) collectionExists(ctx context.Context, name string) (bool, error) {
 	_, err := s.client.GetCollectionsClient().Get(ctx, &qdrant.GetCollectionInfoRequest{
 		CollectionName: name,
@@ -1044,7 +734,6 @@ func (s *Store) collectionExists(ctx context.Context, name string) (bool, error)
 	return true, nil
 }
 
-// documentToPayload converts a schema.Document to Qdrant payload format.
 func (s *Store) documentToPayload(doc schema.Document) map[string]*qdrant.Value {
 	payload := make(map[string]*qdrant.Value, len(doc.Metadata)+1)
 	payload["page_content"] = &qdrant.Value{Kind: &qdrant.Value_StringValue{StringValue: doc.PageContent}}
@@ -1060,7 +749,6 @@ func (s *Store) documentToPayload(doc schema.Document) map[string]*qdrant.Value 
 	return payload
 }
 
-// convertToQdrantValue converts Go values to Qdrant value format with comprehensive type support.
 func (s *Store) convertToQdrantValue(value any) *qdrant.Value {
 	switch v := value.(type) {
 	case string:
@@ -1078,7 +766,6 @@ func (s *Store) convertToQdrantValue(value any) *qdrant.Value {
 	case bool:
 		return &qdrant.Value{Kind: &qdrant.Value_BoolValue{BoolValue: v}}
 	case []string:
-		// Support for string arrays
 		values := make([]*qdrant.Value, len(v))
 		for i, str := range v {
 			values[i] = &qdrant.Value{Kind: &qdrant.Value_StringValue{StringValue: str}}
@@ -1089,12 +776,10 @@ func (s *Store) convertToQdrantValue(value any) *qdrant.Value {
 	case nil:
 		return &qdrant.Value{Kind: &qdrant.Value_NullValue{}}
 	default:
-		// For unsupported types, convert to string representation
 		return &qdrant.Value{Kind: &qdrant.Value_StringValue{StringValue: fmt.Sprintf("%v", v)}}
 	}
 }
 
-// payloadToDocument converts Qdrant payload back to schema.Document.
 func (s *Store) payloadToDocument(payload map[string]*qdrant.Value) schema.Document {
 	doc := schema.Document{
 		Metadata: make(map[string]any),
@@ -1114,7 +799,6 @@ func (s *Store) payloadToDocument(payload map[string]*qdrant.Value) schema.Docum
 	return doc
 }
 
-// convertFromQdrantValue converts Qdrant values back to Go types.
 func (s *Store) convertFromQdrantValue(value *qdrant.Value) any {
 	switch v := value.GetKind().(type) {
 	case *qdrant.Value_StringValue:
@@ -1149,7 +833,6 @@ func buildQdrantFilter(filters map[string]any) *qdrant.Filter {
 	for key, value := range filters {
 		var match *qdrant.Match
 
-		// Create the appropriate Match type based on the Go type of the value.
 		switch v := value.(type) {
 		case string:
 			match = &qdrant.Match{MatchValue: &qdrant.Match_Keyword{Keyword: v}}
@@ -1160,13 +843,10 @@ func buildQdrantFilter(filters map[string]any) *qdrant.Filter {
 		case bool:
 			match = &qdrant.Match{MatchValue: &qdrant.Match_Boolean{Boolean: v}}
 		case []string:
-			// Handle multiple keyword matches
 			match = &qdrant.Match{MatchValue: &qdrant.Match_Keywords{Keywords: &qdrant.RepeatedStrings{Strings: v}}}
 		case []int64:
-			// Handle multiple integer matches
 			match = &qdrant.Match{MatchValue: &qdrant.Match_Integers{Integers: &qdrant.RepeatedIntegers{Integers: v}}}
 		case []int:
-			// Convert []int to []int64 for the protobuf
 			int64Slice := make([]int64, len(v))
 			for i, num := range v {
 				int64Slice[i] = int64(num)
@@ -1192,7 +872,6 @@ func buildQdrantFilter(filters map[string]any) *qdrant.Filter {
 		return nil
 	}
 
-	// Combine all conditions using "Must" (AND logic)
 	return &qdrant.Filter{
 		Must: conditions,
 	}
