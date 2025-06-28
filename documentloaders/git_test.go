@@ -80,11 +80,11 @@ func (r *fakeParserRegistry) GetAllParsers() []schema.ParserPlugin { return nil 
 
 func TestGitLoader_Load(t *testing.T) {
 	mockFS := fstest.MapFS{
-		"src/main.go": {Data: []byte("package main\n\nfunc main() {}\n\nfunc helper() {}")},
-		"README.txt": {Data: []byte("This is a test README.")},
+		"src/main.go":     {Data: []byte("package main\n\nfunc main() {}\n\nfunc helper() {}")},
+		"README.txt":      {Data: []byte("This is a test README.")},
 		"assets/logo.png": {Data: []byte("binary data")},
-		".git/config": {Data: []byte("some config")},
-		"empty_dir": {Mode: fs.ModeDir},
+		".git/config":     {Data: []byte("some config")},
+		"empty_dir":       {Mode: fs.ModeDir},
 	}
 
 	tempDir := t.TempDir()
