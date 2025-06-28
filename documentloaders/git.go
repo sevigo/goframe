@@ -56,7 +56,6 @@ func WithIncludeExts(exts []string) GitLoaderOption {
 	}
 }
 
-// NewGit creates a new git repository loader.
 func NewGit(path string, registry parsers.ParserRegistry, opts ...GitLoaderOption) *GitLoader {
 	loaderOpts := gitLoaderOptions{
 		Logger: slog.Default(),
@@ -74,7 +73,6 @@ func NewGit(path string, registry parsers.ParserRegistry, opts ...GitLoaderOptio
 	}
 }
 
-// Load walks the repository, parses files, and returns a slice of documents.
 func (g *GitLoader) Load(ctx context.Context) ([]schema.Document, error) {
 	g.logger.InfoContext(ctx, "Starting repository load", "path", g.path)
 	var documents []schema.Document
@@ -89,7 +87,6 @@ func (g *GitLoader) Load(ctx context.Context) ([]schema.Document, error) {
 
 		if d.IsDir() {
 			if shouldSkipDir(d.Name()) {
-				g.logger.Debug("Skipping excluded directory", "dir", d.Name())
 				return filepath.SkipDir
 			}
 			return nil
@@ -193,7 +190,6 @@ func buildChunkMetadata(baseMetadata map[string]any, chunk schema.CodeChunk, chu
 	return chunkMetadata
 }
 
-// shouldSkipDir returns true for common directories to exclude.
 func shouldSkipDir(name string) bool {
 	skipDirs := []string{
 		".git", ".svn", ".hg",

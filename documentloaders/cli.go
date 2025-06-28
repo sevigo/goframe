@@ -10,7 +10,6 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
-// CLICommandLoader runs a command and uses its stdout as the document content.
 type CLICommandLoader struct {
 	Command string
 	Args    []string

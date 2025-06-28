@@ -16,7 +16,6 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
-// fakeGoParser simulates a language-specific parser for Go files.
 type fakeGoParser struct{}
 
 func (p *fakeGoParser) Name() string         { return "go" }
@@ -25,35 +24,31 @@ func (p *fakeGoParser) CanHandle(path string, info fs.FileInfo) bool {
 	return filepath.Ext(path) == ".go"
 }
 func (p *fakeGoParser) Chunk(content string, path string, opts *schema.CodeChunkingOptions) ([]schema.CodeChunk, error) {
-	// Simulate finding two functions in a Go file.
 	return []schema.CodeChunk{
 		{Content: "package main\n\nfunc main() {}", LineStart: 1, LineEnd: 3, Type: "function", Identifier: "main"},
 		{Content: "func helper() {}", LineStart: 5, LineEnd: 5, Type: "function", Identifier: "helper"},
 	}, nil
 }
 func (p *fakeGoParser) ExtractMetadata(content string, path string) (schema.FileMetadata, error) {
-	return schema.FileMetadata{}, nil // Not needed for this test
+	return schema.FileMetadata{}, nil
 }
 
-// fakeTextParser simulates a fallback parser for generic text files.
 type fakeTextParser struct{}
 
 func (p *fakeTextParser) Name() string         { return "text" }
 func (p *fakeTextParser) Extensions() []string { return []string{".txt"} }
 func (p *fakeTextParser) CanHandle(path string, info fs.FileInfo) bool {
-	return true // Acts as a general fallback
+	return true
 }
 func (p *fakeTextParser) Chunk(content string, path string, opts *schema.CodeChunkingOptions) ([]schema.CodeChunk, error) {
-	// Simulate creating a single chunk for the whole text file.
 	return []schema.CodeChunk{
 		{Content: content, LineStart: 1, LineEnd: 1, Type: "text_document", Identifier: "README"},
 	}, nil
 }
 func (p *fakeTextParser) ExtractMetadata(content string, path string) (schema.FileMetadata, error) {
-	return schema.FileMetadata{}, nil // Not needed for this test
+	return schema.FileMetadata{}, nil
 }
 
-// fakeParserRegistry provides the correct fake parser based on file type.
 type fakeParserRegistry struct {
 	goParser   schema.ParserPlugin
 	textParser schema.ParserPlugin
@@ -83,25 +78,15 @@ func (r *fakeParserRegistry) GetParserForExtension(ext string) (schema.ParserPlu
 }
 func (r *fakeParserRegistry) GetAllParsers() []schema.ParserPlugin { return nil }
 
-// --- Main Test Function ---
-
 func TestGitLoader_Load(t *testing.T) {
-	// 1. Arrange: Set up the in-memory file system and fake components.
 	mockFS := fstest.MapFS{
-		// A Go file that should be chunked by fakeGoParser
 		"src/main.go": {Data: []byte("package main\n\nfunc main() {}\n\nfunc helper() {}")},
-		// A text file that should be chunked by fakeTextParser
 		"README.txt": {Data: []byte("This is a test README.")},
-		// A file that should be skipped by shouldSkipFile
 		"assets/logo.png": {Data: []byte("binary data")},
-		// A directory that should be skipped by shouldSkipDir
 		".git/config": {Data: []byte("some config")},
-		// An empty directory to ensure it's handled correctly
 		"empty_dir": {Mode: fs.ModeDir},
 	}
 
-	// Use a wrapper to make the in-memory FS compatible with filepath.WalkDir
-	// by creating a temporary directory that mirrors the in-memory structure.
 	tempDir := t.TempDir()
 	err := fs.WalkDir(mockFS, ".", func(path string, d fs.DirEntry, err error) error {
 		require.NoError(t, err)
@@ -125,7 +110,6 @@ func TestGitLoader_Load(t *testing.T) {
 
 	assert.Len(t, docs, 3, "Expected 3 documents to be loaded and chunked")
 
-	// Create maps to check for presence and correctness, as order is not guaranteed.
 	foundMain := false
 	foundHelper := false
 	foundReadme := false

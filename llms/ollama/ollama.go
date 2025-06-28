@@ -207,8 +207,6 @@ func typeToRole(typ schema.ChatMessageType) string {
 
 // EmbedDocuments creates embeddings for documents with validation.
 func (o *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error) {
-	o.logger.DebugContext(ctx, "Embedding documents", "document_count", len(texts))
-
 	if len(texts) == 0 {
 		return [][]float32{}, nil
 	}
@@ -273,16 +271,12 @@ func (o *LLM) createSingleEmbedding(ctx context.Context, text string) ([]float32
 	}
 
 	embedding := ollamaclient.ConvertEmbeddingToFloat32(resp.Embedding)
-	o.logger.DebugContext(ctx, "Embedding created successfully",
-		"dimension", len(embedding), "duration", duration)
 
 	return embedding, nil
 }
 
 // EnsureModel ensures the model is available locally, pulling it if necessary.
 func (o *LLM) EnsureModel(ctx context.Context) error {
-	o.logger.DebugContext(ctx, "Checking model availability")
-
 	exists, err := o.ModelExists(ctx)
 	if err != nil {
 		o.logger.ErrorContext(ctx, "Failed to check model existence", "error", err)
@@ -290,7 +284,6 @@ func (o *LLM) EnsureModel(ctx context.Context) error {
 	}
 
 	if exists {
-		o.logger.DebugContext(ctx, "Model already available locally")
 		return nil
 	}
 
@@ -356,7 +349,6 @@ func (o *LLM) GetModelDetails(ctx context.Context) (*schema.ModelDetails, error)
 		return nil, fmt.Errorf("failed to retrieve model information: %w", err)
 	}
 
-	// Determine embedding dimension through test embedding
 	var dim int64
 	testEmb, err := o.createSingleEmbedding(ctx, "dimension test")
 	if err != nil {
@@ -405,7 +397,6 @@ func (o *LLM) CountTokens(ctx context.Context, text string) (int, error) {
 
 	o.logger.DebugContext(ctx, "Counting tokens", "text_length", len(text))
 
-	// Use a dry-run generation to get token count without generating content
 	stream := false
 	req := &ollamaclient.GenerateRequest{
 		Model:  o.options.model,

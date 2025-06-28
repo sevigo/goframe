@@ -122,7 +122,6 @@ func (c *Client) Show(ctx context.Context, req *api.ShowRequest) (*api.ShowRespo
 }
 
 // Pull makes a streaming request to the /api/pull endpoint to download a model.
-// The callback function is called for each progress update received.
 func (c *Client) Pull(ctx context.Context, req *PullRequest, callback func(api.ProgressResponse) error) error {
 	return c.streamRequest(ctx, http.MethodPost, "/api/pull", req, func(data []byte) error {
 		var resp api.ProgressResponse
@@ -133,17 +132,14 @@ func (c *Client) Pull(ctx context.Context, req *PullRequest, callback func(api.P
 	})
 }
 
-// GetBaseURL returns the base URL of the Ollama server.
 func (c *Client) GetBaseURL() *url.URL {
 	return c.baseURL
 }
 
-// GetHTTPClient returns the underlying HTTP client.
 func (c *Client) GetHTTPClient() *http.Client {
 	return c.httpClient
 }
 
-// doRequest makes a single, non-streaming HTTP request.
 func (c *Client) doRequest(ctx context.Context, method, path string, reqData, respData any) error {
 	reqBody, err := c.prepareRequestBody(reqData)
 	if err != nil {
@@ -166,7 +162,6 @@ func (c *Client) doRequest(ctx context.Context, method, path string, reqData, re
 	return c.handleResponse(response, respData)
 }
 
-// prepareRequestBody marshals the request data to JSON if provided.
 func (c *Client) prepareRequestBody(reqData any) (io.Reader, error) {
 	data, err := json.Marshal(reqData)
 	if err != nil {
@@ -176,7 +171,6 @@ func (c *Client) prepareRequestBody(reqData any) (io.Reader, error) {
 	return bytes.NewReader(data), nil
 }
 
-// buildRequest creates an HTTP request with the given parameters.
 func (c *Client) buildRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
 	requestURL := c.baseURL.JoinPath(path)
 
@@ -188,13 +182,11 @@ func (c *Client) buildRequest(ctx context.Context, method, path string, body io.
 	return request, nil
 }
 
-// setJSONHeaders sets headers for JSON API requests.
 func (c *Client) setJSONHeaders(request *http.Request) {
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 }
 
-// handleResponse processes a non-streaming HTTP response.
 func (c *Client) handleResponse(response *http.Response, respData any) error {
 	body, err := io.ReadAll(response.Body)
 	if err != nil {

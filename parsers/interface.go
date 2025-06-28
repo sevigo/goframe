@@ -29,7 +29,6 @@ type ParserRegistry interface {
 func RegisterLanguagePlugins(logger *slog.Logger) (ParserRegistry, error) {
 	registry := NewRegistry(logger)
 
-	// Define available plugins
 	pluginFactories := map[string]func(*slog.Logger) schema.ParserPlugin{
 		"go":       golang.NewGoPlugin,
 		"markdown": markdown.NewMarkdownPlugin,
@@ -46,7 +45,6 @@ func RegisterLanguagePlugins(logger *slog.Logger) (ParserRegistry, error) {
 		pluginsToRegister = append(pluginsToRegister, name)
 	}
 
-	// Register the selected plugins
 	for _, name := range pluginsToRegister {
 		factory, exists := pluginFactories[name]
 		if !exists {

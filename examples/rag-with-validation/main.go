@@ -125,12 +125,10 @@ func setupRAGComponents(ctx context.Context, logger *slog.Logger) (vectorstores.
 	return vectorStore, generatorLLM, validatorLLM, nil
 }
 
-// loadKnowledgeBase populates the vector store with passages from the dataset.
 func loadKnowledgeBase(ctx context.Context, store vectorstores.VectorStore, passages []string, logger *slog.Logger) error {
 	logger.Info("Loading knowledge base documents", "passage_count", len(passages))
 	start := time.Now()
 
-	// Check if the collection already has data to avoid re-ingesting.
 	testDocs, _ := store.SimilaritySearch(ctx, "test query to check for existing documents", 1)
 	if len(testDocs) > 0 {
 		logger.Info("Knowledge base appears to be already loaded. Skipping ingestion.")
@@ -153,7 +151,6 @@ func loadKnowledgeBase(ctx context.Context, store vectorstores.VectorStore, pass
 	return nil
 }
 
-// runQASession demonstrates the Q&A session using the fully assembled chain.
 func runQASession(ctx context.Context, ragChain chains.ValidatingRetrievalQA, evaluationSet []EvaluationCase, logger *slog.Logger) {
 	if len(evaluationSet) == 0 {
 		logger.Error("Evaluation set is empty, cannot run Q&A session.")
@@ -245,7 +242,6 @@ func loadMSMARCODataset(path string, logger *slog.Logger) ([]string, []Evaluatio
 	return allPassages, evalSet, nil
 }
 
-// truncate helper function remains unchanged.
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s

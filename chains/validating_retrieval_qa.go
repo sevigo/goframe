@@ -12,8 +12,7 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
-// ValidatingRetrievalQA implements a RAG chain that validates the relevance of retrieved
-// context before generation to reduce hallucination.
+// ValidatingRetrievalQA validates the relevance of retrieved context before generation.
 type ValidatingRetrievalQA struct {
 	Retriever    schema.Retriever
 	GeneratorLLM llms.Model
@@ -35,8 +34,7 @@ func WithLogger(logger *slog.Logger) ValidatingRetrievalQAOption {
 	}
 }
 
-// NewValidatingRetrievalQA creates a new ValidatingRetrievalQA chain. It requires a retriever,
-// a generator LLM, and the WithValidator() option.
+// NewValidatingRetrievalQA creates a new ValidatingRetrievalQA chain.
 func NewValidatingRetrievalQA(retriever schema.Retriever, generator llms.Model, opts ...ValidatingRetrievalQAOption) (ValidatingRetrievalQA, error) {
 	if retriever == nil {
 		return ValidatingRetrievalQA{}, errors.New("retriever cannot be nil")
@@ -67,7 +65,6 @@ func (c *ValidatingRetrievalQA) Call(ctx context.Context, query string) (string,
 		return "", errors.New("query cannot be empty")
 	}
 
-	c.logger.Debug("Starting document retrieval", "query", query)
 	docs, err := c.Retriever.GetRelevantDocuments(ctx, query)
 	if err != nil {
 		c.logger.Error("Document retrieval failed", "error", err)
@@ -80,7 +77,6 @@ func (c *ValidatingRetrievalQA) Call(ctx context.Context, query string) (string,
 	}
 
 	contextStr := c.buildContextString(docs)
-	c.logger.Debug("Built context string", "doc_count", len(docs), "context_length", len(contextStr))
 
 	isRelevant, err := c.validateContext(ctx, query, contextStr)
 	if err != nil {

@@ -10,7 +10,6 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
-// RetrievalQA combines document retrieval with LLM generation for context-aware responses.
 type RetrievalQA struct {
 	Retriever schema.Retriever
 	LLM       llms.Model

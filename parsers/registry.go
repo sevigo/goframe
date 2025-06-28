@@ -16,8 +16,8 @@ var ErrPluginNotFound = errors.New("language plugin not found")
 
 // registry implements the RegistryService interface
 type registry struct {
-	plugins    map[string]schema.ParserPlugin // Map of language name to plugin
-	extensions map[string]schema.ParserPlugin // Map of file extension to plugin
+	plugins    map[string]schema.ParserPlugin
+	extensions map[string]schema.ParserPlugin
 	logger     *slog.Logger
 	mu         sync.RWMutex
 }
@@ -49,12 +49,9 @@ func (r *registry) RegisterParser(plugin schema.ParserPlugin) error {
 		return fmt.Errorf("plugin with name %q already registered", name)
 	}
 
-	// Register by name
 	r.plugins[name] = plugin
 
-	// Register by extensions
 	for _, ext := range plugin.Extensions() {
-		// Ensure extension has a leading dot
 		if ext == "" {
 			continue
 		}
@@ -82,7 +79,6 @@ func (r *registry) GetParser(language string) (schema.ParserPlugin, error) {
 
 // GetPluginForFile returns the appropriate plugin for a file
 func (r *registry) GetParserForFile(path string, info fs.FileInfo) (schema.ParserPlugin, error) {
-	// First try to get plugin by extension
 	ext := filepath.Ext(path)
 	if ext != "" {
 		plugin, err := r.GetParserForExtension(ext)
@@ -91,7 +87,6 @@ func (r *registry) GetParserForFile(path string, info fs.FileInfo) (schema.Parse
 		}
 	}
 
-	// If no plugin found by extension, check each plugin's CanHandle method
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -110,7 +105,6 @@ func (r *registry) GetParserForExtension(ext string) (schema.ParserPlugin, error
 		return nil, fmt.Errorf("%w: empty extension", ErrPluginNotFound)
 	}
 
-	// Ensure extension has leading dot
 	if ext[0] != '.' {
 		ext = "." + ext
 	}

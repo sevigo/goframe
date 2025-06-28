@@ -25,7 +25,6 @@ const (
 	embedderModel = "nomic-embed-text"
 )
 
-// EvaluationCase represents a single test case for RAG evaluation
 type EvaluationCase struct {
 	QueryID           int    `json:"query_id"`
 	QueryText         string `json:"query_text"`
@@ -33,7 +32,6 @@ type EvaluationCase struct {
 	RelevantPassage   string `json:"relevant_passage"`
 }
 
-// EvaluationResult holds the results of a single evaluation
 type EvaluationResult struct {
 	Case             EvaluationCase `json:"case"`
 	RetrievedPassage string         `json:"retrieved_passage"`
@@ -44,7 +42,6 @@ type EvaluationResult struct {
 	Error            error          `json:"error,omitempty"`
 }
 
-// EvaluationSummary contains overall evaluation statistics
 type EvaluationSummary struct {
 	TotalCases          int           `json:"total_cases"`
 	RetrievalHits       int           `json:"retrieval_hits"`
@@ -57,7 +54,6 @@ type EvaluationSummary struct {
 	ErrorCount          int           `json:"error_count"`
 }
 
-// Configuration constants
 const (
 	DefaultDatasetPath    = "testdata/rag_dataset/msmarco/ms_marco_1000.csv"
 	DefaultTimeoutMinutes = 15
@@ -71,33 +67,27 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeoutMinutes*time.Minute)
 	defer cancel()
 
-	// Load dataset
 	allPassages, evaluationSet, err := loadMSMARCODataset(DefaultDatasetPath, logger)
 	if err != nil {
 		logger.Error("Failed to load MS MARCO dataset", "error", err)
 		return
 	}
 
-	// Setup RAG system
-	ragChain, vectorStore, cleanup, err := setupRAGSystem(logger)
+	ragChain, vectorStore, err := setupRAGSystem(logger)
 	if err != nil {
 		logger.Error("Failed to set up RAG system", "error", err)
 		return
 	}
-	defer cleanup()
 
-	// Ingest knowledge base
 	if err := ingestKnowledgeBase(ctx, vectorStore, allPassages, logger); err != nil {
 		logger.Error("Failed to ingest knowledge base", "error", err)
 		return
 	}
 
-	// Run evaluation
 	summary := runEvaluation(ctx, ragChain, evaluationSet, logger)
 	printEvaluationSummary(summary)
 }
 
-// setupLogger creates a structured logger
 func setupLogger() *slog.Logger {
 	opts := &slog.HandlerOptions{
 		Level:     slog.LevelInfo,
@@ -106,7 +96,6 @@ func setupLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stdout, opts))
 }
 
-// loadMSMARCODataset loads and processes the MS MARCO CSV dataset
 func loadMSMARCODataset(path string, logger *slog.Logger) ([]string, []EvaluationCase, error) {
 	logger.Info("Loading MS MARCO dataset", "path", path)
 	start := time.Now()
@@ -157,7 +146,6 @@ func loadMSMARCODataset(path string, logger *slog.Logger) ([]string, []Evaluatio
 		isSelected, _ := strconv.Atoi(strings.TrimSpace(record[6]))
 		passageText := strings.TrimSpace(record[7])
 
-		// Add unique passages to knowledge base
 		if passageText != "" {
 			if _, exists := passageSet[passageText]; !exists {
 				allPassages = append(allPassages, passageText)
@@ -165,7 +153,6 @@ func loadMSMARCODataset(path string, logger *slog.Logger) ([]string, []Evaluatio
 			}
 		}
 
-		// Create evaluation case for selected passages
 		if isSelected == 1 && queryText != "" && answers != "" {
 			tempEvalCases[queryID] = EvaluationCase{
 				QueryID:           queryID,
@@ -177,7 +164,6 @@ func loadMSMARCODataset(path string, logger *slog.Logger) ([]string, []Evaluatio
 		rowCount++
 	}
 
-	// Convert to slice for consistent ordering
 	evalSet := make([]EvaluationCase, 0, len(tempEvalCases))
 	for _, ec := range tempEvalCases {
 		evalSet = append(evalSet, ec)
@@ -193,61 +179,47 @@ func loadMSMARCODataset(path string, logger *slog.Logger) ([]string, []Evaluatio
 	return allPassages, evalSet, nil
 }
 
-// setupRAGSystem initializes the complete RAG pipeline
-func setupRAGSystem(logger *slog.Logger) (*chains.RetrievalQA, vectorstores.VectorStore, func(), error) {
+func setupRAGSystem(logger *slog.Logger) (*chains.RetrievalQA, vectorstores.VectorStore, error) {
 	collectionName := fmt.Sprintf("rag-eval-msmarco-%d", time.Now().Unix())
 	logger.Info("Setting up RAG system", "collection", collectionName)
 
-	// Setup embedder
 	embedderLLM, err := ollama.New(
 		ollama.WithModel(embedderModel),
 		ollama.WithLogger(logger),
 	)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to create embedder LLM: %w", err)
+		return nil, nil, fmt.Errorf("failed to create embedder LLM: %w", err)
 	}
 
 	embedder, err := embeddings.NewEmbedder(embedderLLM)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to create embedder: %w", err)
+		return nil, nil, fmt.Errorf("failed to create embedder: %w", err)
 	}
 
-	// Setup vector store
 	vectorStore, err := qdrant.New(
 		qdrant.WithEmbedder(embedder),
 		qdrant.WithCollectionName(collectionName),
 		qdrant.WithBatchSize(DefaultBatchSize),
 	)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to create vector store: %w", err)
+		return nil, nil, fmt.Errorf("failed to create vector store: %w", err)
 	}
 
-	// Setup generation LLM
 	generationLLM, err := ollama.New(
 		ollama.WithModel(genModel),
 		ollama.WithLogger(logger),
 	)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to create generation LLM: %w", err)
+		return nil, nil, fmt.Errorf("failed to create generation LLM: %w", err)
 	}
 
-	// Create RAG chain
 	retriever := vectorstores.ToRetriever(vectorStore, DefaultRetrievalCount)
 	ragChain := chains.NewRetrievalQA(retriever, generationLLM)
 
-	// Cleanup function
-	cleanup := func() {
-		logger.Info("Cleaning up resources", "collection", collectionName)
-		// if err := vectorStore.DeleteCollection(ctx, collectionName); err != nil {
-		// 	logger.Warn("Failed to cleanup collection", "error", err)
-		// }
-	}
-
 	logger.Info("RAG system setup complete")
-	return &ragChain, vectorStore, cleanup, nil
+	return &ragChain, vectorStore, nil
 }
 
-// ingestKnowledgeBase adds all passages to the vector store
 func ingestKnowledgeBase(ctx context.Context, store vectorstores.VectorStore, passages []string, logger *slog.Logger) error {
 	logger.Info("Starting knowledge base ingestion", "passage_count", len(passages))
 	start := time.Now()
