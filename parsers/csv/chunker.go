@@ -30,16 +30,12 @@ func (p *CSVPlugin) Chunk(content string, path string, opts *schema.CodeChunking
 		return []schema.CodeChunk{}, nil
 	}
 
-	p.logger.Debug("Starting CSV chunking", "path", path, "content_length", len(content))
-
-	// Parse CSV structure
 	structure, err := p.parseCSVStructure(content, path)
 	if err != nil {
 		p.logger.Warn("Failed to parse CSV, treating as plain text", "error", err)
 		return p.createFallbackChunk(content, path), nil
 	}
 
-	// Create chunks based on structure and size
 	chunks := p.createChunks(structure, content, path, opts)
 
 	p.logger.Debug("CSV chunking completed", "path", path, "chunks_created", len(chunks))
@@ -48,16 +44,13 @@ func (p *CSVPlugin) Chunk(content string, path string, opts *schema.CodeChunking
 
 // parseCSVStructure analyzes the CSV file structure
 func (p *CSVPlugin) parseCSVStructure(content string, path string) (*CSVStructure, error) {
-	// Detect delimiter
 	delimiter := p.detectDelimiter(content, path)
 
-	// Create CSV reader
 	reader := csv.NewReader(strings.NewReader(content))
 	reader.Comma = delimiter
 	reader.LazyQuotes = true
 	reader.TrimLeadingSpace = true
 
-	// Read all records
 	records, err := reader.ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse CSV: %w", err)

@@ -9,7 +9,6 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
-// RemoteGitRepoLoader clones a remote repository and uses a GitLoader to load files.
 type RemoteGitRepoLoader struct {
 	RepoURL        string
 	ParserRegistry parsers.ParserRegistry
