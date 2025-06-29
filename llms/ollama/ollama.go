@@ -48,7 +48,14 @@ func New(opts ...Option) (*LLM, error) {
 		return nil, ErrInvalidModel
 	}
 
-	client, err := ollamaclient.NewDefaultClient()
+	var client *ollamaclient.Client
+	var err error
+
+	if o.ollamaServerURL != nil {
+		client, err = ollamaclient.NewClient(o.ollamaServerURL, o.httpClient)
+	} else {
+		client, err = ollamaclient.NewDefaultClient()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ollama client: %w", err)
 	}
