@@ -77,3 +77,8 @@ func (s *Store) Docs() []schema.Document {
 	}
 	return docs
 }
+
+// DeleteCollection simulates deleting a collection.
+func (s *Store) DeleteCollection(_ context.Context, _ string) error {
+	return nil
+}
