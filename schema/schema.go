@@ -39,5 +39,3 @@ func (md ModelDetails) String() string {
 type Retriever interface {
 	GetRelevantDocuments(ctx context.Context, query string) ([]Document, error)
 }
-
-
