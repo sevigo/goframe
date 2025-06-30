@@ -2,6 +2,7 @@ package documentloaders
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -166,7 +167,21 @@ func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser sc
 	documents := make([]schema.Document, 0, len(chunks))
 	for i, chunk := range chunks {
 		chunkMetadata := buildChunkMetadata(baseMetadata, chunk, i, len(chunks))
-		documents = append(documents, schema.NewDocument(chunk.Content, chunkMetadata))
+
+		var enrichedContentBuilder strings.Builder
+		source, _ := chunkMetadata["source"].(string)
+		identifier, _ := chunkMetadata["identifier"].(string)
+		chunkType, _ := chunkMetadata["chunk_type"].(string)
+
+		enrichedContentBuilder.WriteString(fmt.Sprintf("File: %s\n", source))
+		if chunkType != "" && identifier != "" {
+			enrichedContentBuilder.WriteString(fmt.Sprintf("Type: %s\nIdentifier: %s\n", chunkType, identifier))
+		}
+		enrichedContentBuilder.WriteString("---\n")
+		enrichedContentBuilder.WriteString(chunk.Content)
+
+		doc := schema.NewDocument(enrichedContentBuilder.String(), chunkMetadata)
+		documents = append(documents, doc)
 	}
 	return documents
 }

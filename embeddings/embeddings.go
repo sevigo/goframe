@@ -49,9 +49,7 @@ func (e *EmbedderImpl) EmbedQuery(ctx context.Context, text string) ([]float32, 
 	if strings.TrimSpace(text) == "" {
 		return nil, ErrEmptyText
 	}
-
-	processedText := e.preprocessText(text)
-
+	processedText := "query: " + e.preprocessText(text)
 	return e.client.EmbedQuery(ctx, processedText)
 }
 
@@ -68,7 +66,7 @@ func (e *EmbedderImpl) EmbedDocuments(ctx context.Context, texts []string) ([][]
 
 	processedTexts := make([]string, len(texts))
 	for i, text := range texts {
-		processedTexts[i] = e.preprocessText(text)
+		processedTexts[i] = "passage: " + e.preprocessText(text)
 	}
 
 	batchedTexts := batchTexts(processedTexts, e.opts.BatchSize)
