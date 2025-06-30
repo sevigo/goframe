@@ -30,6 +30,7 @@ type GitLoader struct {
 type gitLoaderOptions struct {
 	IncludeExts map[string]bool
 	ExcludeExts map[string]bool
+	ExcludeDirs map[string]bool
 	Logger      *slog.Logger
 }
 
@@ -39,6 +40,31 @@ func WithLogger(logger *slog.Logger) GitLoaderOption {
 	return func(opts *gitLoaderOptions) {
 		if logger != nil {
 			opts.Logger = logger
+		}
+	}
+}
+
+func WithExcludeExts(exts []string) GitLoaderOption {
+	return func(opts *gitLoaderOptions) {
+		if opts.ExcludeExts == nil {
+			opts.ExcludeExts = make(map[string]bool)
+		}
+		for _, ext := range exts {
+			if !strings.HasPrefix(ext, ".") {
+				ext = "." + ext
+			}
+			opts.ExcludeExts[strings.ToLower(ext)] = true
+		}
+	}
+}
+
+func WithExcludeDirs(dirs []string) GitLoaderOption {
+	return func(opts *gitLoaderOptions) {
+		if opts.ExcludeDirs == nil {
+			opts.ExcludeDirs = make(map[string]bool)
+		}
+		for _, dir := range dirs {
+			opts.ExcludeDirs[dir] = true
 		}
 	}
 }
@@ -87,7 +113,12 @@ func (g *GitLoader) Load(ctx context.Context) ([]schema.Document, error) {
 		}
 
 		if d.IsDir() {
-			if shouldSkipDir(d.Name()) {
+			dirName := d.Name()
+			if g.options.ExcludeDirs != nil && g.options.ExcludeDirs[dirName] {
+				g.logger.Debug("Skipping user-excluded directory", "path", path)
+				return filepath.SkipDir
+			}
+			if shouldSkipDir(dirName) {
 				return filepath.SkipDir
 			}
 			return nil
