@@ -18,11 +18,7 @@ type VectorStore interface {
 	SimilaritySearch(ctx context.Context, query string, numDocuments int, options ...Option) ([]schema.Document, error)
 	SimilaritySearchWithScores(ctx context.Context, query string, numDocuments int, options ...Option) ([]DocumentWithScore, error)
 	ListCollections(ctx context.Context) ([]string, error)
-}
-
-type CollectionManager interface {
 	DeleteCollection(ctx context.Context, collectionName string) error
-	ListCollections(ctx context.Context) ([]schema.CollectionInfo, error)
 }
 
 type DocumentWithScore struct {
