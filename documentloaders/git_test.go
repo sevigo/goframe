@@ -25,7 +25,7 @@ func (p *fakeGoParser) CanHandle(path string, info fs.FileInfo) bool {
 }
 func (p *fakeGoParser) Chunk(content string, path string, opts *schema.CodeChunkingOptions) ([]schema.CodeChunk, error) {
 	return []schema.CodeChunk{
-		{Content: "package main\n\nfunc main() {}", LineStart: 1, LineEnd: 3, Type: "function", Identifier: "main"},
+		{Content: "File: src/main.go\nType: function\nIdentifier: main\n---\npackage main\n\nfunc main() {}", LineStart: 1, LineEnd: 3, Type: "function", Identifier: "main"},
 		{Content: "func helper() {}", LineStart: 5, LineEnd: 5, Type: "function", Identifier: "helper"},
 	}, nil
 }
@@ -81,7 +81,7 @@ func (r *fakeParserRegistry) GetAllParsers() []schema.ParserPlugin { return nil 
 func TestGitLoader_Load(t *testing.T) {
 	mockFS := fstest.MapFS{
 		"src/main.go":     {Data: []byte("package main\n\nfunc main() {}\n\nfunc helper() {}")},
-		"README.txt":      {Data: []byte("This is a test README.")},
+		"README.txt":      {Data: []byte("File: README.txt\nType: text_document\nIdentifier: README\n---\nThis is a test README.")},
 		"assets/logo.png": {Data: []byte("binary data")},
 		".git/config":     {Data: []byte("some config")},
 		"empty_dir":       {Mode: fs.ModeDir},
@@ -125,16 +125,16 @@ func TestGitLoader_Load(t *testing.T) {
 		case "src/main.go":
 			switch identifier {
 			case "main":
-				assert.Equal(t, "package main\n\nfunc main() {}", doc.PageContent)
+				assert.Contains(t, doc.PageContent, "package main\n\nfunc main() {}")
 				assert.Equal(t, "function", doc.Metadata["chunk_type"])
 				foundMain = true
 			case "helper":
-				assert.Equal(t, "func helper() {}", doc.PageContent)
+				assert.Equal(t, "File: src/main.go\nType: function\nIdentifier: helper\n---\nfunc helper() {}", doc.PageContent)
 				assert.Equal(t, "function", doc.Metadata["chunk_type"])
 				foundHelper = true
 			}
 		case "README.txt":
-			assert.Equal(t, "This is a test README.", doc.PageContent)
+			assert.Equal(t, "File: README.txt\nType: text_document\nIdentifier: README\n---\nFile: README.txt\nType: text_document\nIdentifier: README\n---\nThis is a test README.", doc.PageContent)
 			assert.Equal(t, "text_document", doc.Metadata["chunk_type"])
 			foundReadme = true
 		default:
