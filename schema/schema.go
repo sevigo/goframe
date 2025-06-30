@@ -40,9 +40,4 @@ type Retriever interface {
 	GetRelevantDocuments(ctx context.Context, query string) ([]Document, error)
 }
 
-type CollectionInfo struct {
-	Name           string `json:"name"`
-	PointsCount    uint64 `json:"points_count"`
-	VectorSize     uint64 `json:"vector_size"`
-	VectorDistance string `json:"vector_distance"`
-}
+
