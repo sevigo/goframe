@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"strconv"
 	"strings"
@@ -624,6 +625,35 @@ func (s *Store) DeleteCollection(ctx context.Context, name string) error {
 	}
 
 	s.logger.InfoContext(ctx, "Collection deleted successfully", "name", name, "duration", duration)
+	return nil
+}
+
+func (s *Store) DeleteDocumentsByFilter(ctx context.Context, filters map[string]any, options ...vectorstores.Option) error {
+	opts := vectorstores.ParseOptions(options...)
+	collectionName := s.getCollectionName(opts)
+
+	// buildQdrantFilter is a helper you already have for searching
+	qdrantFilter := buildQdrantFilter(filters)
+	if qdrantFilter == nil {
+		return errors.New("cannot delete with an empty filter")
+	}
+
+	wait := true
+	pointsSelector := &qdrant.PointsSelector{
+		PointsSelectorOneOf: &qdrant.PointsSelector_Filter{
+			Filter: qdrantFilter,
+		},
+	}
+
+	_, err := s.client.GetPointsClient().Delete(ctx, &qdrant.DeletePoints{
+		CollectionName: collectionName,
+		Wait:           &wait,
+		Points:         pointsSelector,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete documents by filter: %w", err)
+	}
+	s.logger.InfoContext(ctx, "Documents deleted successfully by filter", "collection", collectionName, "filter_keys", maps.Keys(filters))
 	return nil
 }
 
