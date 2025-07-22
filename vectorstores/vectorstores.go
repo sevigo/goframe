@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"strings"
 
 	"github.com/sevigo/goframe/embeddings"
 	"github.com/sevigo/goframe/schema"
@@ -33,6 +34,7 @@ type Option func(*Options)
 type Options struct {
 	Embedder       embeddings.Embedder
 	NameSpace      string
+	CollectionName string
 	ScoreThreshold float32
 	Filters        map[string]any
 }
@@ -46,6 +48,13 @@ func WithEmbedder(embedder embeddings.Embedder) Option {
 func WithNameSpace(namespace string) Option {
 	return func(opts *Options) {
 		opts.NameSpace = namespace
+	}
+}
+
+// WithCollectionName sets the collection name for the Qdrant store.
+func WithCollectionName(name string) Option {
+	return func(opts *Options) {
+		opts.CollectionName = strings.TrimSpace(name)
 	}
 }
 

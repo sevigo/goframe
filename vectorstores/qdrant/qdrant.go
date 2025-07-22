@@ -125,6 +125,7 @@ func (s *Store) SetBatchConfig(config BatchConfig) {
 	s.batchConfig = config
 	s.logger.Info("Batch configuration updated", "config", fmt.Sprintf("%+v", config))
 }
+
 func (s *Store) GetBatchConfig() BatchConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -702,7 +703,8 @@ func (s *Store) SimilaritySearchBatch(
 	}
 
 	searchResp, err := s.client.GetPointsClient().SearchBatch(ctx, &qdrant.SearchBatchPoints{
-		SearchPoints: searchRequests,
+		SearchPoints:   searchRequests,
+		CollectionName: collectionName,
 	})
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Batch search failed", "error", err)
@@ -743,6 +745,9 @@ func (s *Store) generateDocumentID(doc schema.Document) string {
 }
 
 func (s *Store) getCollectionName(opts vectorstores.Options) string {
+	if opts.CollectionName != "" {
+		return opts.CollectionName
+	}
 	if opts.NameSpace != "" {
 		return opts.NameSpace
 	}
