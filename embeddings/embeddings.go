@@ -11,6 +11,7 @@ import (
 type Embedder interface {
 	EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error)
 	EmbedQuery(ctx context.Context, text string) ([]float32, error)
+	EmbedQueries(ctx context.Context, texts []string) ([][]float32, error)
 	GetDimension(ctx context.Context) (int, error)
 }
 
@@ -51,6 +52,19 @@ func (e *EmbedderImpl) EmbedQuery(ctx context.Context, text string) ([]float32, 
 	}
 	processedText := "query: " + e.preprocessText(text)
 	return e.client.EmbedQuery(ctx, processedText)
+}
+
+func (e *EmbedderImpl) EmbedQueries(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return [][]float32{}, nil
+	}
+
+	processedTexts := make([]string, len(texts))
+	for i, text := range texts {
+		processedTexts[i] = "query: " + e.preprocessText(text)
+	}
+
+	return e.EmbedDocuments(ctx, processedTexts)
 }
 
 func (e *EmbedderImpl) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error) {

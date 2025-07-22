@@ -16,6 +16,7 @@ var (
 type VectorStore interface {
 	AddDocuments(ctx context.Context, docs []schema.Document, options ...Option) ([]string, error)
 	SimilaritySearch(ctx context.Context, query string, numDocuments int, options ...Option) ([]schema.Document, error)
+	SimilaritySearchBatch(ctx context.Context, queries []string, numDocuments int, options ...Option) ([][]schema.Document, error)
 	SimilaritySearchWithScores(ctx context.Context, query string, numDocuments int, options ...Option) ([]DocumentWithScore, error)
 	ListCollections(ctx context.Context) ([]string, error)
 	DeleteCollection(ctx context.Context, collectionName string) error

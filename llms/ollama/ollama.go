@@ -211,10 +211,7 @@ func (o *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, 
 		Input: texts,
 	}
 
-	start := time.Now()
 	resp, err := o.client.Embed(ctx, req)
-	duration := time.Since(start)
-
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "not found") {
 			o.logger.InfoContext(ctx, "Embedding model not found, attempting to pull.", "model", o.options.model)
@@ -226,7 +223,7 @@ func (o *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, 
 				return nil, fmt.Errorf("embedding failed even after pulling model: %w", err)
 			}
 		} else {
-			o.logger.ErrorContext(ctx, "Batch embed API call failed", "error", err, "duration", duration)
+			o.logger.ErrorContext(ctx, "Batch embed API call failed", "error", err)
 			return nil, fmt.Errorf("batch embedding generation failed: %w", err)
 		}
 	}
@@ -237,6 +234,10 @@ func (o *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, 
 	}
 
 	return resp.Embeddings, nil
+}
+
+func (o *LLM) EmbedQueries(ctx context.Context, texts []string) ([][]float32, error) {
+	return o.EmbedDocuments(ctx, texts)
 }
 
 func (o *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
