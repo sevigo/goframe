@@ -657,6 +657,71 @@ func (s *Store) DeleteDocumentsByFilter(ctx context.Context, filters map[string]
 	return nil
 }
 
+func (s *Store) SimilaritySearchBatch(
+	ctx context.Context,
+	queries []string,
+	numDocuments int,
+	options ...vectorstores.Option,
+) ([][]schema.Document, error) {
+	if len(queries) == 0 {
+		s.logger.WarnContext(ctx, "No queries provided for batch search")
+		return nil, nil
+	}
+
+	if numDocuments <= 0 {
+		s.logger.WarnContext(ctx, "Invalid number of documents requested", "num_documents", numDocuments)
+		return nil, ErrInvalidNumDocuments
+	}
+
+	if s.embedder == nil {
+		s.logger.ErrorContext(ctx, "Embedder not provided for batch search")
+		return nil, ErrMissingEmbedder
+	}
+
+	opts := vectorstores.ParseOptions(options...)
+	collectionName := s.getCollectionName(opts)
+
+	// Embed all queries at once
+	queryVectors, err := s.embedder.EmbedQueries(ctx, queries)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Batch query embedding failed", "error", err)
+		return nil, fmt.Errorf("failed to embed queries: %w", err)
+	}
+
+	searchRequests := make([]*qdrant.SearchPoints, 0, len(queryVectors))
+	for _, vector := range queryVectors {
+		searchRequests = append(searchRequests, &qdrant.SearchPoints{
+			CollectionName: collectionName,
+			Vector:         vector,
+			Limit:          uint64(numDocuments),
+			WithPayload: &qdrant.WithPayloadSelector{
+				SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
+			},
+			ScoreThreshold: &opts.ScoreThreshold,
+		})
+	}
+
+	searchResp, err := s.client.GetPointsClient().SearchBatch(ctx, &qdrant.SearchBatchPoints{
+		SearchPoints: searchRequests,
+	})
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Batch search failed", "error", err)
+		return nil, fmt.Errorf("qdrant batch search failed: %w", err)
+	}
+
+	// Convert results
+	batchResults := make([][]schema.Document, len(searchResp.GetResult()))
+	for i, result := range searchResp.GetResult() {
+		docs := make([]schema.Document, 0, len(result.GetResult()))
+		for _, point := range result.GetResult() {
+			docs = append(docs, s.payloadToDocument(point.GetPayload()))
+		}
+		batchResults[i] = docs
+	}
+
+	return batchResults, nil
+}
+
 func (s *Store) Health(ctx context.Context) error {
 	_, err := s.client.GetCollectionsClient().List(ctx, &qdrant.ListCollectionsRequest{})
 	if err != nil {
