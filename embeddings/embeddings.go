@@ -94,22 +94,3 @@ func (e *EmbedderImpl) preprocessText(text string) string {
 	}
 	return text
 }
-
-func batchTexts(texts []string, batchSize int) [][]string {
-	if batchSize <= 0 {
-		return [][]string{texts}
-	}
-
-	numBatches := (len(texts) + batchSize - 1) / batchSize
-	batches := make([][]string, 0, numBatches)
-
-	for i := 0; i < len(texts); i += batchSize {
-		end := i + batchSize
-		if end > len(texts) {
-			end = len(texts)
-		}
-		batches = append(batches, texts[i:end])
-	}
-
-	return batches
-}
