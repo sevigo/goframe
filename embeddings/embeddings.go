@@ -3,9 +3,7 @@ package embeddings
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
-	"sync"
 )
 
 type Embedder interface {
@@ -83,54 +81,7 @@ func (e *EmbedderImpl) EmbedDocuments(ctx context.Context, texts []string) ([][]
 		processedTexts[i] = "passage: " + e.preprocessText(text)
 	}
 
-	batchedTexts := batchTexts(processedTexts, e.opts.BatchSize)
-	batchResults := make([][][]float32, len(batchedTexts))
-	errCh := make(chan error, len(batchedTexts))
-
-	const maxConcurrent = 8
-	semaphore := make(chan struct{}, maxConcurrent)
-
-	var wg sync.WaitGroup
-	for i, batch := range batchedTexts {
-		wg.Add(1)
-		go func(i int, batch []string) {
-			defer wg.Done()
-
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
-			if ctx.Err() != nil {
-				return
-			}
-
-			embeddings, err := e.client.EmbedDocuments(ctx, batch)
-			if err != nil {
-				errCh <- fmt.Errorf("error embedding batch %d: %w", i, err)
-				return
-			}
-			batchResults[i] = embeddings
-		}(i, batch)
-	}
-
-	wg.Wait()
-	close(errCh)
-
-	for err := range errCh {
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-
-	allEmbeddings := make([][]float32, 0, len(texts))
-	for _, batch := range batchResults {
-		allEmbeddings = append(allEmbeddings, batch...)
-	}
-
-	return allEmbeddings, nil
+	return e.client.EmbedDocuments(ctx, processedTexts)
 }
 
 func (e *EmbedderImpl) GetDimension(ctx context.Context) (int, error) {
