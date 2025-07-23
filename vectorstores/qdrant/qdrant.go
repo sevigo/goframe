@@ -138,12 +138,25 @@ func (s *Store) SetBatchConfig(config BatchConfig) {
 	}
 
 	s.batchConfig = config
-	s.logger.Info("Batch configuration updated", "config", fmt.Sprintf("%+v", config))
+	s.logger.Info("Batch configuration updated",
+		"batch_size", config.BatchSize,
+		"max_concurrency", config.MaxConcurrency,
+		"embedding_batch_size", config.EmbeddingBatchSize,
+		"embedding_max_concurrency", config.EmbeddingMaxConcurrency,
+		"retry_attempts", config.RetryAttempts,
+		"retry_delay", config.RetryDelay,
+		"max_retry_delay", config.MaxRetryDelay,
+	)
 }
 
 // embedAndCreatePointsInParallel processes documents in parallel to generate embeddings and create Qdrant points.
 // It uses a fail-fast mechanism with context cancellation to stop all work on the first error.
 func (s *Store) embedAndCreatePointsInParallel(ctx context.Context, docs []schema.Document) ([]*qdrant.PointStruct, []string, error) {
+	if s.embedder == nil {
+		s.logger.ErrorContext(ctx, "Embedder not provided for parallel embedding")
+		return nil, nil, ErrMissingEmbedder
+	}
+
 	batchConfig := s.GetBatchConfig()
 
 	embeddingBatchSize := batchConfig.EmbeddingBatchSize
