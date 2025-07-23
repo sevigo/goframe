@@ -2,6 +2,7 @@ package qdrant
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/qdrant/go-client/qdrant"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -42,6 +44,10 @@ const (
 	DefaultRetryAttempts  = 3
 	DefaultRetryDelay     = time.Second
 	DefaultMaxRetryDelay  = 30 * time.Second
+
+	embeddingBatchSize    = 16  // Small batches for parallel embedding
+	qdrantUpsertBatchSize = 128 // Larger batches for efficient network calls to Qdrant
+	maxConcurrency        = 8   // Number of parallel embedding workers
 )
 
 type BatchResult struct {
@@ -132,8 +138,145 @@ func (s *Store) GetBatchConfig() BatchConfig {
 	return s.batchConfig
 }
 
-func (s *Store) AddDocuments(ctx context.Context, docs []schema.Document, options ...vectorstores.Option) ([]string, error) {
-	return s.AddDocumentsBatch(ctx, docs, nil, options...)
+// AddDocuments now implements a high-performance concurrent pipeline for embedding and upserting.
+func (s *Store) AddDocuments(
+	ctx context.Context,
+	docs []schema.Document,
+	progressCallback func(processed, total int, duration time.Duration),
+	options ...vectorstores.Option,
+) ([]string, error) {
+	if len(docs) == 0 {
+		return []string{}, nil
+	}
+	if s.embedder == nil {
+		return nil, ErrMissingEmbedder
+	}
+
+	opts := vectorstores.ParseOptions(options...)
+	collectionName := s.getCollectionName(opts)
+
+	if err := s.ensureCollection(ctx, collectionName); err != nil {
+		return nil, fmt.Errorf("collection preparation failed: %w", err)
+	}
+
+	totalDocs := len(docs)
+	s.logger.InfoContext(ctx, "starting high-performance document ingestion pipeline", "doc_count", totalDocs)
+	startTime := time.Now()
+
+	g, gctx := errgroup.WithContext(ctx)
+	docChan := make(chan schema.Document, totalDocs)
+	pointChan := make(chan *qdrant.PointStruct, totalDocs)
+	idChan := make(chan string, totalDocs)
+
+	for _, doc := range docs {
+		docChan <- doc
+	}
+	close(docChan)
+
+	for range maxConcurrency {
+		g.Go(func() error {
+			return s.embeddingWorker(gctx, docChan, pointChan, idChan)
+		})
+	}
+
+	// This is the upsert worker that reads from pointChan
+	g.Go(func() error {
+		pointsBatch := make([]*qdrant.PointStruct, 0, qdrantUpsertBatchSize)
+		var processedCount int
+		for point := range pointChan {
+			pointsBatch = append(pointsBatch, point)
+			processedCount++
+			if len(pointsBatch) == qdrantUpsertBatchSize {
+				if err := s.upsertWithRetry(gctx, collectionName, pointsBatch); err != nil {
+					return err
+				}
+				if progressCallback != nil {
+					progressCallback(processedCount, totalDocs, time.Since(startTime))
+				}
+				pointsBatch = make([]*qdrant.PointStruct, 0, qdrantUpsertBatchSize)
+			}
+		}
+		if len(pointsBatch) > 0 {
+			if err := s.upsertWithRetry(gctx, collectionName, pointsBatch); err != nil {
+				return err
+			}
+			if progressCallback != nil {
+				progressCallback(processedCount, totalDocs, time.Since(startTime))
+			}
+		}
+		return nil
+	})
+
+	// This goroutine waits for all workers to finish then closes the channels
+	go func() {
+		_ = g.Wait()
+		close(pointChan)
+		close(idChan)
+	}()
+
+	// Collect all generated IDs
+	allIDs := make([]string, 0, totalDocs)
+	for id := range idChan {
+		allIDs = append(allIDs, id)
+	}
+
+	// Final check for any errors from the errgroup
+	if err := g.Wait(); err != nil {
+		return nil, fmt.Errorf("document ingestion pipeline failed: %w", err)
+	}
+
+	s.logger.InfoContext(ctx, "document ingestion pipeline completed successfully", "duration", time.Since(startTime))
+	return allIDs, nil
+}
+
+// embeddingWorker is a single worker in the parallel embedding pool.
+func (s *Store) embeddingWorker(ctx context.Context, docChan <-chan schema.Document, pointChan chan<- *qdrant.PointStruct, idChan chan<- string) error {
+	const embeddingBatchSize = 16
+	batch := make([]schema.Document, 0, embeddingBatchSize)
+
+	for doc := range docChan {
+		batch = append(batch, doc)
+		if len(batch) == embeddingBatchSize {
+			if err := s.processEmbeddingBatch(ctx, batch, pointChan, idChan); err != nil {
+				return err
+			}
+			batch = make([]schema.Document, 0, embeddingBatchSize) // Reset batch
+		}
+	}
+	// Process the final, potentially smaller, batch
+	if len(batch) > 0 {
+		return s.processEmbeddingBatch(ctx, batch, pointChan, idChan)
+	}
+	return nil
+}
+
+// processEmbeddingBatch embeds a batch of documents and sends the resulting points to a channel.
+func (s *Store) processEmbeddingBatch(ctx context.Context, batch []schema.Document, pointChan chan<- *qdrant.PointStruct, idChan chan<- string) error {
+	texts := make([]string, len(batch))
+	for i, doc := range batch {
+		texts[i] = doc.PageContent
+	}
+
+	vectors, err := s.embedder.EmbedDocuments(ctx, texts)
+	if err != nil {
+		return fmt.Errorf("failed to embed document batch: %w", err)
+	}
+
+	for i, doc := range batch {
+		docID := s.generateDocumentID(doc)
+		point := &qdrant.PointStruct{
+			Id:      &qdrant.PointId{PointIdOptions: &qdrant.PointId_Uuid{Uuid: docID}},
+			Vectors: &qdrant.Vectors{VectorsOptions: &qdrant.Vectors_Vector{Vector: &qdrant.Vector{Data: vectors[i]}}},
+			Payload: s.documentToPayload(doc),
+		}
+		select {
+		case pointChan <- point:
+			idChan <- docID
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
 
 func (s *Store) AddDocumentsBatch(
@@ -741,7 +884,9 @@ func (s *Store) generateDocumentID(doc schema.Document) string {
 		}
 	}
 
-	return uuid.New().String()
+	hash := sha256.Sum256([]byte(doc.PageContent))
+
+	return uuid.NewSHA1(uuid.MustParse("a6a2a2d3-1d0c-4b5a-9a8c-0a2a2a2a2a2a"), hash[:]).String()
 }
 
 func (s *Store) getCollectionName(opts vectorstores.Options) string {
@@ -777,7 +922,6 @@ func (s *Store) ensureCollection(ctx context.Context, collectionName string) err
 		"collection", collectionName, "dimension", dimension)
 
 	_, err = s.client.GetCollectionsClient().Create(ctx, &qdrant.CreateCollection{
-		CollectionName: collectionName,
 		VectorsConfig: &qdrant.VectorsConfig{
 			Config: &qdrant.VectorsConfig_Params{
 				Params: &qdrant.VectorParams{

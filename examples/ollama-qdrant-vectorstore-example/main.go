@@ -152,7 +152,7 @@ func demonstrateVectorStore(
 	logger.Info("Adding documents to vector store", "count", len(documents))
 
 	start := time.Now()
-	documentIDs, err := store.AddDocuments(ctx, documents)
+	documentIDs, err := store.AddDocuments(ctx, documents, nil)
 	if err != nil {
 		return fmt.Errorf("failed to add documents: %w", err)
 	}

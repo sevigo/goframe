@@ -141,7 +141,7 @@ func loadKnowledgeBase(ctx context.Context, store vectorstores.VectorStore, pass
 		documents[i] = schema.NewDocument(passage, map[string]any{"source": "msmarco"})
 	}
 
-	_, err := store.AddDocuments(ctx, documents)
+	_, err := store.AddDocuments(ctx, documents, nil)
 	if err != nil {
 		return fmt.Errorf("failed to add documents to vector store: %w", err)
 	}

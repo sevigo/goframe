@@ -137,7 +137,7 @@ func indexTerraformRepo(ctx context.Context, repoPath string, store vectorstores
 
 	logger.Info("Adding documents to vector store...")
 	start := time.Now()
-	_, err = store.AddDocuments(ctx, validDocs)
+	_, err = store.AddDocuments(ctx, validDocs, nil)
 	if err != nil {
 		return fmt.Errorf("failed to add documents to vector store: %w", err)
 	}

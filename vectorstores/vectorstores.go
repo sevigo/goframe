@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"strings"
+	"time"
 
 	"github.com/sevigo/goframe/embeddings"
 	"github.com/sevigo/goframe/schema"
@@ -15,12 +16,18 @@ var (
 )
 
 type VectorStore interface {
-	AddDocuments(ctx context.Context, docs []schema.Document, options ...Option) ([]string, error)
+	AddDocuments(
+		ctx context.Context,
+		docs []schema.Document,
+		progressCallback func(processed, total int, duration time.Duration),
+		options ...Option,
+	) ([]string, error)
 	SimilaritySearch(ctx context.Context, query string, numDocuments int, options ...Option) ([]schema.Document, error)
 	SimilaritySearchBatch(ctx context.Context, queries []string, numDocuments int, options ...Option) ([][]schema.Document, error)
 	SimilaritySearchWithScores(ctx context.Context, query string, numDocuments int, options ...Option) ([]DocumentWithScore, error)
 	ListCollections(ctx context.Context) ([]string, error)
 	DeleteCollection(ctx context.Context, collectionName string) error
+	DeleteDocuments(ctx context.Context, ids []string, options ...Option) error
 	DeleteDocumentsByFilter(ctx context.Context, filters map[string]any, options ...Option) error
 }
 

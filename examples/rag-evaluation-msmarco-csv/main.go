@@ -235,7 +235,7 @@ func ingestKnowledgeBase(ctx context.Context, store vectorstores.VectorStore, pa
 	}
 
 	// Add documents to vector store
-	ids, err := store.AddDocuments(ctx, docs)
+	ids, err := store.AddDocuments(ctx, docs, nil)
 	if err != nil {
 		return fmt.Errorf("failed to add documents to vector store: %w", err)
 	}
