@@ -53,11 +53,13 @@ type BatchResult struct {
 }
 
 type BatchConfig struct {
-	BatchSize      int           `json:"batch_size"`
-	MaxConcurrency int           `json:"max_concurrency"`
-	RetryAttempts  int           `json:"retry_attempts"`
-	RetryDelay     time.Duration `json:"retry_delay"`
-	MaxRetryDelay  time.Duration `json:"max_retry_delay"`
+	BatchSize               int           `json:"batch_size"`
+	MaxConcurrency          int           `json:"max_concurrency"`
+	RetryAttempts           int           `json:"retry_attempts"`
+	RetryDelay              time.Duration `json:"retry_delay"`
+	MaxRetryDelay           time.Duration `json:"max_retry_delay"`
+	EmbeddingBatchSize      int           `json:"embedding_batch_size,omitempty"`
+	EmbeddingMaxConcurrency int           `json:"embedding_max_concurrency,omitempty"`
 }
 
 type Store struct {
@@ -104,6 +106,8 @@ func New(opts ...Option) (vectorstores.VectorStore, error) {
 func (s *Store) SetBatchConfig(config BatchConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Validate and set primary config
 	if config.BatchSize <= 0 {
 		config.BatchSize = DefaultBatchSize
 	}
@@ -113,6 +117,16 @@ func (s *Store) SetBatchConfig(config BatchConfig) {
 	if config.MaxConcurrency <= 0 {
 		config.MaxConcurrency = DefaultMaxConcurrency
 	}
+
+	// Validate optional embedding config (allow 0 for fallback)
+	if config.EmbeddingBatchSize < 0 {
+		config.EmbeddingBatchSize = 0
+	}
+	if config.EmbeddingMaxConcurrency < 0 {
+		config.EmbeddingMaxConcurrency = 0
+	}
+
+	// Validate retry config
 	if config.RetryAttempts < 0 {
 		config.RetryAttempts = DefaultRetryAttempts
 	}
@@ -122,8 +136,146 @@ func (s *Store) SetBatchConfig(config BatchConfig) {
 	if config.MaxRetryDelay <= 0 {
 		config.MaxRetryDelay = DefaultMaxRetryDelay
 	}
+
 	s.batchConfig = config
-	s.logger.Info("Batch configuration updated", "config", fmt.Sprintf("%+v", config))
+	s.logger.Info("Batch configuration updated",
+		"batch_size", config.BatchSize,
+		"max_concurrency", config.MaxConcurrency,
+		"embedding_batch_size", config.EmbeddingBatchSize,
+		"embedding_max_concurrency", config.EmbeddingMaxConcurrency,
+		"retry_attempts", config.RetryAttempts,
+		"retry_delay", config.RetryDelay,
+		"max_retry_delay", config.MaxRetryDelay,
+	)
+}
+
+// embedAndCreatePointsInParallel processes documents in parallel to generate embeddings and create Qdrant points.
+// It uses a fail-fast mechanism with context cancellation to stop all work on the first error.
+func (s *Store) embedAndCreatePointsInParallel(ctx context.Context, docs []schema.Document) ([]*qdrant.PointStruct, []string, error) {
+	if s.embedder == nil {
+		s.logger.ErrorContext(ctx, "Embedder not provided for parallel embedding")
+		return nil, nil, ErrMissingEmbedder
+	}
+
+	batchConfig := s.GetBatchConfig()
+
+	embeddingBatchSize := batchConfig.EmbeddingBatchSize
+	if embeddingBatchSize <= 0 {
+		embeddingBatchSize = batchConfig.BatchSize
+	}
+
+	maxConcurrency := batchConfig.EmbeddingMaxConcurrency
+	if maxConcurrency <= 0 {
+		maxConcurrency = batchConfig.MaxConcurrency
+	}
+
+	totalDocs := len(docs)
+	numBatches := int(math.Ceil(float64(totalDocs) / float64(embeddingBatchSize)))
+
+	// Slices to hold results from each batch, indexed to preserve order safely.
+	pointsByBatch := make([][]*qdrant.PointStruct, numBatches)
+	idsByBatch := make([][]string, numBatches)
+
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, maxConcurrency)
+	errChan := make(chan error, numBatches)
+
+	// Use a cancellable context to stop other workers if one fails.
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+BatchLoop:
+	for i := range numBatches {
+		select {
+		case <-workerCtx.Done():
+			break BatchLoop
+		default:
+		}
+
+		wg.Add(1)
+		go func(batchIndex int) {
+			defer wg.Done()
+
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-workerCtx.Done():
+				return
+			}
+
+			startIdx := batchIndex * embeddingBatchSize
+			endIdx := startIdx + embeddingBatchSize
+			if endIdx > totalDocs {
+				endIdx = totalDocs
+			}
+			batchDocs := docs[startIdx:endIdx]
+
+			// Embed the current batch of documents.
+			texts := make([]string, len(batchDocs))
+			for j, doc := range batchDocs {
+				texts[j] = doc.PageContent
+			}
+
+			vectors, err := s.embedder.EmbedDocuments(workerCtx, texts)
+			if err != nil {
+				err = fmt.Errorf("batch %d embedding failed: %w", batchIndex, err)
+				s.logger.ErrorContext(workerCtx, "Embedding failed for a batch", "error", err)
+				errChan <- err
+				cancel()
+				return
+			}
+
+			if len(vectors) != len(batchDocs) {
+				err = fmt.Errorf("embedder returned %d vectors for %d documents in batch %d", len(vectors), len(batchDocs), batchIndex)
+				s.logger.ErrorContext(workerCtx, "Embedding mismatch for a batch", "error", err)
+				errChan <- err
+				cancel()
+				return
+			}
+
+			// Create Qdrant points for the successful batch.
+			batchPoints := make([]*qdrant.PointStruct, len(batchDocs))
+			batchIDs := make([]string, len(batchDocs))
+			for j, doc := range batchDocs {
+				docID := s.generateDocumentID(doc)
+				batchIDs[j] = docID
+				batchPoints[j] = &qdrant.PointStruct{
+					Id:      &qdrant.PointId{PointIdOptions: &qdrant.PointId_Uuid{Uuid: docID}},
+					Vectors: &qdrant.Vectors{VectorsOptions: &qdrant.Vectors_Vector{Vector: &qdrant.Vector{Data: vectors[j]}}},
+					Payload: s.documentToPayload(doc),
+				}
+			}
+
+			pointsByBatch[batchIndex] = batchPoints
+			idsByBatch[batchIndex] = batchIDs
+		}(i)
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	var firstErr error
+	for err := range errChan {
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	if firstErr != nil {
+		return nil, nil, firstErr
+	}
+
+	if ctx.Err() != nil {
+		return nil, nil, ctx.Err()
+	}
+
+	allPoints := make([]*qdrant.PointStruct, 0, totalDocs)
+	allIDs := make([]string, 0, totalDocs)
+	for i := range numBatches {
+		allPoints = append(allPoints, pointsByBatch[i]...)
+		allIDs = append(allIDs, idsByBatch[i]...)
+	}
+
+	return allPoints, allIDs, nil
 }
 
 func (s *Store) GetBatchConfig() BatchConfig {
@@ -162,30 +314,11 @@ func (s *Store) AddDocumentsBatch(
 	}
 
 	embedStart := time.Now()
-	texts := make([]string, totalDocs)
-	for i, doc := range docs {
-		texts[i] = doc.PageContent
-	}
-	vectors, err := s.embedder.EmbedDocuments(ctx, texts)
+	points, allIDs, err := s.embedAndCreatePointsInParallel(ctx, docs)
 	if err != nil {
-		return nil, fmt.Errorf("document embedding stage failed: %w", err)
+		return nil, fmt.Errorf("parallel embedding and point creation failed: %w", err)
 	}
-	if len(vectors) != totalDocs {
-		return nil, fmt.Errorf("embedder returned %d vectors for %d documents", len(vectors), totalDocs)
-	}
-	s.logger.InfoContext(ctx, "Embedding stage complete", "duration", time.Since(embedStart))
-
-	points := make([]*qdrant.PointStruct, totalDocs)
-	allIDs := make([]string, totalDocs)
-	for i, doc := range docs {
-		docID := s.generateDocumentID(doc)
-		allIDs[i] = docID
-		points[i] = &qdrant.PointStruct{
-			Id:      &qdrant.PointId{PointIdOptions: &qdrant.PointId_Uuid{Uuid: docID}},
-			Vectors: &qdrant.Vectors{VectorsOptions: &qdrant.Vectors_Vector{Vector: &qdrant.Vector{Data: vectors[i]}}},
-			Payload: s.documentToPayload(doc),
-		}
-	}
+	s.logger.InfoContext(ctx, "Parallel embedding and point creation complete", "duration", time.Since(embedStart))
 
 	upsertResult, err := s.upsertPointsInBatches(ctx, collectionName, points, progressCallback)
 	if err != nil {
