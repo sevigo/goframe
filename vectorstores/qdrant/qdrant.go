@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"math"
+	"math/rand"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,6 +34,7 @@ var (
 	ErrDimensionMismatch     = errors.New("qdrant: vector dimension mismatch")
 	ErrBatchSizeTooLarge     = errors.New("qdrant: batch size exceeds maximum allowed")
 	ErrPartialBatchFailure   = errors.New("qdrant: some batches failed to process")
+	ErrEmbeddingTotalFailure = errors.New("qdrant: all embedding batches failed")
 )
 
 const (
@@ -40,8 +42,9 @@ const (
 	MaxBatchSize          = 1000
 	DefaultMaxConcurrency = 8
 	DefaultRetryAttempts  = 3
-	DefaultRetryDelay     = time.Second
+	DefaultRetryDelay     = 2 * time.Second
 	DefaultMaxRetryDelay  = 30 * time.Second
+	DefaultRetryJitter    = 1 * time.Second
 )
 
 type BatchResult struct {
@@ -59,6 +62,7 @@ type BatchConfig struct {
 	RetryDelay              time.Duration `json:"retry_delay"`
 	MaxRetryDelay           time.Duration `json:"max_retry_delay"`
 	EmbeddingBatchSize      int           `json:"embedding_batch_size,omitempty"`
+	RetryJitter             time.Duration `json:"retry_jitter"`
 	EmbeddingMaxConcurrency int           `json:"embedding_max_concurrency,omitempty"`
 }
 
@@ -90,6 +94,7 @@ func New(opts ...Option) (vectorstores.VectorStore, error) {
 		RetryAttempts:  DefaultRetryAttempts,
 		RetryDelay:     DefaultRetryDelay,
 		MaxRetryDelay:  DefaultMaxRetryDelay,
+		RetryJitter:    DefaultRetryJitter,
 	}
 	store := &Store{
 		client:         client,
@@ -146,6 +151,7 @@ func (s *Store) SetBatchConfig(config BatchConfig) {
 		"retry_attempts", config.RetryAttempts,
 		"retry_delay", config.RetryDelay,
 		"max_retry_delay", config.MaxRetryDelay,
+		"retry_jitter", config.RetryJitter,
 	)
 }
 
@@ -172,41 +178,31 @@ func (s *Store) embedAndCreatePointsInParallel(ctx context.Context, docs []schem
 	totalDocs := len(docs)
 	numBatches := int(math.Ceil(float64(totalDocs) / float64(embeddingBatchSize)))
 
-	// Slices to hold results from each batch, indexed to preserve order safely.
 	pointsByBatch := make([][]*qdrant.PointStruct, numBatches)
 	idsByBatch := make([][]string, numBatches)
+	collectedErrs := make(chan error, numBatches)
 
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, maxConcurrency)
-	errChan := make(chan error, numBatches)
 
-	// Use a cancellable context to stop other workers if one fails.
-	workerCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	// Rate limiting for sequential processing (concurrency = 1)
-	// This is crucial for APIs with requests-per-minute limits like Gemini.
+	// Rate limiting for sequential processing (e.g., Gemini).
 	var rateLimiter *time.Ticker
 	if maxConcurrency == 1 {
-		rateLimiter = time.NewTicker(4 * time.Second)
+		// 5 seconds = 12 RPM, which is safely under the 15 RPM limit.
+		rateLimiter = time.NewTicker(5 * time.Second)
 		defer rateLimiter.Stop()
 	}
 
-BatchLoop:
 	for i := range numBatches {
-		select {
-		case <-workerCtx.Done():
-			break BatchLoop
-		default:
+		if ctx.Err() != nil {
+			break // Respect parent context cancellation
 		}
 
-		// If we are rate-limiting, wait for the timer.
 		if rateLimiter != nil {
 			select {
 			case <-rateLimiter.C:
-				// Continue to next batch
-			case <-workerCtx.Done():
-				break BatchLoop
+			case <-ctx.Done():
+				break
 			}
 		}
 
@@ -217,7 +213,7 @@ BatchLoop:
 			select {
 			case semaphore <- struct{}{}:
 				defer func() { <-semaphore }()
-			case <-workerCtx.Done():
+			case <-ctx.Done():
 				return
 			}
 
@@ -227,8 +223,6 @@ BatchLoop:
 				endIdx = totalDocs
 			}
 			batchDocs := docs[startIdx:endIdx]
-
-			// Embed the current batch of documents with a retry mechanism for transient errors.
 			texts := make([]string, len(batchDocs))
 			for j, doc := range batchDocs {
 				texts[j] = doc.PageContent
@@ -239,44 +233,52 @@ BatchLoop:
 			delay := batchConfig.RetryDelay
 			for attempt := 0; attempt <= batchConfig.RetryAttempts; attempt++ {
 				if attempt > 0 {
-					s.logger.WarnContext(workerCtx, "Retrying embedding for batch due to transient error", "attempt", attempt, "delay", delay, "batch", batchIndex, "error", err)
+					jitter := time.Duration(rand.Intn(int(batchConfig.RetryJitter.Milliseconds()))) * time.Millisecond
+					totalDelay := delay + jitter
+					s.logger.WarnContext(ctx, "Retrying embedding for batch",
+						"attempt", fmt.Sprintf("%d/%d", attempt, batchConfig.RetryAttempts),
+						"delay", totalDelay, "batch", batchIndex, "error", err)
+
 					select {
-					case <-time.After(delay):
+					case <-time.After(totalDelay):
 						delay *= 2 // Exponential backoff
 						if delay > batchConfig.MaxRetryDelay {
 							delay = batchConfig.MaxRetryDelay
 						}
-					case <-workerCtx.Done():
-						err = workerCtx.Err()
-						break
+					case <-ctx.Done():
+						collectedErrs <- ctx.Err()
+						return
 					}
 				}
 
-				vectors, err = s.embedder.EmbedDocuments(workerCtx, texts)
+				vectors, err = s.embedder.EmbedDocuments(ctx, texts)
 				if err == nil {
-					break // Success
+					break
 				}
 
-				// Only retry on specific transient errors (like 500 internal server error).
-				// Do not retry on client errors (4xx).
-				if !strings.Contains(err.Error(), "Error 500") && !strings.Contains(err.Error(), "Status: INTERNAL") {
+				// Only retry on specific transient errors. Fail immediately on others.
+				errStr := err.Error()
+				if !strings.Contains(errStr, "Error 500") &&
+					!strings.Contains(errStr, "Status: INTERNAL") &&
+					!strings.Contains(errStr, "Error 429") &&
+					!strings.Contains(errStr, "RESOURCE_EXHAUSTED") &&
+					!strings.Contains(errStr, "unexpected EOF") {
 					break // Not a retryable error, fail fast.
 				}
 			}
 
+			// If the batch failed after all retries, record the error and stop processing this batch.
 			if err != nil {
-				err = fmt.Errorf("batch %d embedding failed after %d attempts: %w", batchIndex, batchConfig.RetryAttempts, err)
-				s.logger.ErrorContext(workerCtx, "Embedding failed for a batch", "error", err)
-				errChan <- err
-				cancel()
+				finalErr := fmt.Errorf("batch %d embedding failed after %d attempts: %w", batchIndex, batchConfig.RetryAttempts+1, err)
+				s.logger.ErrorContext(ctx, "Permanent embedding failure for batch", "error", finalErr)
+				collectedErrs <- finalErr
 				return
 			}
 
 			if len(vectors) != len(batchDocs) {
-				err = fmt.Errorf("embedder returned %d vectors for %d documents in batch %d", len(vectors), len(batchDocs), batchIndex)
-				s.logger.ErrorContext(workerCtx, "Embedding mismatch for a batch", "error", err)
-				errChan <- err
-				cancel()
+				mismatchErr := fmt.Errorf("embedder returned %d vectors for %d documents in batch %d", len(vectors), len(batchDocs), batchIndex)
+				s.logger.ErrorContext(ctx, "Embedding mismatch for a batch", "error", mismatchErr)
+				collectedErrs <- mismatchErr
 				return
 			}
 
@@ -299,27 +301,31 @@ BatchLoop:
 	}
 
 	wg.Wait()
-	close(errChan)
+	close(collectedErrs)
 
-	var firstErr error
-	for err := range errChan {
-		if firstErr == nil {
-			firstErr = err
-		}
-	}
-	if firstErr != nil {
-		return nil, nil, firstErr
-	}
-
-	if ctx.Err() != nil {
-		return nil, nil, ctx.Err()
-	}
-
+	// Consolidate results and errors.
 	allPoints := make([]*qdrant.PointStruct, 0, totalDocs)
 	allIDs := make([]string, 0, totalDocs)
 	for i := range numBatches {
-		allPoints = append(allPoints, pointsByBatch[i]...)
-		allIDs = append(allIDs, idsByBatch[i]...)
+		if pointsByBatch[i] != nil {
+			allPoints = append(allPoints, pointsByBatch[i]...)
+			allIDs = append(allIDs, idsByBatch[i]...)
+		}
+	}
+
+	var finalErrors []error
+	for err := range collectedErrs {
+		finalErrors = append(finalErrors, err)
+	}
+
+	if len(finalErrors) > 0 {
+		combinedErr := errors.Join(finalErrors...)
+		if len(allPoints) == 0 {
+			s.logger.ErrorContext(ctx, "All embedding batches failed", "errors_count", len(finalErrors))
+			return nil, nil, fmt.Errorf("%w: %w", ErrEmbeddingTotalFailure, combinedErr)
+		}
+		s.logger.WarnContext(ctx, "Partial embedding success", "successful_docs", len(allPoints), "failed_batches", len(finalErrors))
+		return allPoints, allIDs, fmt.Errorf("%w: %w", ErrPartialBatchFailure, combinedErr)
 	}
 
 	return allPoints, allIDs, nil
