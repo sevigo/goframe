@@ -94,9 +94,14 @@ func (g *LLM) GenerateContent(
 		genConfig.Temperature = genai.Ptr(float32(callOpts.Temperature))
 	}
 
-	geminiHistory, _, err := g.convertToGeminiMessages(messages)
+	geminiHistory, systemInstruction, err := g.convertToGeminiMessages(messages)
 	if err != nil {
 		return nil, err
+	}
+
+	// Prepend systemInstruction if it exists
+	if systemInstruction != nil {
+		geminiHistory = append([]*genai.Content{systemInstruction}, geminiHistory...)
 	}
 
 	if len(geminiHistory) == 0 {
@@ -242,7 +247,7 @@ func (g *LLM) convertToGeminiMessages(messages []schema.MessageContent) ([]*gena
 		for _, p := range msg.Parts {
 			switch part := p.(type) {
 			case schema.TextContent:
-				parts = append(parts, genai.NewPartFromText(part.Text))
+				parts = append(parts, genai.NewPartFromText(part.String()))
 			default:
 				return nil, nil, fmt.Errorf("unsupported content part type: %T", part)
 			}
