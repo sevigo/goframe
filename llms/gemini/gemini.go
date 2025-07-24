@@ -55,6 +55,10 @@ func New(ctx context.Context, opts ...Option) (*LLM, error) {
 		return nil, ErrInvalidModel
 	}
 
+	if o.logger == nil {
+		o.logger = slog.Default()
+	}
+
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: o.apiKey})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gemini client: %w", err)
@@ -168,7 +172,7 @@ func (g *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, 
 
 	res, err := g.client.Models.EmbedContent(ctx, g.options.embeddingModel, contents, nil)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrEmbeddings, err)
+		return nil, fmt.Errorf("%s: %w", ErrEmbeddings, err)
 	}
 
 	if len(res.Embeddings) != len(texts) {
@@ -187,7 +191,7 @@ func (g *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	content := genai.NewContentFromText(text, genai.RoleUser)
 	res, err := g.client.Models.EmbedContent(ctx, g.options.embeddingModel, []*genai.Content{content}, nil)
 	if err != nil {
-		return nil, fmt.Errorf("%w for query: %w", ErrEmbeddings, err)
+		return nil, fmt.Errorf("%s for query: %w", ErrEmbeddings, err)
 	}
 
 	if len(res.Embeddings) == 0 || res.Embeddings[0] == nil {
