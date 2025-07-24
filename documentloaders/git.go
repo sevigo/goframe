@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,7 @@ import (
 
 type Loader interface {
 	Load(ctx context.Context) ([]schema.Document, error)
+	LoadAndProcessStream(ctx context.Context, processFn func(ctx context.Context, docs []schema.Document) error) error
 }
 
 // GitLoader loads and processes documents from a git repository on the local file system.
@@ -98,6 +100,73 @@ func NewGit(path string, registry parsers.ParserRegistry, opts ...GitLoaderOptio
 		options:        loaderOpts,
 		logger:         loaderOpts.Logger.With("component", "git_loader"),
 	}
+}
+
+func (g *GitLoader) LoadAndProcessStream(ctx context.Context, processFn func(ctx context.Context, docs []schema.Document) error) error {
+	g.logger.InfoContext(ctx, "Starting repository stream processing", "path", g.path)
+	documentBatch := make([]schema.Document, 0, 256)
+	textParser, _ := g.parserRegistry.GetParser("text")
+
+	err := filepath.WalkDir(g.path, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			g.logger.WarnContext(ctx, "Skipping unreadable path", "path", path, "error", err)
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		if d.IsDir() {
+			dirName := d.Name()
+			if g.options.ExcludeDirs != nil && g.options.ExcludeDirs[dirName] {
+				g.logger.Debug("Skipping user-excluded directory", "path", path)
+				return filepath.SkipDir
+			}
+			if shouldSkipDir(dirName) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		ext := strings.ToLower(filepath.Ext(path))
+		if len(g.options.IncludeExts) > 0 && !g.options.IncludeExts[ext] {
+			return nil
+		}
+		if len(g.options.ExcludeExts) > 0 && g.options.ExcludeExts[ext] {
+			return nil
+		}
+
+		fileInfo, err := d.Info()
+		if err != nil {
+			g.logger.WarnContext(ctx, "Could not get file info, skipping", "path", path, "error", err)
+			return nil
+		}
+		if shouldSkipFile(path, fileInfo) {
+			g.logger.Debug("Skipping excluded file", "path", path, "size", fileInfo.Size())
+			return nil
+		}
+
+		fileDocuments := g.processFile(path, fileInfo, textParser)
+		documentBatch = append(documentBatch, fileDocuments...)
+
+		if len(documentBatch) >= 256 {
+			if err := processFn(ctx, documentBatch); err != nil {
+				return fmt.Errorf("processing function failed for batch: %w", err)
+			}
+			documentBatch = make([]schema.Document, 0, 256) // Reset batch
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if len(documentBatch) > 0 {
+		if err := processFn(ctx, documentBatch); err != nil {
+			return fmt.Errorf("processing function failed for final batch: %w", err)
+		}
+	}
+	g.logger.InfoContext(ctx, "Repository stream processing completed", "path", g.path)
+	return nil
 }
 
 func (g *GitLoader) Load(ctx context.Context) ([]schema.Document, error) {
@@ -219,9 +288,7 @@ func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser sc
 
 func buildChunkMetadata(baseMetadata map[string]any, chunk schema.CodeChunk, chunkIndex, totalChunks int) map[string]any {
 	chunkMetadata := make(map[string]any, len(baseMetadata)+len(chunk.Annotations)+6)
-	for k, v := range baseMetadata {
-		chunkMetadata[k] = v
-	}
+	maps.Copy(chunkMetadata, baseMetadata)
 
 	chunkMetadata["identifier"] = chunk.Identifier
 	chunkMetadata["chunk_type"] = chunk.Type
