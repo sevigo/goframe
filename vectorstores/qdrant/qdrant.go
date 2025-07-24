@@ -184,12 +184,31 @@ func (s *Store) embedAndCreatePointsInParallel(ctx context.Context, docs []schem
 	workerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// Rate limiting for sequential processing (concurrency = 1)
+	// This is crucial for APIs with requests-per-minute limits like Gemini.
+	var rateLimiter <-chan time.Time
+	if maxConcurrency == 1 {
+		// A 4-second delay allows for 15 requests per minute, safe for Gemini's free tier.
+		rateLimiter = time.After(4 * time.Second)
+	}
+
 BatchLoop:
 	for i := range numBatches {
 		select {
 		case <-workerCtx.Done():
 			break BatchLoop
 		default:
+		}
+
+		// If we are rate-limiting, wait for the timer.
+		if rateLimiter != nil {
+			select {
+			case <-rateLimiter:
+				// Reset the timer for the next iteration.
+				rateLimiter = time.After(4 * time.Second)
+			case <-workerCtx.Done():
+				break BatchLoop
+			}
 		}
 
 		wg.Add(1)
