@@ -186,10 +186,10 @@ func (s *Store) embedAndCreatePointsInParallel(ctx context.Context, docs []schem
 
 	// Rate limiting for sequential processing (concurrency = 1)
 	// This is crucial for APIs with requests-per-minute limits like Gemini.
-	var rateLimiter <-chan time.Time
+	var rateLimiter *time.Ticker
 	if maxConcurrency == 1 {
-		// A 4-second delay allows for 15 requests per minute, safe for Gemini's free tier.
-		rateLimiter = time.After(4 * time.Second)
+		rateLimiter = time.NewTicker(4 * time.Second)
+		defer rateLimiter.Stop()
 	}
 
 BatchLoop:
@@ -203,9 +203,8 @@ BatchLoop:
 		// If we are rate-limiting, wait for the timer.
 		if rateLimiter != nil {
 			select {
-			case <-rateLimiter:
-				// Reset the timer for the next iteration.
-				rateLimiter = time.After(4 * time.Second)
+			case <-rateLimiter.C:
+				// Continue to next batch
 			case <-workerCtx.Done():
 				break BatchLoop
 			}
@@ -229,15 +228,44 @@ BatchLoop:
 			}
 			batchDocs := docs[startIdx:endIdx]
 
-			// Embed the current batch of documents.
+			// Embed the current batch of documents with a retry mechanism for transient errors.
 			texts := make([]string, len(batchDocs))
 			for j, doc := range batchDocs {
 				texts[j] = doc.PageContent
 			}
 
-			vectors, err := s.embedder.EmbedDocuments(workerCtx, texts)
+			var vectors [][]float32
+			var err error
+			delay := batchConfig.RetryDelay
+			for attempt := 0; attempt <= batchConfig.RetryAttempts; attempt++ {
+				if attempt > 0 {
+					s.logger.WarnContext(workerCtx, "Retrying embedding for batch due to transient error", "attempt", attempt, "delay", delay, "batch", batchIndex, "error", err)
+					select {
+					case <-time.After(delay):
+						delay *= 2 // Exponential backoff
+						if delay > batchConfig.MaxRetryDelay {
+							delay = batchConfig.MaxRetryDelay
+						}
+					case <-workerCtx.Done():
+						err = workerCtx.Err()
+						break
+					}
+				}
+
+				vectors, err = s.embedder.EmbedDocuments(workerCtx, texts)
+				if err == nil {
+					break // Success
+				}
+
+				// Only retry on specific transient errors (like 500 internal server error).
+				// Do not retry on client errors (4xx).
+				if !strings.Contains(err.Error(), "Error 500") && !strings.Contains(err.Error(), "Status: INTERNAL") {
+					break // Not a retryable error, fail fast.
+				}
+			}
+
 			if err != nil {
-				err = fmt.Errorf("batch %d embedding failed: %w", batchIndex, err)
+				err = fmt.Errorf("batch %d embedding failed after %d attempts: %w", batchIndex, batchConfig.RetryAttempts, err)
 				s.logger.ErrorContext(workerCtx, "Embedding failed for a batch", "error", err)
 				errChan <- err
 				cancel()
