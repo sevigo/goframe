@@ -7,12 +7,13 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/iterator"
-	"google.golang.org/api/option"
+	"google.golang.org/genai"
 
+	"github.com/sevigo/goframe/embeddings"
 	"github.com/sevigo/goframe/llms"
 	"github.com/sevigo/goframe/schema"
 )
@@ -21,17 +22,25 @@ var (
 	ErrNoAPIKey      = errors.New("gemini: API key is required")
 	ErrInvalidModel  = errors.New("gemini: invalid model specified")
 	ErrNoContent     = errors.New("gemini: no content generated")
-	ErrSystemMessage = errors.New("gemini: does not support system messages in the middle of a conversation. Use SystemInstruction option")
+	ErrSystemMessage = errors.New("gemini: system message must be the first message in the conversation")
+	ErrEmbeddings    = errors.New("gemini: failed to generate embeddings")
 )
 
+// LLM implements both the Model and Embedder interfaces for Gemini.
 type LLM struct {
-	client  *genai.GenerativeModel
+	client  *genai.Client
 	options options
 	logger  *slog.Logger
+
+	// dimension is cached after the first call to GetDimension
+	dimension int
+	dimOnce   sync.Once
 }
 
 var _ llms.Model = (*LLM)(nil)
+var _ embeddings.Embedder = (*LLM)(nil)
 
+// New creates a new Gemini LLM client.
 func New(ctx context.Context, opts ...Option) (*LLM, error) {
 	o := applyOptions(opts...)
 
@@ -46,15 +55,13 @@ func New(ctx context.Context, opts ...Option) (*LLM, error) {
 		return nil, ErrInvalidModel
 	}
 
-	client, err := genai.NewClient(ctx, option.WithAPIKey(o.apiKey))
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: o.apiKey})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gemini client: %w", err)
 	}
 
-	modelClient := client.GenerativeModel(o.model)
-
 	llm := &LLM{
-		client:  modelClient,
+		client:  client,
 		options: o,
 		logger:  o.logger.With("component", "gemini_llm", "model", o.model),
 	}
@@ -63,10 +70,12 @@ func New(ctx context.Context, opts ...Option) (*LLM, error) {
 	return llm, nil
 }
 
+// Call is a convenience method for a single-turn conversation.
 func (g *LLM) Call(ctx context.Context, prompt string, options ...llms.CallOption) (string, error) {
 	return llms.GenerateFromSinglePrompt(ctx, g, prompt, options...)
 }
 
+// GenerateContent handles multi-turn conversations and streaming.
 func (g *LLM) GenerateContent(
 	ctx context.Context,
 	messages []schema.MessageContent,
@@ -79,31 +88,23 @@ func (g *LLM) GenerateContent(
 		opt(callOpts)
 	}
 
-	client := g.client
+	// Create the generation configuration for this specific call.
+	genConfig := &genai.GenerateContentConfig{}
 	if callOpts.Temperature > 0 {
-		client.Temperature = new(float32)
-		*client.Temperature = float32(callOpts.Temperature)
+		genConfig.Temperature = genai.Ptr(float32(callOpts.Temperature))
 	}
 
-	history, systemInstruction, err := g.convertToGeminiMessages(messages)
+	geminiHistory, _, err := g.convertToGeminiMessages(messages)
 	if err != nil {
 		return nil, err
 	}
-	if systemInstruction != nil {
-		client.SystemInstruction = systemInstruction
-	}
 
-	if len(history) == 0 {
+	if len(geminiHistory) == 0 {
 		return nil, errors.New("gemini: no messages to send")
 	}
-	prompt := history[len(history)-1]
-	chatHistory := history[:len(history)-1]
-
-	session := client.StartChat()
-	session.History = chatHistory
 
 	if callOpts.StreamingFunc == nil {
-		resp, err := session.SendMessage(ctx, prompt.Parts...)
+		resp, err := g.client.Models.GenerateContent(ctx, g.options.model, geminiHistory, genConfig)
 		duration := time.Since(start)
 		if err != nil {
 			g.logger.ErrorContext(ctx, "Gemini client failed", "error", err, "duration", duration)
@@ -112,12 +113,10 @@ func (g *LLM) GenerateContent(
 		return g.responseToSchema(resp, duration)
 	}
 
-	iter := session.SendMessageStream(ctx, prompt.Parts...)
 	var fullResponse strings.Builder
 	var finalResp *genai.GenerateContentResponse
 
-	for {
-		resp, errStream := iter.Next()
+	for resp, errStream := range g.client.Models.GenerateContentStream(ctx, g.options.model, geminiHistory, genConfig) {
 		if errors.Is(errStream, iterator.Done) {
 			break
 		}
@@ -136,9 +135,9 @@ func (g *LLM) GenerateContent(
 
 	duration := time.Since(start)
 
-	var totalTokens uint32
+	var totalTokens int32
 	if finalResp != nil && finalResp.UsageMetadata != nil {
-		totalTokens = uint32(finalResp.UsageMetadata.TotalTokenCount)
+		totalTokens = finalResp.UsageMetadata.TotalTokenCount
 	}
 
 	return &schema.ContentResponse{
@@ -155,49 +154,107 @@ func (g *LLM) GenerateContent(
 	}, nil
 }
 
+// EmbedDocuments generates embeddings for a slice of texts.
+func (g *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error) {
+	contents := make([]*genai.Content, len(texts))
+	for i, text := range texts {
+		contents[i] = genai.NewContentFromText(text, genai.RoleUser)
+	}
+
+	res, err := g.client.Models.EmbedContent(ctx, g.options.embeddingModel, contents, nil)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrEmbeddings, err)
+	}
+
+	if len(res.Embeddings) != len(texts) {
+		return nil, fmt.Errorf("%w: expected %d embeddings, but got %d", ErrEmbeddings, len(texts), len(res.Embeddings))
+	}
+
+	embeddings := make([][]float32, len(res.Embeddings))
+	for i, e := range res.Embeddings {
+		embeddings[i] = e.Values
+	}
+	return embeddings, nil
+}
+
+// EmbedQuery generates an embedding for a single text query.
+func (g *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	content := genai.NewContentFromText(text, genai.RoleUser)
+	res, err := g.client.Models.EmbedContent(ctx, g.options.embeddingModel, []*genai.Content{content}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("%w for query: %w", ErrEmbeddings, err)
+	}
+
+	if len(res.Embeddings) == 0 || res.Embeddings[0] == nil {
+		return nil, fmt.Errorf("%w: embedding is nil or empty", ErrEmbeddings)
+	}
+	return res.Embeddings[0].Values, nil
+}
+
+// EmbedQueries generates embeddings for multiple queries.
+func (g *LLM) EmbedQueries(ctx context.Context, texts []string) ([][]float32, error) {
+	return g.EmbedDocuments(ctx, texts)
+}
+
+// GetDimension returns the embedding dimension of the model.
+func (g *LLM) GetDimension(ctx context.Context) (int, error) {
+	var err error
+	g.dimOnce.Do(func() {
+		sampleEmbedding, doErr := g.EmbedQuery(ctx, "dimension")
+		if doErr != nil {
+			err = fmt.Errorf("failed to get dimension by embedding sample text: %w", doErr)
+			return
+		}
+		g.dimension = len(sampleEmbedding)
+	})
+
+	if err != nil {
+		g.dimOnce = sync.Once{}
+		return 0, err
+	}
+
+	return g.dimension, nil
+}
+
+// convertToGeminiMessages converts the generic schema to Gemini's native types.
 func (g *LLM) convertToGeminiMessages(messages []schema.MessageContent) ([]*genai.Content, *genai.Content, error) {
 	geminiContents := make([]*genai.Content, 0, len(messages))
 	var systemInstruction *genai.Content
 
 	for i, msg := range messages {
-		var role string
+		var role genai.Role
 		switch msg.Role {
 		case schema.ChatMessageTypeHuman:
-			role = "user"
+			role = genai.RoleUser
 		case schema.ChatMessageTypeAI:
-			role = "model"
+			role = genai.RoleModel
 		case schema.ChatMessageTypeSystem:
-			// System instructions must be at the start.
 			if i == 0 {
-				systemInstruction = &genai.Content{
-					Parts: []genai.Part{genai.Text(msg.GetTextContent())},
-				}
+				systemInstruction = genai.NewContentFromText(msg.GetTextContent(), genai.RoleUser)
 				continue
 			}
 			return nil, nil, ErrSystemMessage
 		default:
-			role = "user"
+			role = genai.RoleUser
 		}
 
-		parts := make([]genai.Part, 0, len(msg.Parts))
+		parts := make([]*genai.Part, 0, len(msg.Parts))
 		for _, p := range msg.Parts {
 			switch part := p.(type) {
 			case schema.TextContent:
-				parts = append(parts, genai.Text(part.Text))
+				parts = append(parts, genai.NewPartFromText(part.Text))
 			default:
 				return nil, nil, fmt.Errorf("unsupported content part type: %T", part)
 			}
 		}
 
-		geminiContents = append(geminiContents, &genai.Content{
-			Role:  role,
-			Parts: parts,
-		})
+		geminiContents = append(geminiContents, genai.NewContentFromParts(parts, role))
 	}
 
 	return geminiContents, systemInstruction, nil
 }
 
+// responseToSchema converts Gemini's response to the generic schema.
 func (g *LLM) responseToSchema(resp *genai.GenerateContentResponse, duration time.Duration) (*schema.ContentResponse, error) {
 	if len(resp.Candidates) == 0 {
 		return nil, ErrNoContent
@@ -209,17 +266,16 @@ func (g *LLM) responseToSchema(resp *genai.GenerateContentResponse, duration tim
 	}
 
 	content := g.extractContentFromResponse(resp)
-
-	var totalTokens uint32
+	var totalTokens int32
 	if resp.UsageMetadata != nil {
-		totalTokens = uint32(resp.UsageMetadata.TotalTokenCount)
+		totalTokens = resp.UsageMetadata.TotalTokenCount
 	}
 
 	return &schema.ContentResponse{
 		Choices: []*schema.ContentChoice{
 			{
 				Content:    content,
-				StopReason: choice.FinishReason.String(),
+				StopReason: string(choice.FinishReason),
 				GenerationInfo: map[string]any{
 					"TotalTokens": totalTokens,
 					"Duration":    duration,
@@ -230,17 +286,16 @@ func (g *LLM) responseToSchema(resp *genai.GenerateContentResponse, duration tim
 	}, nil
 }
 
+// extractContentFromResponse safely extracts the text content from a response.
 func (g *LLM) extractContentFromResponse(resp *genai.GenerateContentResponse) string {
 	var builder strings.Builder
-	if resp == nil || len(resp.Candidates) == 0 {
+	if resp == nil {
 		return ""
 	}
 	for _, cand := range resp.Candidates {
 		if cand.Content != nil {
 			for _, part := range cand.Content.Parts {
-				if txt, ok := part.(genai.Text); ok {
-					builder.WriteString(string(txt))
-				}
+				builder.WriteString(part.Text)
 			}
 		}
 	}
