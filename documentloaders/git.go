@@ -1,11 +1,11 @@
 package documentloaders
 
 import (
-	"maps"
 	"context"
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
