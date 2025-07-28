@@ -1,7 +1,6 @@
 package golang
 
 import (
-	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -9,11 +8,11 @@ import (
 	"strconv"
 	"strings"
 
-	model "github.com/sevigo/goframe/schema"
+	"github.com/sevigo/goframe/schema"
 )
 
-func (p *GoPlugin) Chunk(content string, path string, opts *model.CodeChunkingOptions) ([]model.CodeChunk, error) {
-	var chunks []model.CodeChunk
+func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingOptions) ([]schema.CodeChunk, error) {
+	var chunks []schema.CodeChunk
 
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "", content, parser.ParseComments)
@@ -26,7 +25,7 @@ func (p *GoPlugin) Chunk(content string, path string, opts *model.CodeChunkingOp
 	chunks = append(chunks, p.extractVarConstChunks(content, fset, file)...)
 
 	if len(chunks) == 0 {
-		return nil, errors.New("no semantic chunks found in Go file")
+		return []schema.CodeChunk{}, nil
 	}
 
 	p.logger.Debug("Created chunks for Go file", "count", len(chunks), "path", path)
@@ -42,8 +41,8 @@ func (p *GoPlugin) Chunk(content string, path string, opts *model.CodeChunkingOp
 	return chunks, nil
 }
 
-func (p *GoPlugin) extractFunctionChunks(content string, fset *token.FileSet, file *ast.File) []model.CodeChunk {
-	var chunks []model.CodeChunk
+func (p *GoPlugin) extractFunctionChunks(content string, fset *token.FileSet, file *ast.File) []schema.CodeChunk {
+	var chunks []schema.CodeChunk
 	lines := strings.Split(content, "\n")
 
 	for _, decl := range file.Decls {
@@ -97,7 +96,7 @@ func (p *GoPlugin) extractFunctionChunks(content string, fset *token.FileSet, fi
 			annotations["has_doc"] = "true"
 		}
 
-		chunk := model.CodeChunk{
+		chunk := schema.CodeChunk{
 			Content:       chunkContent,
 			LineStart:     startPos.Line,
 			LineEnd:       endPos.Line,
@@ -133,8 +132,8 @@ func (p *GoPlugin) buildParentContext(file *ast.File, fn *ast.FuncDecl) string {
 	return context.String()
 }
 
-func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *ast.File) []model.CodeChunk {
-	var chunks []model.CodeChunk
+func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *ast.File) []schema.CodeChunk {
+	var chunks []schema.CodeChunk
 	lines := strings.Split(content, "\n")
 
 	for _, decl := range file.Decls {
@@ -215,7 +214,7 @@ func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *
 				annotations["structure_type"] = "alias"
 			}
 
-			chunk := model.CodeChunk{
+			chunk := schema.CodeChunk{
 				Content:     chunkContent,
 				LineStart:   startPos.Line,
 				LineEnd:     endPos.Line,
@@ -235,8 +234,8 @@ func (p *GoPlugin) extractVarConstChunks(
 	content string,
 	fset *token.FileSet,
 	file *ast.File,
-) []model.CodeChunk {
-	var chunks []model.CodeChunk
+) []schema.CodeChunk {
+	var chunks []schema.CodeChunk
 	lines := strings.Split(content, "\n")
 
 	for _, decl := range file.Decls {
@@ -287,7 +286,7 @@ func (p *GoPlugin) createIndividualVarConstChunk(
 	genDecl *ast.GenDecl,
 	fset *token.FileSet,
 	lines []string,
-) *model.CodeChunk {
+) *schema.CodeChunk {
 	spec := genDecl.Specs[0]
 	valSpec, ok := spec.(*ast.ValueSpec)
 	if !ok || len(valSpec.Names) != 1 {
@@ -319,7 +318,7 @@ func (p *GoPlugin) createIndividualVarConstChunk(
 		"end", endPos.Line,
 	)
 
-	return &model.CodeChunk{
+	return &schema.CodeChunk{
 		Content:     chunkContent,
 		LineStart:   startPos.Line,
 		LineEnd:     endPos.Line,
@@ -333,7 +332,7 @@ func (p *GoPlugin) createGroupedVarConstChunk(
 	genDecl *ast.GenDecl,
 	fset *token.FileSet,
 	lines []string,
-) model.CodeChunk {
+) schema.CodeChunk {
 	startPos := fset.Position(genDecl.Pos())
 	endPos := fset.Position(genDecl.End())
 
@@ -353,7 +352,7 @@ func (p *GoPlugin) createGroupedVarConstChunk(
 		annotations["has_doc"] = "true"
 	}
 
-	return model.CodeChunk{
+	return schema.CodeChunk{
 		Content:     chunkContent,
 		LineStart:   startPos.Line,
 		LineEnd:     endPos.Line,

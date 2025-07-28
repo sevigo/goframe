@@ -233,7 +233,8 @@ func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser sc
 		g.logger.Warn("Cannot read file, skipping", "path", path, "error", err)
 		return nil
 	}
-	content := string(contentBytes)
+	// Replace any invalid byte sequences with the Unicode replacement character.
+	content := strings.ToValidUTF8(string(contentBytes), "\uFFFD")
 
 	relPath, err := filepath.Rel(g.path, path)
 	if err != nil {
@@ -259,8 +260,14 @@ func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser sc
 	}
 
 	chunks, err := parser.Chunk(content, path, nil)
-	if err != nil || len(chunks) == 0 {
+	if err != nil {
 		g.logger.Warn("Chunking failed or returned no chunks, treating as single document", "path", path, "parser", parser.Name(), "error", err)
+		return []schema.Document{schema.NewDocument(content, baseMetadata)}
+	}
+	if len(chunks) == 0 {
+		// The parser ran successfully but found no semantic units to chunk.
+		// This is a normal edge case, so we log it at INFO level and use the fallback.
+		g.logger.Info("No semantic chunks found by parser, treating as single document", "path", path, "parser", parser.Name())
 		return []schema.Document{schema.NewDocument(content, baseMetadata)}
 	}
 

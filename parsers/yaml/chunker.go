@@ -28,6 +28,9 @@ type YamlStructure struct {
 
 // Chunk breaks YAML into semantic chunks based on structure and indentation
 func (p *YamlPlugin) Chunk(content string, path string, opts *schema.CodeChunkingOptions) ([]schema.CodeChunk, error) {
+	if opts == nil {
+		opts = &schema.CodeChunkingOptions{}
+	}
 	// Parse YAML to get structure with line information
 	var node yaml.Node
 	if err := yaml.Unmarshal([]byte(content), &node); err != nil {

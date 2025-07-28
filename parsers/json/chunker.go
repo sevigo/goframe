@@ -10,24 +10,30 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 
-	model "github.com/sevigo/goframe/schema"
+	"github.com/sevigo/goframe/schema"
 )
 
 // JSONStructure represents different types of JSON structures
 type JSONStructure struct {
-	Type      string // object, array, primitive
-	Key       string // for object properties
-	Value     any    // the actual JSON value
+	Type      string
+	Key       string
+	Value     any
 	Children  []JSONStructure
-	Path      string // JSON path like "users[0].name"
+	Path      string
 	LineStart int
 	LineEnd   int
 }
 
 // Chunk breaks JSON into semantic chunks based on structure
-func (p *JSONPlugin) Chunk(content string, path string, opts *model.CodeChunkingOptions) ([]model.CodeChunk, error) {
-	// Parse JSON to get structure
-	var data interface{}
+func (p *JSONPlugin) Chunk(content string, path string, opts *schema.CodeChunkingOptions) ([]schema.CodeChunk, error) {
+	if opts == nil {
+		opts = &schema.CodeChunkingOptions{
+			MinCharsPerChunk: 50,
+			MaxLinesPerChunk: 200,
+		}
+	}
+
+	var data any
 	if err := json.Unmarshal([]byte(content), &data); err != nil {
 		// If JSON is invalid, create a single chunk with error info
 		return p.createErrorChunk(content, path, err), nil
@@ -89,9 +95,9 @@ func (p *JSONPlugin) structureToChunks(
 	structure JSONStructure,
 	content,
 	path string,
-	opts *model.CodeChunkingOptions,
-) []model.CodeChunk {
-	var chunks []model.CodeChunk
+	opts *schema.CodeChunkingOptions,
+) []schema.CodeChunk {
+	var chunks []schema.CodeChunk
 	lines := strings.Split(content, "\n")
 
 	// Strategy: Create chunks for top-level objects/arrays and significant nested structures
@@ -109,8 +115,8 @@ func (p *JSONPlugin) structureToChunks(
 }
 
 // chunkObject creates chunks for JSON objects
-func (p *JSONPlugin) chunkObject(structure JSONStructure, content string, lines []string, path string, opts *model.CodeChunkingOptions) []model.CodeChunk {
-	var chunks []model.CodeChunk
+func (p *JSONPlugin) chunkObject(structure JSONStructure, content string, lines []string, path string, opts *schema.CodeChunkingOptions) []schema.CodeChunk {
+	var chunks []schema.CodeChunk
 
 	// For small objects, create a single chunk
 	if len(structure.Children) <= 5 {
@@ -140,9 +146,9 @@ func (p *JSONPlugin) chunkArray(
 	structure JSONStructure,
 	content string,
 	path string,
-	opts *model.CodeChunkingOptions,
-) []model.CodeChunk {
-	var chunks []model.CodeChunk
+	opts *schema.CodeChunkingOptions,
+) []schema.CodeChunk {
+	var chunks []schema.CodeChunk
 
 	// For small arrays, create a single chunk
 	if len(structure.Children) <= 10 {
@@ -173,7 +179,7 @@ func (p *JSONPlugin) chunkArray(
 }
 
 // shouldCreateChunkForProperty determines if a property deserves its own chunk
-func (p *JSONPlugin) shouldCreateChunkForProperty(child JSONStructure, opts *model.CodeChunkingOptions) bool {
+func (p *JSONPlugin) shouldCreateChunkForProperty(child JSONStructure, opts *schema.CodeChunkingOptions) bool {
 	switch child.Type {
 	case "object":
 		// Create chunk for objects with multiple properties
@@ -190,7 +196,7 @@ func (p *JSONPlugin) shouldCreateChunkForProperty(child JSONStructure, opts *mod
 }
 
 // createPropertyChunk creates a chunk for a significant JSON property
-func (p *JSONPlugin) createPropertyChunk(child JSONStructure, _ string, lines []string) *model.CodeChunk {
+func (p *JSONPlugin) createPropertyChunk(child JSONStructure, _ string, lines []string) *schema.CodeChunk {
 	// Find the property in the content
 	propertyContent := p.extractPropertyContent(child)
 	if propertyContent == "" {
@@ -221,7 +227,7 @@ func (p *JSONPlugin) createPropertyChunk(child JSONStructure, _ string, lines []
 		annotations["items_count"] = strconv.Itoa(len(child.Children))
 	}
 
-	return &model.CodeChunk{
+	return &schema.CodeChunk{
 		Content:     propertyContent,
 		LineStart:   startLine,
 		LineEnd:     endLine,
@@ -232,8 +238,7 @@ func (p *JSONPlugin) createPropertyChunk(child JSONStructure, _ string, lines []
 }
 
 // createArraySliceChunk creates a chunk for a slice of array items
-func (p *JSONPlugin) createArraySliceChunk(items []JSONStructure, startIndex int) *model.CodeChunk {
-	// Extract content for this slice (simplified)
+func (p *JSONPlugin) createArraySliceChunk(items []JSONStructure, startIndex int) *schema.CodeChunk {
 	sliceContent := p.extractArraySliceContent(items)
 	if sliceContent == "" {
 		return nil
@@ -243,7 +248,7 @@ func (p *JSONPlugin) createArraySliceChunk(items []JSONStructure, startIndex int
 
 	identifier := fmt.Sprintf("items[%d-%d]", startIndex, startIndex+len(items)-1)
 
-	return &model.CodeChunk{
+	return &schema.CodeChunk{
 		Content:    sliceContent,
 		LineStart:  startLine,
 		LineEnd:    endLine,
@@ -307,13 +312,13 @@ func (p *JSONPlugin) estimateLines(chunkContent string) (int, int) {
 }
 
 // createSingleChunk creates a single chunk for the entire JSON
-func (p *JSONPlugin) createSingleChunk(content string, path string, jsonType string) []model.CodeChunk {
+func (p *JSONPlugin) createSingleChunk(content string, path string, jsonType string) []schema.CodeChunk {
 	lines := strings.Split(content, "\n")
 
 	// Determine identifier from filename or content
 	identifier := p.deriveIdentifier(path, jsonType)
 
-	chunk := model.CodeChunk{
+	chunk := schema.CodeChunk{
 		Content:    content,
 		LineStart:  1,
 		LineEnd:    len(lines),
@@ -325,15 +330,15 @@ func (p *JSONPlugin) createSingleChunk(content string, path string, jsonType str
 		},
 	}
 
-	return []model.CodeChunk{chunk}
+	return []schema.CodeChunk{chunk}
 }
 
 // createErrorChunk creates a chunk for invalid JSON
-func (p *JSONPlugin) createErrorChunk(content string, path string, err error) []model.CodeChunk {
+func (p *JSONPlugin) createErrorChunk(content string, path string, err error) []schema.CodeChunk {
 	lines := strings.Split(content, "\n")
 	identifier := p.deriveIdentifier(path, "invalid")
 
-	chunk := model.CodeChunk{
+	chunk := schema.CodeChunk{
 		Content:    content,
 		LineStart:  1,
 		LineEnd:    len(lines),
@@ -345,7 +350,7 @@ func (p *JSONPlugin) createErrorChunk(content string, path string, err error) []
 		},
 	}
 
-	return []model.CodeChunk{chunk}
+	return []schema.CodeChunk{chunk}
 }
 
 // deriveIdentifier creates an identifier from filename

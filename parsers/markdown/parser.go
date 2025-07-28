@@ -92,6 +92,12 @@ func (p *MarkdownPlugin) convertASTToElements(node ast.Node, source []byte, orig
 
 // nodeToElement converts a goldmark AST node to a MarkdownElement
 func (p *MarkdownPlugin) nodeToElement(node ast.Node, source []byte, originalLines []string, lineOffset int) *MarkdownElement {
+	// TextBlocks are just containers for paragraphs, which are processed individually as separate nodes.
+	// Processing the container itself is redundant and causes noisy warnings for empty TextBlocks.
+	if _, ok := node.(*ast.TextBlock); ok {
+		return nil
+	}
+
 	segment := node.Lines()
 
 	if segment.Len() == 0 {

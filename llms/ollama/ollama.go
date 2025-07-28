@@ -48,23 +48,25 @@ func New(opts ...Option) (*LLM, error) {
 		return nil, ErrInvalidModel
 	}
 
+	llm := &LLM{
+		options: o,
+		logger:  o.logger.With("component", "ollama_llm", "model", o.model),
+	}
+
 	var client *ollamaclient.Client
 	var err error
 
 	if o.ollamaServerURL != nil {
-		client, err = ollamaclient.NewClient(o.ollamaServerURL, o.httpClient)
+		client, err = ollamaclient.NewClient(o.ollamaServerURL, o.httpClient, llm.logger)
 	} else {
-		client, err = ollamaclient.NewDefaultClient()
+		client, err = ollamaclient.NewDefaultClient(llm.logger)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ollama client: %w", err)
 	}
 
-	llm := &LLM{
-		client:  client,
-		options: o,
-		logger:  o.logger.With("component", "ollama_llm", "model", o.model),
-	}
+	// Step 3: Assign the fully initialized client back to the LLM struct.
+	llm.client = client
 
 	llm.logger.Info("Ollama LLM initialized successfully")
 	return llm, nil

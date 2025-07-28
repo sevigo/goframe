@@ -11,6 +11,12 @@ import (
 
 // Chunk breaks PDF content into semantic chunks
 func (p *PDFPlugin) Chunk(_ string, filePath string, opts *internal_model.CodeChunkingOptions) ([]internal_model.CodeChunk, error) {
+	if opts == nil {
+		opts = &internal_model.CodeChunkingOptions{
+			MinCharsPerChunk: 30,  // Default minimum characters for a valid paragraph.
+			MaxLinesPerChunk: 500, // Default max lines for an oversized chunk.
+		}
+	}
 	p.logger.Debug("PDF Chunking called", "path", filePath)
 
 	pageTextResults, err := p.extractTextFromPDF(filePath)

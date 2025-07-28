@@ -70,8 +70,11 @@ func (c *Client) streamRequest(ctx context.Context, method, path string, reqData
 	defer bufferPool.Put(buf)
 
 	encoder := json.NewEncoder(buf)
-	if err := encoder.Encode(reqData); err != nil {
-		return fmt.Errorf("marshal request body: %w", err)
+	if reqData != nil {
+		if err := encoder.Encode(reqData); err != nil {
+			c.logger.Debug("error marshalling request body", "error", err)
+			return fmt.Errorf("marshal request body: %w", err)
+		}
 	}
 
 	requestURL := c.baseURL.JoinPath(path)
@@ -91,6 +94,12 @@ func (c *Client) streamRequest(ctx context.Context, method, path string, reqData
 
 	if resp.StatusCode >= http.StatusBadRequest {
 		body, _ := io.ReadAll(resp.Body)
+		c.logger.Error("Ollama API stream request failed",
+			"status", resp.StatusCode,
+			"method", method,
+			"url", requestURL.String(),
+			"response_body", string(body),
+		)
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 

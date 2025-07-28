@@ -4,13 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/ollama/ollama/api"
@@ -24,22 +23,10 @@ const (
 type Client struct {
 	baseURL    *url.URL
 	httpClient *http.Client
+	logger     *slog.Logger
 }
 
-var jsonBufferPool = sync.Pool{
-	New: func() any {
-		return new(bytes.Buffer)
-	},
-}
-
-type closerFunc func()
-
-func (f closerFunc) Close() error {
-	f()
-	return nil
-}
-
-func NewClient(baseURL *url.URL, httpClient *http.Client) (*Client, error) {
+func NewClient(baseURL *url.URL, httpClient *http.Client, logger *slog.Logger) (*Client, error) {
 	if baseURL == nil {
 		var err error
 		baseURL, err = getDefaultURL()
@@ -61,14 +48,19 @@ func NewClient(baseURL *url.URL, httpClient *http.Client) (*Client, error) {
 		}
 	}
 
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	return &Client{
 		baseURL:    baseURL,
 		httpClient: httpClient,
+		logger:     logger,
 	}, nil
 }
 
-func NewDefaultClient() (*Client, error) {
-	return NewClient(nil, nil)
+func NewDefaultClient(logger *slog.Logger) (*Client, error) {
+	return NewClient(nil, nil, logger)
 }
 
 func getDefaultURL() (*url.URL, error) {
@@ -141,15 +133,17 @@ func (c *Client) GetHTTPClient() *http.Client {
 }
 
 func (c *Client) doRequest(ctx context.Context, method, path string, reqData, respData any) error {
-	reqBody, err := c.prepareRequestBody(reqData)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if closer, ok := reqBody.(io.Closer); ok {
-			_ = closer.Close()
+	var reqBody io.Reader
+	var bodyBytes []byte
+	var err error
+
+	if reqData != nil {
+		bodyBytes, err = json.Marshal(reqData)
+		if err != nil {
+			return fmt.Errorf("failed to encode request data: %w", err)
 		}
-	}()
+		reqBody = bytes.NewBuffer(bodyBytes)
+	}
 
 	request, err := c.buildRequest(ctx, method, path, reqBody)
 	if err != nil {
@@ -174,29 +168,6 @@ func (c *Client) doRequest(ctx context.Context, method, path string, reqData, re
 	}
 
 	return nil
-}
-
-func (c *Client) prepareRequestBody(reqData any) (io.Reader, error) {
-	buf, ok := jsonBufferPool.Get().(*bytes.Buffer)
-	if !ok {
-		return nil, errors.New("failed get data from buffer")
-	}
-	buf.Reset()
-
-	if err := json.NewEncoder(buf).Encode(reqData); err != nil {
-		jsonBufferPool.Put(buf)
-		return nil, fmt.Errorf("failed to encode request data: %w", err)
-	}
-
-	return struct {
-		io.Reader
-		io.Closer
-	}{
-		Reader: buf,
-		Closer: closerFunc(func() {
-			jsonBufferPool.Put(buf)
-		}),
-	}, nil
 }
 
 func (c *Client) buildRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
@@ -224,9 +195,25 @@ func (c *Client) checkError(response *http.Response) error {
 		Error string `json:"error"`
 	}
 
-	if err := json.NewDecoder(response.Body).Decode(&apiError); err != nil {
+	bodyBytes, _ := io.ReadAll(response.Body)
+	response.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+	if err := json.NewDecoder(bytes.NewBuffer(bodyBytes)).Decode(&apiError); err != nil {
+		c.logger.Error("Ollama API request failed with non-JSON error response",
+			"status", response.StatusCode,
+			"method", response.Request.Method,
+			"url", response.Request.URL.String(),
+			"response_body", string(bodyBytes),
+		)
 		return fmt.Errorf("ollama API error (status %d): %s", response.StatusCode, http.StatusText(response.StatusCode))
 	}
+
+	c.logger.Error("Ollama API request failed",
+		"status", response.StatusCode,
+		"method", response.Request.Method,
+		"url", response.Request.URL.String(),
+		"ollama_error", apiError.Error,
+	)
 
 	return fmt.Errorf("ollama API error (status %d): %s", response.StatusCode, apiError.Error)
 }
