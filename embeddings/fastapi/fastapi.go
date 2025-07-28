@@ -110,8 +110,7 @@ func (e *Embedder) EmbedQuery(ctx context.Context, text string) ([]float32, erro
 	if text == "" {
 		return nil, embeddings.ErrEmptyText
 	}
-	// Note: Your Python script doesn't differentiate between query and passage,
-	// so we can use the same EmbedDocuments method.
+
 	results, err := e.EmbedDocuments(ctx, []string{text})
 	if err != nil {
 		return nil, err
