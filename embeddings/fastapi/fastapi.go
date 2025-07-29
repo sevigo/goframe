@@ -30,6 +30,7 @@ type Embedder struct {
 	httpClient *http.Client
 	logger     *slog.Logger
 	task       string
+	apiKey     string
 
 	// Cached dimension
 	dimension int
@@ -55,6 +56,7 @@ func New(serverURL string, opts ...Option) (embeddings.Embedder, error) {
 		httpClient: options.httpClient,
 		logger:     options.logger.With("component", "fastapi_embedder"),
 		task:       options.task,
+		apiKey:     options.apiKey,
 	}, nil
 }
 
@@ -81,6 +83,9 @@ func (e *Embedder) EmbedDocuments(ctx context.Context, texts []string) ([][]floa
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	if e.apiKey != "" {
+		req.Header.Set("X-Api-Key", e.apiKey)
+	}
 
 	resp, err := e.httpClient.Do(req)
 	if err != nil {

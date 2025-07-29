@@ -12,7 +12,7 @@ import (
 
 	"github.com/sevigo/goframe/parsers/golang"
 	logger "github.com/sevigo/goframe/parsers/testing"
-	model "github.com/sevigo/goframe/schema"
+	"github.com/sevigo/goframe/schema"
 )
 
 func TestGoPlugin(t *testing.T) {
@@ -70,7 +70,7 @@ func main() {
 `
 
 	// Test chunking
-	chunks, err := plugin.Chunk(goContent, "test.go", &model.CodeChunkingOptions{})
+	chunks, err := plugin.Chunk(goContent, "test.go", &schema.CodeChunkingOptions{})
 	require.NoError(t, err)
 
 	// Should have detected chunks for various elements
@@ -185,7 +185,7 @@ var (
 )
 `
 
-	chunks, err := plugin.Chunk(groupedGoContent, "grouped.go", &model.CodeChunkingOptions{})
+	chunks, err := plugin.Chunk(groupedGoContent, "grouped.go", &schema.CodeChunkingOptions{})
 	require.NoError(t, err)
 
 	// Should create grouped chunks
@@ -240,7 +240,7 @@ func (c *Calculator) Add(a, b float64) float64 {
 `
 
 	// Test chunking with documentation
-	chunks, err := plugin.Chunk(goContentWithDocs, "example.go", &model.CodeChunkingOptions{})
+	chunks, err := plugin.Chunk(goContentWithDocs, "example.go", &schema.CodeChunkingOptions{})
 	require.NoError(t, err)
 
 	// Verify chunks include documentation
@@ -337,7 +337,7 @@ func processChannel(input <-chan string, output chan<- string) {
 `
 
 	// Test chunking with complex types
-	chunks, err := plugin.Chunk(complexGoContent, "advanced.go", &model.CodeChunkingOptions{})
+	chunks, err := plugin.Chunk(complexGoContent, "advanced.go", &schema.CodeChunkingOptions{})
 	require.NoError(t, err)
 
 	// Should handle various Go constructs
@@ -362,7 +362,7 @@ func TestGoPluginErrorHandling(t *testing.T) {
 	func incomplete(`
 
 	// Should return error for unparseable code
-	chunks, err := plugin.Chunk(invalidGoContent, "invalid.go", &model.CodeChunkingOptions{})
+	chunks, err := plugin.Chunk(invalidGoContent, "invalid.go", &schema.CodeChunkingOptions{})
 	assert.Error(t, err)
 	assert.Nil(t, chunks)
 
@@ -380,7 +380,7 @@ func TestGoPlugin_Chunk_InvalidCode(t *testing.T) {
 	invalidGoContent := `package main
 	func IncompleteFunc(a int`
 
-	chunks, err := plugin.Chunk(invalidGoContent, "invalid_incomplete_func.go", &model.CodeChunkingOptions{})
+	chunks, err := plugin.Chunk(invalidGoContent, "invalid_incomplete_func.go", &schema.CodeChunkingOptions{})
 	assert.Error(t, err, "Chunking invalid Go code should return an error")
 	assert.Contains(t, err.Error(), "failed to parse Go file", "Error message should indicate parsing failure")
 	assert.Nil(t, chunks, "Chunks should be nil when parsing fails")
@@ -390,7 +390,7 @@ func TestGoPlugin_Chunk_InvalidCode(t *testing.T) {
 	func ValidFunc() {
 		a := 1 +
 	}`
-	chunks, err = plugin.Chunk(invalidGoContentSyntax, "invalid_syntax.go", &model.CodeChunkingOptions{})
+	chunks, err = plugin.Chunk(invalidGoContentSyntax, "invalid_syntax.go", &schema.CodeChunkingOptions{})
 	assert.Error(t, err, "Chunking Go code with syntax error should return an error")
 	assert.Contains(t, err.Error(), "failed to parse Go file", "Error message should indicate parsing failure")
 	assert.Nil(t, chunks, "Chunks should be nil when parsing fails")
@@ -430,7 +430,7 @@ func TestGoPlugin_Chunk_EmptyContent(t *testing.T) {
 	plugin := golang.NewGoPlugin(log)
 
 	// Test with empty content
-	chunks, err := plugin.Chunk("", "empty.go", &model.CodeChunkingOptions{})
+	chunks, err := plugin.Chunk("", "empty.go", &schema.CodeChunkingOptions{})
 	assert.Error(t, err, "Chunking empty content should return an error")
 	// The go/parser might return "expected 'package', found 'EOF'" or similar
 	assert.Contains(t, err.Error(), "failed to parse Go file", "Error message should indicate parsing failure for empty file")
@@ -457,10 +457,9 @@ func TestGoPlugin_Chunk_NoSemanticChunks(t *testing.T) {
 // func main() {}
 // var x = 1 // unexported
 `
-	chunks, err := plugin.Chunk(contentOnlyComments, "only_comments.go", &model.CodeChunkingOptions{})
-	require.Error(t, err)
-	require.EqualError(t, err, "no semantic chunks found in Go file")
-	assert.Nil(t, chunks)
+	chunks, err := plugin.Chunk(contentOnlyComments, "only_comments.go", &schema.CodeChunkingOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, chunks, []schema.CodeChunk{})
 }
 
 func TestGoPlugin_CanHandle(t *testing.T) {

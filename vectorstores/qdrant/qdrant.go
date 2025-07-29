@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"sync"
@@ -66,6 +66,19 @@ type BatchConfig struct {
 	EmbeddingMaxConcurrency int           `json:"embedding_max_concurrency,omitempty"`
 }
 
+type embeddingBatchProcessor struct {
+	store       *Store
+	batchConfig BatchConfig
+	logger      *slog.Logger
+}
+
+type embeddingBatchResult struct {
+	batchIndex int
+	points     []*qdrant.PointStruct
+	ids        []string
+	err        error
+}
+
 type Store struct {
 	client         *qdrant.Client
 	embedder       embeddings.Embedder
@@ -83,11 +96,13 @@ func New(opts ...Option) (vectorstores.VectorStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid options: %w", err)
 	}
+
 	logger := storeOptions.logger.With("component", "qdrant_store", "collection", storeOptions.collectionName)
 	client, err := createQdrantClient(storeOptions, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Qdrant client: %w", err)
 	}
+
 	batchConfig := BatchConfig{
 		BatchSize:      DefaultBatchSize,
 		MaxConcurrency: DefaultMaxConcurrency,
@@ -96,6 +111,7 @@ func New(opts ...Option) (vectorstores.VectorStore, error) {
 		MaxRetryDelay:  DefaultMaxRetryDelay,
 		RetryJitter:    DefaultRetryJitter,
 	}
+
 	store := &Store{
 		client:         client,
 		embedder:       storeOptions.embedder,
@@ -104,7 +120,11 @@ func New(opts ...Option) (vectorstores.VectorStore, error) {
 		options:        storeOptions,
 		batchConfig:    batchConfig,
 	}
-	logger.Info("Qdrant store initialized successfully", "config", storeOptions.String(), "batch_config", fmt.Sprintf("%+v", batchConfig))
+
+	logger.Info("Qdrant store initialized successfully",
+		"config", storeOptions.String(),
+		"batch_config", batchConfig,
+	)
 	return store, nil
 }
 
@@ -112,6 +132,11 @@ func (s *Store) SetBatchConfig(config BatchConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.batchConfig = s.validateAndNormalizeBatchConfig(config)
+	s.logBatchConfigUpdate(s.batchConfig)
+}
+
+func (s *Store) validateAndNormalizeBatchConfig(config BatchConfig) BatchConfig {
 	// Validate and set primary config
 	if config.BatchSize <= 0 {
 		config.BatchSize = DefaultBatchSize
@@ -142,7 +167,10 @@ func (s *Store) SetBatchConfig(config BatchConfig) {
 		config.MaxRetryDelay = DefaultMaxRetryDelay
 	}
 
-	s.batchConfig = config
+	return config
+}
+
+func (s *Store) logBatchConfigUpdate(config BatchConfig) {
 	s.logger.Info("Batch configuration updated",
 		"batch_size", config.BatchSize,
 		"max_concurrency", config.MaxConcurrency,
@@ -163,168 +191,277 @@ func (s *Store) embedAndCreatePointsInParallel(ctx context.Context, docs []schem
 		return nil, nil, ErrMissingEmbedder
 	}
 
-	batchConfig := s.GetBatchConfig()
-
-	embeddingBatchSize := batchConfig.EmbeddingBatchSize
-	if embeddingBatchSize <= 0 {
-		embeddingBatchSize = batchConfig.BatchSize
+	processor := &embeddingBatchProcessor{
+		store:       s,
+		batchConfig: s.GetBatchConfig(),
+		logger:      s.logger,
 	}
 
-	maxConcurrency := batchConfig.EmbeddingMaxConcurrency
-	if maxConcurrency <= 0 {
-		maxConcurrency = batchConfig.MaxConcurrency
-	}
+	return processor.processBatches(ctx, docs)
+}
+
+func (p *embeddingBatchProcessor) processBatches(ctx context.Context, docs []schema.Document) ([]*qdrant.PointStruct, []string, error) {
+	embeddingBatchSize := p.getEffectiveEmbeddingBatchSize()
+	maxConcurrency := p.getEffectiveMaxConcurrency()
 
 	totalDocs := len(docs)
 	numBatches := int(math.Ceil(float64(totalDocs) / float64(embeddingBatchSize)))
 
-	pointsByBatch := make([][]*qdrant.PointStruct, numBatches)
-	idsByBatch := make([][]string, numBatches)
-	collectedErrs := make(chan error, numBatches)
-
-	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, maxConcurrency)
-
-	// Rate limiting for sequential processing (e.g., Gemini).
-	var rateLimiter *time.Ticker
-	if maxConcurrency == 1 {
-		// 5 seconds = 12 RPM, which is safely under the 15 RPM limit.
-		rateLimiter = time.NewTicker(5 * time.Second)
+	results := make([]embeddingBatchResult, numBatches)
+	rateLimiter := p.createRateLimiterIfNeeded(maxConcurrency)
+	if rateLimiter != nil {
 		defer rateLimiter.Stop()
 	}
 
-	for i := range numBatches {
+	err := p.processAllBatches(ctx, docs, embeddingBatchSize, maxConcurrency, rateLimiter, results)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return p.consolidateResults(ctx, results, totalDocs)
+}
+
+func (p *embeddingBatchProcessor) getEffectiveEmbeddingBatchSize() int {
+	if p.batchConfig.EmbeddingBatchSize <= 0 {
+		return p.batchConfig.BatchSize
+	}
+	return p.batchConfig.EmbeddingBatchSize
+}
+
+func (p *embeddingBatchProcessor) getEffectiveMaxConcurrency() int {
+	if p.batchConfig.EmbeddingMaxConcurrency <= 0 {
+		return p.batchConfig.MaxConcurrency
+	}
+	return p.batchConfig.EmbeddingMaxConcurrency
+}
+
+func (p *embeddingBatchProcessor) createRateLimiterIfNeeded(maxConcurrency int) *time.Ticker {
+	// Rate limiting for sequential processing (e.g., Gemini).
+	if maxConcurrency == 1 {
+		// 5 seconds = 12 RPM, which is safely under the 15 RPM limit.
+		return time.NewTicker(5 * time.Second)
+	}
+	return nil
+}
+
+func (p *embeddingBatchProcessor) processAllBatches(
+	ctx context.Context,
+	docs []schema.Document,
+	embeddingBatchSize, maxConcurrency int,
+	rateLimiter *time.Ticker,
+	results []embeddingBatchResult,
+) error {
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, maxConcurrency)
+
+	for i := range results {
 		if ctx.Err() != nil {
-			break // Respect parent context cancellation
+			break
 		}
 
-		if rateLimiter != nil {
-			select {
-			case <-rateLimiter.C:
-			case <-ctx.Done():
-				break
-			}
+		if err := p.waitForRateLimit(ctx, rateLimiter); err != nil {
+			return err
 		}
 
 		wg.Add(1)
-		go func(batchIndex int) {
-			defer wg.Done()
-
-			select {
-			case semaphore <- struct{}{}:
-				defer func() { <-semaphore }()
-			case <-ctx.Done():
-				return
-			}
-
-			startIdx := batchIndex * embeddingBatchSize
-			endIdx := startIdx + embeddingBatchSize
-			if endIdx > totalDocs {
-				endIdx = totalDocs
-			}
-			batchDocs := docs[startIdx:endIdx]
-			texts := make([]string, len(batchDocs))
-			for j, doc := range batchDocs {
-				texts[j] = doc.PageContent
-			}
-
-			var vectors [][]float32
-			var err error
-			delay := batchConfig.RetryDelay
-			for attempt := 0; attempt <= batchConfig.RetryAttempts; attempt++ {
-				if attempt > 0 {
-					jitter := time.Duration(rand.Intn(int(batchConfig.RetryJitter.Milliseconds()))) * time.Millisecond
-					totalDelay := delay + jitter
-					s.logger.WarnContext(ctx, "Retrying embedding for batch",
-						"attempt", fmt.Sprintf("%d/%d", attempt, batchConfig.RetryAttempts),
-						"delay", totalDelay, "batch", batchIndex, "error", err)
-
-					select {
-					case <-time.After(totalDelay):
-						delay *= 2 // Exponential backoff
-						if delay > batchConfig.MaxRetryDelay {
-							delay = batchConfig.MaxRetryDelay
-						}
-					case <-ctx.Done():
-						collectedErrs <- ctx.Err()
-						return
-					}
-				}
-
-				vectors, err = s.embedder.EmbedDocuments(ctx, texts)
-				if err == nil {
-					break
-				}
-
-				// Only retry on specific transient errors. Fail immediately on others.
-				errStr := err.Error()
-				if !strings.Contains(errStr, "Error 500") &&
-					!strings.Contains(errStr, "Status: INTERNAL") &&
-					!strings.Contains(errStr, "Error 429") &&
-					!strings.Contains(errStr, "RESOURCE_EXHAUSTED") &&
-					!strings.Contains(errStr, "unexpected EOF") {
-					break // Not a retryable error, fail fast.
-				}
-			}
-
-			// If the batch failed after all retries, record the error and stop processing this batch.
-			if err != nil {
-				finalErr := fmt.Errorf("batch %d embedding failed after %d attempts: %w", batchIndex, batchConfig.RetryAttempts+1, err)
-				s.logger.ErrorContext(ctx, "Permanent embedding failure for batch", "error", finalErr)
-				collectedErrs <- finalErr
-				return
-			}
-
-			if len(vectors) != len(batchDocs) {
-				mismatchErr := fmt.Errorf("embedder returned %d vectors for %d documents in batch %d", len(vectors), len(batchDocs), batchIndex)
-				s.logger.ErrorContext(ctx, "Embedding mismatch for a batch", "error", mismatchErr)
-				collectedErrs <- mismatchErr
-				return
-			}
-
-			// Create Qdrant points for the successful batch.
-			batchPoints := make([]*qdrant.PointStruct, len(batchDocs))
-			batchIDs := make([]string, len(batchDocs))
-			for j, doc := range batchDocs {
-				docID := s.generateDocumentID(doc)
-				batchIDs[j] = docID
-				batchPoints[j] = &qdrant.PointStruct{
-					Id:      &qdrant.PointId{PointIdOptions: &qdrant.PointId_Uuid{Uuid: docID}},
-					Vectors: &qdrant.Vectors{VectorsOptions: &qdrant.Vectors_Vector{Vector: &qdrant.Vector{Data: vectors[j]}}},
-					Payload: s.documentToPayload(doc),
-				}
-			}
-
-			pointsByBatch[batchIndex] = batchPoints
-			idsByBatch[batchIndex] = batchIDs
-		}(i)
+		go p.processSingleBatch(ctx, docs, i, embeddingBatchSize, &wg, semaphore, results)
 	}
 
 	wg.Wait()
-	close(collectedErrs)
+	return nil
+}
 
-	// Consolidate results and errors.
-	allPoints := make([]*qdrant.PointStruct, 0, totalDocs)
-	allIDs := make([]string, 0, totalDocs)
-	for i := range numBatches {
-		if pointsByBatch[i] != nil {
-			allPoints = append(allPoints, pointsByBatch[i]...)
-			allIDs = append(allIDs, idsByBatch[i]...)
+func (p *embeddingBatchProcessor) waitForRateLimit(ctx context.Context, rateLimiter *time.Ticker) error {
+	if rateLimiter == nil {
+		return nil
+	}
+
+	select {
+	case <-rateLimiter.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (p *embeddingBatchProcessor) processSingleBatch(
+	ctx context.Context,
+	docs []schema.Document,
+	batchIndex, embeddingBatchSize int,
+	wg *sync.WaitGroup,
+	semaphore chan struct{},
+	results []embeddingBatchResult,
+) {
+	defer wg.Done()
+
+	// Initialize result with batch index
+	result := embeddingBatchResult{batchIndex: batchIndex}
+
+	select {
+	case semaphore <- struct{}{}:
+		defer func() { <-semaphore }()
+	case <-ctx.Done():
+		result.err = ctx.Err()
+		results[batchIndex] = result
+		return
+	}
+
+	batchDocs := p.extractBatchDocuments(docs, batchIndex, embeddingBatchSize)
+	vectors, err := p.embedBatchWithRetry(ctx, batchDocs, batchIndex)
+	if err != nil {
+		result.err = err
+		results[batchIndex] = result
+		return
+	}
+
+	if len(vectors) != len(batchDocs) {
+		mismatchErr := fmt.Errorf("embedder returned %d vectors for %d documents in batch %d",
+			len(vectors), len(batchDocs), batchIndex)
+		p.logger.ErrorContext(ctx, "Embedding mismatch for a batch", "error", mismatchErr)
+		result.err = mismatchErr
+		results[batchIndex] = result
+		return
+	}
+
+	// Successful batch processing
+	points, ids := p.createQdrantPoints(batchDocs, vectors)
+	result.points = points
+	result.ids = ids
+	result.err = nil
+	results[batchIndex] = result
+}
+
+func (p *embeddingBatchProcessor) extractBatchDocuments(docs []schema.Document, batchIndex, embeddingBatchSize int) []schema.Document {
+	totalDocs := len(docs)
+	startIdx := batchIndex * embeddingBatchSize
+	endIdx := startIdx + embeddingBatchSize
+	if endIdx > totalDocs {
+		endIdx = totalDocs
+	}
+	return docs[startIdx:endIdx]
+}
+
+func (p *embeddingBatchProcessor) embedBatchWithRetry(ctx context.Context, batchDocs []schema.Document, batchIndex int) ([][]float32, error) {
+	texts := make([]string, len(batchDocs))
+	for j, doc := range batchDocs {
+		texts[j] = doc.PageContent
+	}
+
+	var vectors [][]float32
+	var err error
+	delay := p.batchConfig.RetryDelay
+
+	for attempt := 0; attempt <= p.batchConfig.RetryAttempts; attempt++ {
+		if attempt > 0 {
+			if retryErr := p.waitForRetryDelay(ctx, delay, attempt, batchIndex, err); retryErr != nil {
+				return nil, retryErr
+			}
+			delay = p.calculateNextDelay(delay)
+		}
+
+		vectors, err = p.store.embedder.EmbedDocuments(ctx, texts)
+		if err == nil {
+			break
+		}
+
+		if !p.isRetryableError(err) {
+			break
 		}
 	}
 
+	if err != nil {
+		finalErr := fmt.Errorf("batch %d embedding failed after %d attempts: %w",
+			batchIndex, p.batchConfig.RetryAttempts+1, err)
+		p.logger.ErrorContext(ctx, "Permanent embedding failure for batch", "error", finalErr)
+		return nil, finalErr
+	}
+
+	return vectors, nil
+}
+
+func (p *embeddingBatchProcessor) waitForRetryDelay(ctx context.Context, delay time.Duration, attempt, batchIndex int, err error) error {
+	jitter := time.Duration(rand.IntN(int(p.batchConfig.RetryJitter.Milliseconds()))) * time.Millisecond //nolint:gosec //G404
+	totalDelay := delay + jitter
+
+	p.logger.WarnContext(ctx, "Retrying embedding for batch",
+		"attempt", fmt.Sprintf("%d/%d", attempt, p.batchConfig.RetryAttempts),
+		"delay", totalDelay, "batch", batchIndex, "error", err)
+
+	select {
+	case <-time.After(totalDelay):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (p *embeddingBatchProcessor) calculateNextDelay(delay time.Duration) time.Duration {
+	delay *= 2 // Exponential backoff
+	if delay > p.batchConfig.MaxRetryDelay {
+		delay = p.batchConfig.MaxRetryDelay
+	}
+	return delay
+}
+
+func (p *embeddingBatchProcessor) isRetryableError(err error) bool {
+	errStr := err.Error()
+	retryableErrors := []string{
+		"Error 500",
+		"Status: INTERNAL",
+		"Error 429",
+		"RESOURCE_EXHAUSTED",
+		"unexpected EOF",
+	}
+
+	for _, retryableErr := range retryableErrors {
+		if strings.Contains(errStr, retryableErr) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *embeddingBatchProcessor) createQdrantPoints(batchDocs []schema.Document, vectors [][]float32) ([]*qdrant.PointStruct, []string) {
+	batchPoints := make([]*qdrant.PointStruct, len(batchDocs))
+	batchIDs := make([]string, len(batchDocs))
+
+	for j, doc := range batchDocs {
+		docID := p.store.generateDocumentID(doc)
+		batchIDs[j] = docID
+		batchPoints[j] = &qdrant.PointStruct{
+			Id:      &qdrant.PointId{PointIdOptions: &qdrant.PointId_Uuid{Uuid: docID}},
+			Vectors: &qdrant.Vectors{VectorsOptions: &qdrant.Vectors_Vector{Vector: &qdrant.Vector{Data: vectors[j]}}},
+			Payload: p.store.documentToPayload(doc),
+		}
+	}
+
+	return batchPoints, batchIDs
+}
+
+func (p *embeddingBatchProcessor) consolidateResults(ctx context.Context, results []embeddingBatchResult, totalDocs int) ([]*qdrant.PointStruct, []string, error) {
+	allPoints := make([]*qdrant.PointStruct, 0, totalDocs)
+	allIDs := make([]string, 0, totalDocs)
 	var finalErrors []error
-	for err := range collectedErrs {
-		finalErrors = append(finalErrors, err)
+
+	for _, result := range results {
+		if result.err != nil {
+			finalErrors = append(finalErrors, result.err)
+			continue
+		}
+		if result.points != nil {
+			allPoints = append(allPoints, result.points...)
+			allIDs = append(allIDs, result.ids...)
+		}
 	}
 
 	if len(finalErrors) > 0 {
 		combinedErr := errors.Join(finalErrors...)
 		if len(allPoints) == 0 {
-			s.logger.ErrorContext(ctx, "All embedding batches failed", "errors_count", len(finalErrors))
+			p.logger.ErrorContext(ctx, "All embedding batches failed", "errors_count", len(finalErrors))
 			return nil, nil, fmt.Errorf("%w: %w", ErrEmbeddingTotalFailure, combinedErr)
 		}
-		s.logger.WarnContext(ctx, "Partial embedding success", "successful_docs", len(allPoints), "failed_batches", len(finalErrors))
+		p.logger.WarnContext(ctx, "Partial embedding success",
+			"successful_docs", len(allPoints), "failed_batches", len(finalErrors))
 		return allPoints, allIDs, fmt.Errorf("%w: %w", ErrPartialBatchFailure, combinedErr)
 	}
 
