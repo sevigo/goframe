@@ -189,7 +189,7 @@ func (p *YamlPlugin) chunkSequence(structure YamlStructure, content string, path
 	}
 
 	// For large sequences, create chunks for groups of items
-	chunkSize := 10
+	chunkSize := 50
 	for i := 0; i < len(structure.Children); i += chunkSize {
 		end := i + chunkSize
 		if end > len(structure.Children) {

@@ -325,8 +325,8 @@ func (p *MarkdownPlugin) shouldSeparateCodeBlock(element *MarkdownElement) bool 
 		contentLines = len(lines) - 2
 	}
 
-	// Separate if code block is large (>15 lines of actual content)
-	if contentLines > 15 {
+	// Separate only if code block is very large (>50 lines of actual content)
+	if contentLines > 50 {
 		return true
 	}
 

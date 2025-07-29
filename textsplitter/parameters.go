@@ -89,22 +89,24 @@ func (c *CodeAwareTextSplitter) getLanguageSpecificRecommendation(ext string, co
 
 	switch ext {
 	case ".go", ".java", ".cs", ".cpp", ".cc", ".cxx":
-		baseSize = 150
+		baseSize = 1024
 	case ".js", ".ts", ".py", ".rb":
-		baseSize = 120
+		baseSize = 768
 	case ".c", ".h":
-		baseSize = 100
+		baseSize = 512
 	case ".md", ".txt", ".rst":
-		baseSize = 80
+		baseSize = 1024
 	case ".json", ".xml", ".yaml", ".yml":
-		baseSize = 50
+		baseSize = 512
 	default:
 		return 0
 	}
 
-	// Adjust for large files
-	if contentLength > 40000 {
-		return baseSize + 50
+	if contentLength > 200000 { // ~200KB
+		return baseSize * 2
+	}
+	if contentLength > 50000 { // ~50KB
+		return int(float64(baseSize) * 1.5)
 	}
 
 	return baseSize
@@ -112,10 +114,10 @@ func (c *CodeAwareTextSplitter) getLanguageSpecificRecommendation(ext string, co
 
 func (c *CodeAwareTextSplitter) getContentSizeBasedRecommendation(contentLength int) int {
 	switch {
-	case contentLength > 80000:
-		return 300
-	case contentLength > 20000:
-		return 200
+	case contentLength > 200000: // ~200KB
+		return 4096
+	case contentLength > 50000: // ~50KB
+		return 2048
 	default:
 		return c.chunkSize
 	}

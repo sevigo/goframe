@@ -22,8 +22,10 @@ var ErrEmptyText = errors.New("text cannot be empty")
 
 func NewEmbedder(client Embedder, opts ...Option) (Embedder, error) {
 	embedderOpts := options{
-		StripNewLines: true,
-		BatchSize:     32,
+		StripNewLines:  true,
+		BatchSize:      32,
+		QueryPrefix:    "query: ",
+		DocumentPrefix: "passage: ",
 	}
 
 	for _, opt := range opts {
@@ -48,7 +50,7 @@ func (e *EmbedderImpl) EmbedQuery(ctx context.Context, text string) ([]float32, 
 	if strings.TrimSpace(text) == "" {
 		return nil, ErrEmptyText
 	}
-	processedText := "query: " + e.preprocessText(text)
+	processedText := e.opts.QueryPrefix + e.preprocessText(text)
 	return e.client.EmbedQuery(ctx, processedText)
 }
 
@@ -59,7 +61,7 @@ func (e *EmbedderImpl) EmbedQueries(ctx context.Context, texts []string) ([][]fl
 
 	processedTexts := make([]string, len(texts))
 	for i, text := range texts {
-		processedTexts[i] = "query: " + e.preprocessText(text)
+		processedTexts[i] = e.opts.QueryPrefix + e.preprocessText(text)
 	}
 
 	return e.EmbedDocuments(ctx, processedTexts)
@@ -78,7 +80,7 @@ func (e *EmbedderImpl) EmbedDocuments(ctx context.Context, texts []string) ([][]
 
 	processedTexts := make([]string, len(texts))
 	for i, text := range texts {
-		processedTexts[i] = "passage: " + e.preprocessText(text)
+		processedTexts[i] = e.opts.DocumentPrefix + e.preprocessText(text)
 	}
 
 	return e.client.EmbedDocuments(ctx, processedTexts)
