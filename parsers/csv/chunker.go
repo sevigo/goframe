@@ -196,7 +196,7 @@ func (p *CSVPlugin) createChunks(
 
 // calculateRowsPerChunk determines optimal number of rows per chunk
 func (p *CSVPlugin) calculateRowsPerChunk(structure *CSVStructure, opts *schema.CodeChunkingOptions) int {
-	defaultRowsPerChunk := 100
+	defaultRowsPerChunk := 500
 
 	if opts == nil {
 		return defaultRowsPerChunk
