@@ -227,40 +227,40 @@ func (g *LLM) GetDimension(ctx context.Context) (int, error) {
 
 // convertToGeminiMessages converts the generic schema to Gemini's native types.
 func (g *LLM) convertToGeminiMessages(messages []schema.MessageContent) ([]*genai.Content, *genai.Content, error) {
-	geminiContents := make([]*genai.Content, 0, len(messages))
-	var systemInstruction *genai.Content
+    geminiContents := make([]*genai.Content, 0, len(messages))
+    var systemInstruction *genai.Content
+    var systemMessageFound bool
 
-	for i, msg := range messages {
-		var role genai.Role
-		switch msg.Role {
-		case schema.ChatMessageTypeHuman:
-			role = genai.RoleUser
-		case schema.ChatMessageTypeAI:
-			role = genai.RoleModel
-		case schema.ChatMessageTypeSystem:
-			if i == 0 {
-				systemInstruction = genai.NewContentFromText(msg.GetTextContent(), genai.RoleUser)
-				continue
-			}
-			return nil, nil, ErrSystemMessage
-		default:
-			role = genai.RoleUser
-		}
+    for i, msg := range messages {
+        var role genai.Role
+        switch msg.Role {
+        case schema.ChatMessageTypeHuman:
+            role = genai.RoleUser
+        case schema.ChatMessageTypeAI:
+            role = genai.RoleModel
+        case schema.ChatMessageTypeSystem:
+            if i != 0 || systemMessageFound {
+                return nil, nil, ErrSystemMessage
+            }
+            systemInstruction = genai.NewContentFromText(msg.GetTextContent(), genai.RoleUser) // Gemini treats system prompts as user roles
+            systemMessageFound = true
+            continue // Do not add to the main history slice
+        default:
+            role = genai.RoleUser
+        }
 
-		parts := make([]*genai.Part, 0, len(msg.Parts))
-		for _, p := range msg.Parts {
-			switch part := p.(type) {
-			case schema.TextContent:
-				parts = append(parts, genai.NewPartFromText(part.String()))
-			default:
-				return nil, nil, fmt.Errorf("unsupported content part type: %T", part)
-			}
-		}
-
-		geminiContents = append(geminiContents, genai.NewContentFromParts(parts, role))
-	}
-
-	return geminiContents, systemInstruction, nil
+        parts := make([]*genai.Part, 0, len(msg.Parts))
+        for _, p := range msg.Parts {
+            switch part := p.(type) {
+            case schema.TextContent:
+                parts = append(parts, genai.NewPartFromText(part.String()))
+            default:
+                return nil, nil, fmt.Errorf("unsupported content part type: %T", part)
+            }
+        }
+        geminiContents = append(geminiContents, genai.NewContentFromParts(parts, role))
+    }
+    return geminiContents, systemInstruction, nil
 }
 
 // responseToSchema converts Gemini's response to the generic schema.
