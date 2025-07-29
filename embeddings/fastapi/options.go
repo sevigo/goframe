@@ -10,6 +10,7 @@ type options struct {
 	httpClient *http.Client
 	logger     *slog.Logger
 	task       string
+	apiKey     string
 }
 
 // Option defines a function type for configuring the embedder.
@@ -19,7 +20,8 @@ func defaultOptions() *options {
 	return &options{
 		httpClient: &http.Client{Timeout: 60 * time.Second},
 		logger:     slog.Default(),
-		task:       "Given a web search query, retrieve relevant passages that answer the query",
+		task:       "search_document",
+		apiKey:     "",
 	}
 }
 
@@ -47,5 +49,11 @@ func WithTask(task string) Option {
 		if task != "" {
 			o.task = task
 		}
+	}
+}
+
+func WithAPIKey(key string) Option {
+	return func(o *options) {
+		o.apiKey = key
 	}
 }
