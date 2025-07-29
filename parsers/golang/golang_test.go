@@ -12,6 +12,7 @@ import (
 
 	"github.com/sevigo/goframe/parsers/golang"
 	logger "github.com/sevigo/goframe/parsers/testing"
+	"github.com/sevigo/goframe/schema"
 	model "github.com/sevigo/goframe/schema"
 )
 
@@ -458,9 +459,8 @@ func TestGoPlugin_Chunk_NoSemanticChunks(t *testing.T) {
 // var x = 1 // unexported
 `
 	chunks, err := plugin.Chunk(contentOnlyComments, "only_comments.go", &model.CodeChunkingOptions{})
-	require.Error(t, err)
-	require.EqualError(t, err, "no semantic chunks found in Go file")
-	assert.Nil(t, chunks)
+	require.NoError(t, err)
+	assert.Equal(t, chunks, []schema.CodeChunk{})
 }
 
 func TestGoPlugin_CanHandle(t *testing.T) {
