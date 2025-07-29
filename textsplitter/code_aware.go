@@ -41,7 +41,7 @@ func NewCodeAware(
 	}
 
 	splitterOpts := options{
-		chunkSize:       1024,
+		chunkSize:       2048,
 		chunkOverlap:    100,
 		minChunkSize:    25,
 		maxChunkSize:    16000,
