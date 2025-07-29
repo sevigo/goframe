@@ -218,7 +218,7 @@ func (p *embeddingBatchProcessor) processBatches(ctx context.Context, docs []sch
 		return nil, nil, err
 	}
 
-	return p.consolidateResults(results, totalDocs)
+	return p.consolidateResults(ctx, results, totalDocs)
 }
 
 func (p *embeddingBatchProcessor) getEffectiveEmbeddingBatchSize() int {
@@ -253,7 +253,6 @@ func (p *embeddingBatchProcessor) processAllBatches(
 ) error {
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, maxConcurrency)
-	collectedErrs := make(chan error, len(results))
 
 	for i := range results {
 		if ctx.Err() != nil {
@@ -265,13 +264,11 @@ func (p *embeddingBatchProcessor) processAllBatches(
 		}
 
 		wg.Add(1)
-		go p.processSingleBatch(ctx, docs, i, embeddingBatchSize, &wg, semaphore, collectedErrs, results)
+		go p.processSingleBatch(ctx, docs, i, embeddingBatchSize, &wg, semaphore, results)
 	}
 
 	wg.Wait()
-	close(collectedErrs)
-
-	return p.checkForErrors(collectedErrs)
+	return nil
 }
 
 func (p *embeddingBatchProcessor) waitForRateLimit(ctx context.Context, rateLimiter *time.Ticker) error {
@@ -293,22 +290,27 @@ func (p *embeddingBatchProcessor) processSingleBatch(
 	batchIndex, embeddingBatchSize int,
 	wg *sync.WaitGroup,
 	semaphore chan struct{},
-	collectedErrs chan error,
 	results []embeddingBatchResult,
 ) {
 	defer wg.Done()
+
+	// Initialize result with batch index
+	result := embeddingBatchResult{batchIndex: batchIndex}
 
 	select {
 	case semaphore <- struct{}{}:
 		defer func() { <-semaphore }()
 	case <-ctx.Done():
+		result.err = ctx.Err()
+		results[batchIndex] = result
 		return
 	}
 
 	batchDocs := p.extractBatchDocuments(docs, batchIndex, embeddingBatchSize)
 	vectors, err := p.embedBatchWithRetry(ctx, batchDocs, batchIndex)
 	if err != nil {
-		collectedErrs <- err
+		result.err = err
+		results[batchIndex] = result
 		return
 	}
 
@@ -316,16 +318,17 @@ func (p *embeddingBatchProcessor) processSingleBatch(
 		mismatchErr := fmt.Errorf("embedder returned %d vectors for %d documents in batch %d",
 			len(vectors), len(batchDocs), batchIndex)
 		p.logger.ErrorContext(ctx, "Embedding mismatch for a batch", "error", mismatchErr)
-		collectedErrs <- mismatchErr
+		result.err = mismatchErr
+		results[batchIndex] = result
 		return
 	}
 
+	// Successful batch processing
 	points, ids := p.createQdrantPoints(batchDocs, vectors)
-	results[batchIndex] = embeddingBatchResult{
-		batchIndex: batchIndex,
-		points:     points,
-		ids:        ids,
-	}
+	result.points = points
+	result.ids = ids
+	result.err = nil
+	results[batchIndex] = result
 }
 
 func (p *embeddingBatchProcessor) extractBatchDocuments(docs []schema.Document, batchIndex, embeddingBatchSize int) []schema.Document {
@@ -435,19 +438,7 @@ func (p *embeddingBatchProcessor) createQdrantPoints(batchDocs []schema.Document
 	return batchPoints, batchIDs
 }
 
-func (p *embeddingBatchProcessor) checkForErrors(collectedErrs chan error) error {
-	var finalErrors []error
-	for err := range collectedErrs {
-		finalErrors = append(finalErrors, err)
-	}
-
-	if len(finalErrors) > 0 {
-		return errors.Join(finalErrors...)
-	}
-	return nil
-}
-
-func (p *embeddingBatchProcessor) consolidateResults(results []embeddingBatchResult, totalDocs int) ([]*qdrant.PointStruct, []string, error) {
+func (p *embeddingBatchProcessor) consolidateResults(ctx context.Context, results []embeddingBatchResult, totalDocs int) ([]*qdrant.PointStruct, []string, error) {
 	allPoints := make([]*qdrant.PointStruct, 0, totalDocs)
 	allIDs := make([]string, 0, totalDocs)
 	var finalErrors []error
@@ -466,10 +457,10 @@ func (p *embeddingBatchProcessor) consolidateResults(results []embeddingBatchRes
 	if len(finalErrors) > 0 {
 		combinedErr := errors.Join(finalErrors...)
 		if len(allPoints) == 0 {
-			p.logger.ErrorContext(context.Background(), "All embedding batches failed", "errors_count", len(finalErrors))
+			p.logger.ErrorContext(ctx, "All embedding batches failed", "errors_count", len(finalErrors))
 			return nil, nil, fmt.Errorf("%w: %w", ErrEmbeddingTotalFailure, combinedErr)
 		}
-		p.logger.WarnContext(context.Background(), "Partial embedding success",
+		p.logger.WarnContext(ctx, "Partial embedding success",
 			"successful_docs", len(allPoints), "failed_batches", len(finalErrors))
 		return allPoints, allIDs, fmt.Errorf("%w: %w", ErrPartialBatchFailure, combinedErr)
 	}
