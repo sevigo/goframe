@@ -342,9 +342,22 @@ func (p *embeddingBatchProcessor) extractBatchDocuments(docs []schema.Document, 
 }
 
 func (p *embeddingBatchProcessor) embedBatchWithRetry(ctx context.Context, batchDocs []schema.Document, batchIndex int) ([][]float32, error) {
-	texts := make([]string, len(batchDocs))
-	for j, doc := range batchDocs {
-		texts[j] = doc.PageContent
+	// Create a new slice to hold only documents with content.
+	validDocs := make([]schema.Document, 0, len(batchDocs))
+	texts := make([]string, 0, len(batchDocs))
+
+	for _, doc := range batchDocs {
+		if strings.TrimSpace(doc.PageContent) != "" {
+			validDocs = append(validDocs, doc)
+			texts = append(texts, doc.PageContent)
+		} else {
+			p.logger.WarnContext(ctx, "Skipping embedding for empty document in batch", "batch", batchIndex)
+		}
+	}
+
+	// If the entire batch was empty after filtering, there's nothing to do.
+	if len(validDocs) == 0 {
+		return [][]float32{}, nil
 	}
 
 	var vectors [][]float32
