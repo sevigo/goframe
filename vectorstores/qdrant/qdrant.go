@@ -307,24 +307,31 @@ func (p *embeddingBatchProcessor) processSingleBatch(
 	}
 
 	batchDocs := p.extractBatchDocuments(docs, batchIndex, embeddingBatchSize)
-	vectors, err := p.embedBatchWithRetry(ctx, batchDocs, batchIndex)
+
+	validDocs, vectors, err := p.embedBatchWithRetry(ctx, batchDocs, batchIndex)
 	if err != nil {
 		result.err = err
 		results[batchIndex] = result
 		return
 	}
 
-	if len(vectors) != len(batchDocs) {
+	// This is possible if the entire batch consisted of empty documents
+	if len(validDocs) == 0 {
+		results[batchIndex] = embeddingBatchResult{batchIndex: batchIndex, points: []*qdrant.PointStruct{}, ids: []string{}, err: nil}
+		return
+	}
+
+	if len(vectors) != len(validDocs) {
 		mismatchErr := fmt.Errorf("embedder returned %d vectors for %d documents in batch %d",
-			len(vectors), len(batchDocs), batchIndex)
+			len(vectors), len(validDocs), batchIndex)
 		p.logger.ErrorContext(ctx, "Embedding mismatch for a batch", "error", mismatchErr)
 		result.err = mismatchErr
 		results[batchIndex] = result
 		return
 	}
 
-	// Successful batch processing
-	points, ids := p.createQdrantPoints(batchDocs, vectors)
+	// --- FIX: Use the 'validDocs' slice, which matches the 'vectors' slice ---
+	points, ids := p.createQdrantPoints(validDocs, vectors)
 	result.points = points
 	result.ids = ids
 	result.err = nil
@@ -341,15 +348,16 @@ func (p *embeddingBatchProcessor) extractBatchDocuments(docs []schema.Document, 
 	return docs[startIdx:endIdx]
 }
 
-func (p *embeddingBatchProcessor) embedBatchWithRetry(ctx context.Context, batchDocs []schema.Document, batchIndex int) ([][]float32, error) {
-	// Create a new slice to hold only documents with content.
+func (p *embeddingBatchProcessor) embedBatchWithRetry(ctx context.Context, batchDocs []schema.Document, batchIndex int) ([]schema.Document, [][]float32, error) {
 	validDocs := make([]schema.Document, 0, len(batchDocs))
 	texts := make([]string, 0, len(batchDocs))
-
 	for _, doc := range batchDocs {
-		if strings.TrimSpace(doc.PageContent) != "" {
+		trimmedContent := strings.TrimSpace(doc.PageContent)
+		if trimmedContent != "" {
 			validDocs = append(validDocs, doc)
-			texts = append(texts, doc.PageContent)
+			// Use the trimmed content for embedding to ensure consistency
+			// and avoid sending unnecessary whitespace to the model.
+			texts = append(texts, trimmedContent)
 		} else {
 			p.logger.WarnContext(ctx, "Skipping embedding for empty document in batch", "batch", batchIndex)
 		}
@@ -357,7 +365,7 @@ func (p *embeddingBatchProcessor) embedBatchWithRetry(ctx context.Context, batch
 
 	// If the entire batch was empty after filtering, there's nothing to do.
 	if len(validDocs) == 0 {
-		return [][]float32{}, nil
+		return []schema.Document{}, [][]float32{}, nil
 	}
 
 	var vectors [][]float32
@@ -367,7 +375,7 @@ func (p *embeddingBatchProcessor) embedBatchWithRetry(ctx context.Context, batch
 	for attempt := 0; attempt <= p.batchConfig.RetryAttempts; attempt++ {
 		if attempt > 0 {
 			if retryErr := p.waitForRetryDelay(ctx, delay, attempt, batchIndex, err); retryErr != nil {
-				return nil, retryErr
+				return nil, nil, retryErr
 			}
 			delay = p.calculateNextDelay(delay)
 		}
@@ -386,10 +394,11 @@ func (p *embeddingBatchProcessor) embedBatchWithRetry(ctx context.Context, batch
 		finalErr := fmt.Errorf("batch %d embedding failed after %d attempts: %w",
 			batchIndex, p.batchConfig.RetryAttempts+1, err)
 		p.logger.ErrorContext(ctx, "Permanent embedding failure for batch", "error", finalErr)
-		return nil, finalErr
+		return nil, nil, finalErr
 	}
 
-	return vectors, nil
+	// Return the validDocs along with the vectors, ensuring a 1:1 mapping.
+	return validDocs, vectors, nil
 }
 
 func (p *embeddingBatchProcessor) waitForRetryDelay(ctx context.Context, delay time.Duration, attempt, batchIndex int, err error) error {
