@@ -355,12 +355,15 @@ func (p *embeddingBatchProcessor) embedBatchWithRetry(ctx context.Context, batch
 		trimmedContent := strings.TrimSpace(doc.PageContent)
 		if trimmedContent != "" {
 			validDocs = append(validDocs, doc)
+			// Use the trimmed content for embedding to ensure consistency
+			// and avoid sending unnecessary whitespace to the model.
 			texts = append(texts, trimmedContent)
 		} else {
 			p.logger.WarnContext(ctx, "Skipping embedding for empty document in batch", "batch", batchIndex)
 		}
 	}
 
+	// If the entire batch was empty after filtering, there's nothing to do.
 	if len(validDocs) == 0 {
 		return []schema.Document{}, [][]float32{}, nil
 	}
@@ -371,7 +374,6 @@ func (p *embeddingBatchProcessor) embedBatchWithRetry(ctx context.Context, batch
 
 	for attempt := 0; attempt <= p.batchConfig.RetryAttempts; attempt++ {
 		if attempt > 0 {
-			// Pass the original error to the retry logger for better context
 			if retryErr := p.waitForRetryDelay(ctx, delay, attempt, batchIndex, err); retryErr != nil {
 				return nil, nil, retryErr
 			}
@@ -380,11 +382,11 @@ func (p *embeddingBatchProcessor) embedBatchWithRetry(ctx context.Context, batch
 
 		vectors, err = p.store.embedder.EmbedDocuments(ctx, texts)
 		if err == nil {
-			break // Success
+			break
 		}
 
 		if !p.isRetryableError(err) {
-			break // Don't retry non-retryable errors
+			break
 		}
 	}
 
@@ -395,6 +397,7 @@ func (p *embeddingBatchProcessor) embedBatchWithRetry(ctx context.Context, batch
 		return nil, nil, finalErr
 	}
 
+	// Return the validDocs along with the vectors, ensuring a 1:1 mapping.
 	return validDocs, vectors, nil
 }
 
