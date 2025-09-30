@@ -38,7 +38,7 @@ func NewTypeScriptPlugin(logger *slog.Logger) schema.ParserPlugin {
 	vm := goja.New()
 
 	// Add console polyfills that wire a slog.Logger to the JS runtime.
-	vm.Set("console", map[string]interface{}{
+	_ = vm.Set("console", map[string]interface{}{
 		"error": func(msg ...interface{}) {
 			logger.Error("[JS]", "msg", fmt.Sprint(msg...))
 		},

@@ -13,43 +13,43 @@ type ParserPlugin interface {
 }
 
 type FileMetadata struct {
-	FilePath    string
-	Language    string
-	Imports     []string
-	Definitions []CodeEntityDefinition
-	Symbols     []CodeSymbol
-	Properties  map[string]string
+	FilePath    string                 `json:"file_path"`
+	Language    string                 `json:"language"`
+	Imports     []string               `json:"imports"`
+	Definitions []CodeEntityDefinition `json:"definitions"`
+	Symbols     []CodeSymbol           `json:"symbols"`
+	Properties  map[string]string      `json:"properties"`
 }
 
 type CodeEntityDefinition struct {
-	Type          string
-	Name          string
-	LineStart     int
-	LineEnd       int
-	Visibility    string
-	Signature     string
-	Documentation string
+	Type          string `json:"type"`
+	Name          string `json:"name"`
+	LineStart     int    `json:"line_start"`
+	LineEnd       int    `json:"line_end"`
+	Visibility    string `json:"visibility"`
+	Signature     string `json:"signature"`
+	Documentation string `json:"documentation"`
 }
 
 type CodeSymbol struct {
-	Name      string
-	Type      string
-	LineStart int
-	LineEnd   int
-	IsExport  bool
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	LineStart int    `json:"line_start"`
+	LineEnd   int    `json:"line_end"`
+	IsExport  bool   `json:"is_export"`
 }
 
 type CodeChunk struct {
-	Content         string
-	LineStart       int
-	LineEnd         int
-	Type            string
-	Identifier      string
-	Annotations     map[string]string
-	TokenCount      int
-	EnrichedContent string
-	ParentContext   string
-	ContextLevel    int
+	Content         string            `json:"content"`
+	LineStart       int               `json:"lineStart"`
+	LineEnd         int               `json:"lineEnd"`
+	Type            string            `json:"type"`
+	Identifier      string            `json:"identifier"`
+	Annotations     map[string]string `json:"annotations"`
+	TokenCount      int               `json:"tokenCount"`
+	EnrichedContent string            `json:"enrichedContent"`
+	ParentContext   string            `json:"parentContext"`
+	ContextLevel    int               `json:"contextLevel"`
 }
 
 type CodeChunkingOptions struct {
