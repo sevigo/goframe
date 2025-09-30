@@ -12,6 +12,7 @@ import (
 	"github.com/sevigo/goframe/parsers/pdf"
 	"github.com/sevigo/goframe/parsers/terraform"
 	"github.com/sevigo/goframe/parsers/text"
+	"github.com/sevigo/goframe/parsers/typescript"
 	"github.com/sevigo/goframe/parsers/yaml"
 	"github.com/sevigo/goframe/schema"
 )
@@ -38,6 +39,7 @@ func RegisterLanguagePlugins(logger *slog.Logger) (ParserRegistry, error) {
 		"text":     text.NewTextPlugin,
 		"csv":      csv.NewCSVPlugin,
 		"tf":       terraform.NewTerraformPlugin,
+		"ts":       typescript.NewTypeScriptPlugin,
 	}
 
 	pluginsToRegister := make([]string, 0, len(pluginFactories))
