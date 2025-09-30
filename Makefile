@@ -4,7 +4,7 @@
 # Local tooling directory
 BIN_DIR := ./bin
 GOLANGCI_LINT := $(BIN_DIR)/golangci-lint
-GOLANGCI_LINT_VERSION := v2.1.6
+GOLANGCI_LINT_VERSION := v2.5.0
 
 # Docker environment for testcontainers-go
 DOCKER_ENV := DOCKER_HOST=$$(docker context inspect -f '{{.Endpoints.docker.Host}}' 2>/dev/null || echo "unix:///var/run/docker.sock") \
