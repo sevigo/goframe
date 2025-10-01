@@ -11,6 +11,8 @@ type options struct {
 	ollamaServerURL *url.URL
 	httpClient      *http.Client
 	logger          *slog.Logger
+	thinking        *bool
+	reasoningEffort string
 }
 
 type Option func(*options)
@@ -57,5 +59,17 @@ func WithLogger(logger *slog.Logger) Option {
 		if logger != nil {
 			opts.logger = logger
 		}
+	}
+}
+
+func WithThinking(enabled bool) Option {
+	return func(opts *options) {
+		opts.thinking = &enabled
+	}
+}
+
+func WithReasoningEffort(effort string) Option {
+	return func(opts *options) {
+		opts.reasoningEffort = effort
 	}
 }

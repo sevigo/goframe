@@ -98,14 +98,12 @@ func (o *LLM) GenerateContent(
 	start := time.Now()
 	o.logger.DebugContext(ctx, "Starting Ollama content generation", "message_count", len(messages))
 
-	// Apply options
 	opts := llms.CallOptions{}
 	for _, opt := range options {
 		opt(&opts)
 	}
 	model := o.determineModel(opts)
 
-	// Convert messages
 	chatMsgs, err := o.convertToOllamaMessages(messages)
 	if err != nil {
 		o.logger.ErrorContext(ctx, "Failed to convert messages", "error", err)
@@ -119,9 +117,25 @@ func (o *LLM) GenerateContent(
 		Stream:   &isStreaming,
 	}
 
+	// Add thinking mode if specified (new in v0.11.7)
+	if o.options.thinking != nil {
+		if req.Options == nil {
+			req.Options = make(map[string]interface{})
+		}
+		req.Options["think"] = *o.options.thinking
+	}
+
+	// Add reasoning effort if specified (new in v0.11.5)
+	if o.options.reasoningEffort != "" {
+		if req.Options == nil {
+			req.Options = make(map[string]interface{})
+		}
+		req.Options["reasoning_effort"] = o.options.reasoningEffort
+	}
+
 	var fullResponse strings.Builder
 	var finalResp api.ChatResponse
-	var mu sync.Mutex // Protect concurrent access to fullResponse and finalResp
+	var mu sync.Mutex
 
 	fn := func(response api.ChatResponse) error {
 		mu.Lock()
