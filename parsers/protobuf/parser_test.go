@@ -1,4 +1,4 @@
-package parser
+package protobuf_test
 
 import (
 	"io/fs"
@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sevigo/goframe/parsers/protobuf"
 	"github.com/sevigo/goframe/schema"
 )
 
@@ -26,7 +27,7 @@ func (m mockFileInfo) Sys() interface{}   { return nil }
 
 func TestNewProtobufParser(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	parser := NewProtobufParser(logger)
+	parser := protobuf.NewProtobufParser(logger)
 
 	if parser == nil {
 		t.Fatal("NewProtobufParser returned nil")
@@ -35,7 +36,7 @@ func TestNewProtobufParser(t *testing.T) {
 
 func TestProtobufParser_Name(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	parser := NewProtobufParser(logger)
+	parser := protobuf.NewProtobufParser(logger)
 
 	if parser.Name() != "protobuf" {
 		t.Errorf("Expected name 'protobuf', got '%s'", parser.Name())
@@ -44,7 +45,7 @@ func TestProtobufParser_Name(t *testing.T) {
 
 func TestProtobufParser_Extensions(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	parser := NewProtobufParser(logger)
+	parser := protobuf.NewProtobufParser(logger)
 
 	extensions := parser.Extensions()
 	expected := []string{".proto"}
@@ -62,7 +63,7 @@ func TestProtobufParser_Extensions(t *testing.T) {
 
 func TestProtobufParser_CanHandle(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	parser := NewProtobufParser(logger)
+	parser := protobuf.NewProtobufParser(logger)
 
 	tests := []struct {
 		name     string
@@ -93,7 +94,7 @@ func TestProtobufParser_CanHandle(t *testing.T) {
 
 func TestProtobufParser_Chunk_InvalidSyntax(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	parser := NewProtobufParser(logger)
+	parser := protobuf.NewProtobufParser(logger)
 
 	invalidProto := `
 syntax = "proto3"
@@ -110,7 +111,7 @@ message Invalid {
 
 func TestProtobufParser_Chunk_SimpleMessage(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	parser := NewProtobufParser(logger)
+	parser := protobuf.NewProtobufParser(logger)
 
 	protoContent := `syntax = "proto3";
 
@@ -151,7 +152,7 @@ message User {
 
 func TestProtobufParser_Chunk_NestedMessage(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	parser := NewProtobufParser(logger)
+	parser := protobuf.NewProtobufParser(logger)
 
 	protoContent := `syntax = "proto3";
 
@@ -188,7 +189,7 @@ message Outer {
 
 func TestProtobufParser_Chunk_Service(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	parser := NewProtobufParser(logger)
+	parser := protobuf.NewProtobufParser(logger)
 
 	protoContent := `syntax = "proto3";
 
@@ -256,7 +257,7 @@ service UserService {
 
 func TestProtobufParser_Chunk_StreamingRPC(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	parser := NewProtobufParser(logger)
+	parser := protobuf.NewProtobufParser(logger)
 
 	protoContent := `syntax = "proto3";
 
@@ -296,7 +297,7 @@ service StreamService {
 
 func TestProtobufParser_Chunk_Enum(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	parser := NewProtobufParser(logger)
+	parser := protobuf.NewProtobufParser(logger)
 
 	protoContent := `syntax = "proto3";
 
@@ -332,7 +333,7 @@ enum Status {
 
 func TestProtobufParser_Chunk_Oneof(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	parser := NewProtobufParser(logger)
+	parser := protobuf.NewProtobufParser(logger)
 
 	protoContent := `syntax = "proto3";
 
@@ -377,7 +378,7 @@ message Sample {
 
 func TestProtobufParser_ExtractMetadata_InvalidSyntax(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	parser := NewProtobufParser(logger)
+	parser := protobuf.NewProtobufParser(logger)
 
 	invalidProto := `
 syntax = "proto3"
@@ -393,7 +394,7 @@ message Invalid {
 
 func TestProtobufParser_ExtractMetadata_Complete(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	parser := NewProtobufParser(logger)
+	parser := protobuf.NewProtobufParser(logger)
 
 	protoContent := `syntax = "proto3";
 
@@ -483,7 +484,7 @@ service UserService {
 
 func TestProtobufParser_ExtractMetadata_WithDocumentation(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	parser := NewProtobufParser(logger)
+	parser := protobuf.NewProtobufParser(logger)
 
 	protoContent := `syntax = "proto3";
 
@@ -514,7 +515,7 @@ message User {
 
 func TestProtobufParser_ExtractMetadata_Proto2(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	parser := NewProtobufParser(logger)
+	parser := protobuf.NewProtobufParser(logger)
 
 	protoContent := `syntax = "proto2";
 
@@ -536,7 +537,7 @@ message User {
 
 func TestProtobufParser_LineNumbers(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	parser := NewProtobufParser(logger)
+	parser := protobuf.NewProtobufParser(logger)
 
 	protoContent := `syntax = "proto3";
 
