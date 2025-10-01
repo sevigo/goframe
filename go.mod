@@ -11,6 +11,7 @@ require (
 	github.com/ollama/ollama v0.9.6
 	github.com/qdrant/go-client v1.14.0
 	github.com/stretchr/testify v1.10.0
+	github.com/yoheimuta/go-protoparser/v4 v4.14.2
 	github.com/yuin/goldmark v1.7.12
 	github.com/zclconf/go-cty v1.13.0
 	golang.org/x/text v0.27.0
