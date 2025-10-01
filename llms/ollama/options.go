@@ -13,7 +13,6 @@ type options struct {
 	logger          *slog.Logger
 }
 
-// Option is a function type for configuring Ollama client options.
 type Option func(*options)
 
 func applyOptions(opts ...Option) options {
@@ -36,15 +35,20 @@ func WithModel(model string) Option {
 
 func WithServerURL(rawURL string) Option {
 	return func(opts *options) {
-		if parsedURL, err := url.Parse(rawURL); err == nil {
-			opts.ollamaServerURL = parsedURL
+		parsedURL, err := url.Parse(rawURL)
+		if err != nil {
+			slog.Warn("Failed to parse server URL", "url", rawURL, "error", err)
+			return
 		}
+		opts.ollamaServerURL = parsedURL
 	}
 }
 
 func WithHTTPClient(client *http.Client) Option {
 	return func(opts *options) {
-		opts.httpClient = client
+		if client != nil {
+			opts.httpClient = client
+		}
 	}
 }
 
