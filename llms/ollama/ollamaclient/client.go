@@ -31,7 +31,7 @@ func NewClient(baseURL *url.URL, httpClient *http.Client, logger *slog.Logger) (
 		var err error
 		baseURL, err = getDefaultURL()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to get default URL: %w", err)
 		}
 	}
 
@@ -39,11 +39,12 @@ func NewClient(baseURL *url.URL, httpClient *http.Client, logger *slog.Logger) (
 		httpClient = &http.Client{
 			Timeout: DefaultTimeout,
 			Transport: &http.Transport{
-				MaxIdleConns:       100,
-				IdleConnTimeout:    90 * time.Second,
-				DisableCompression: false,
-				MaxConnsPerHost:    100,
-				ForceAttemptHTTP2:  true,
+				MaxIdleConns:        100,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     90 * time.Second,
+				DisableCompression:  false,
+				MaxConnsPerHost:     100,
+				ForceAttemptHTTP2:   true,
 			},
 		}
 	}
@@ -64,14 +65,17 @@ func NewDefaultClient(logger *slog.Logger) (*Client, error) {
 }
 
 func getDefaultURL() (*url.URL, error) {
-	host := os.Getenv("OLLAMA_URL")
+	host := os.Getenv("OLLAMA_HOST")
+	if host == "" {
+		host = os.Getenv("OLLAMA_URL")
+	}
 	if host == "" {
 		host = DefaultOllamaURL
 	}
 
 	baseURL, err := url.Parse(host)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse OLLAMA_URL: %w", err)
+		return nil, fmt.Errorf("failed to parse Ollama URL: %w", err)
 	}
 
 	return baseURL, nil
@@ -91,7 +95,7 @@ func (c *Client) Embed(ctx context.Context, req *api.EmbedRequest) (*api.EmbedRe
 	var resp api.EmbedResponse
 	err := c.doRequest(ctx, http.MethodPost, "/api/embed", req, &resp)
 	if err != nil {
-		return nil, fmt.Errorf("embed request failed: %w", err)
+		return nil, err
 	}
 	return &resp, nil
 }
@@ -100,7 +104,7 @@ func (c *Client) List(ctx context.Context) (*api.ListResponse, error) {
 	var resp api.ListResponse
 	err := c.doRequest(ctx, http.MethodGet, "/api/tags", nil, &resp)
 	if err != nil {
-		return nil, fmt.Errorf("list models request failed: %w", err)
+		return nil, err
 	}
 	return &resp, nil
 }
@@ -109,7 +113,7 @@ func (c *Client) Show(ctx context.Context, req *api.ShowRequest) (*api.ShowRespo
 	var resp api.ShowResponse
 	err := c.doRequest(ctx, http.MethodPost, "/api/show", req, &resp)
 	if err != nil {
-		return nil, fmt.Errorf("show model request failed: %w", err)
+		return nil, err
 	}
 	return &resp, nil
 }
@@ -134,15 +138,13 @@ func (c *Client) GetHTTPClient() *http.Client {
 
 func (c *Client) doRequest(ctx context.Context, method, path string, reqData, respData any) error {
 	var reqBody io.Reader
-	var bodyBytes []byte
-	var err error
 
 	if reqData != nil {
-		bodyBytes, err = json.Marshal(reqData)
+		bodyBytes, err := json.Marshal(reqData)
 		if err != nil {
 			return fmt.Errorf("failed to encode request data: %w", err)
 		}
-		reqBody = bytes.NewBuffer(bodyBytes)
+		reqBody = bytes.NewReader(bodyBytes)
 	}
 
 	request, err := c.buildRequest(ctx, method, path, reqBody)
@@ -191,40 +193,29 @@ func (c *Client) checkError(response *http.Response) error {
 		return nil
 	}
 
+	bodyBytes, _ := io.ReadAll(response.Body)
+	response.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
 	var apiError struct {
 		Error string `json:"error"`
 	}
 
-	bodyBytes, _ := io.ReadAll(response.Body)
-	response.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-
-	if err := json.NewDecoder(bytes.NewBuffer(bodyBytes)).Decode(&apiError); err != nil {
-		c.logger.Error("Ollama API request failed with non-JSON error response",
+	if err := json.Unmarshal(bodyBytes, &apiError); err != nil || apiError.Error == "" {
+		c.logger.Error("Ollama API request failed",
 			"status", response.StatusCode,
 			"method", response.Request.Method,
 			"url", response.Request.URL.String(),
 			"response_body", string(bodyBytes),
 		)
-		return fmt.Errorf("ollama API error (status %d): %s", response.StatusCode, http.StatusText(response.StatusCode))
+		return fmt.Errorf("ollama API error (status %d): %s", response.StatusCode, string(bodyBytes))
 	}
 
 	c.logger.Error("Ollama API request failed",
 		"status", response.StatusCode,
 		"method", response.Request.Method,
 		"url", response.Request.URL.String(),
-		"ollama_error", apiError.Error,
+		"error", apiError.Error,
 	)
 
 	return fmt.Errorf("ollama API error (status %d): %s", response.StatusCode, apiError.Error)
-}
-
-func ConvertEmbeddingToFloat32(embedding []float64) []float32 {
-	if embedding == nil {
-		return nil
-	}
-	embeddingF32 := make([]float32, len(embedding))
-	for i, v := range embedding {
-		embeddingF32[i] = float32(v)
-	}
-	return embeddingF32
 }

@@ -8,7 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/hcl/v2 v2.23.0
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
-	github.com/ollama/ollama v0.9.6
+	github.com/ollama/ollama v0.12.3
 	github.com/qdrant/go-client v1.14.0
 	github.com/stretchr/testify v1.10.0
 	github.com/yoheimuta/go-protoparser/v4 v4.14.2

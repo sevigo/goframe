@@ -4,11 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
-
-	"log/slog"
 
 	"github.com/ollama/ollama/api"
 	"github.com/sevigo/goframe/embeddings"
@@ -48,27 +47,29 @@ func New(opts ...Option) (*LLM, error) {
 		return nil, ErrInvalidModel
 	}
 
-	llm := &LLM{
-		options: o,
-		logger:  o.logger.With("component", "ollama_llm", "model", o.model),
-	}
+	// Initialize logger first
+	logger := o.logger.With("component", "ollama_llm", "model", o.model)
 
+	// Create client
 	var client *ollamaclient.Client
 	var err error
 
 	if o.ollamaServerURL != nil {
-		client, err = ollamaclient.NewClient(o.ollamaServerURL, o.httpClient, llm.logger)
+		client, err = ollamaclient.NewClient(o.ollamaServerURL, o.httpClient, logger)
 	} else {
-		client, err = ollamaclient.NewDefaultClient(llm.logger)
+		client, err = ollamaclient.NewDefaultClient(logger)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ollama client: %w", err)
 	}
 
-	// Step 3: Assign the fully initialized client back to the LLM struct.
-	llm.client = client
+	llm := &LLM{
+		client:  client,
+		options: o,
+		logger:  logger,
+	}
 
-	llm.logger.Info("Ollama LLM initialized successfully")
+	logger.Info("Ollama LLM initialized successfully")
 	return llm, nil
 }
 
@@ -94,10 +95,6 @@ func (o *LLM) GenerateContent(
 	messages []schema.MessageContent,
 	options ...llms.CallOption,
 ) (*schema.ContentResponse, error) {
-	if o.logger == nil {
-		o.logger = slog.Default()
-	}
-
 	start := time.Now()
 	o.logger.DebugContext(ctx, "Starting Ollama content generation", "message_count", len(messages))
 
@@ -113,25 +110,46 @@ func (o *LLM) GenerateContent(
 		return nil, err
 	}
 
-	isStreamingFunc := opts.StreamingFunc != nil
-
+	isStreaming := opts.StreamingFunc != nil
 	req := &api.ChatRequest{
 		Model:    model,
 		Messages: chatMsgs,
-		Stream:   &isStreamingFunc,
+		Stream:   &isStreaming,
 	}
+
+	// Add thinking mode if specified (new in v0.11.7)
+	if o.options.thinking != nil {
+		if req.Options == nil {
+			req.Options = make(map[string]interface{})
+		}
+		req.Options["think"] = *o.options.thinking
+	}
+
+	// Add reasoning effort if specified (new in v0.11.5)
+	if o.options.reasoningEffort != "" {
+		if req.Options == nil {
+			req.Options = make(map[string]interface{})
+		}
+		req.Options["reasoning_effort"] = o.options.reasoningEffort
+	}
+
 	var fullResponse strings.Builder
 	var finalResp api.ChatResponse
+	var mu sync.Mutex
 
 	fn := func(response api.ChatResponse) error {
+		mu.Lock()
 		fullResponse.WriteString(response.Message.Content)
-		if opts.StreamingFunc != nil {
-			if errStream := opts.StreamingFunc(ctx, []byte(response.Message.Content)); errStream != nil {
-				return fmt.Errorf("streaming function returned an error: %w", errStream)
-			}
-		}
 		if response.Done {
 			finalResp = response
+		}
+		mu.Unlock()
+
+		// Call streaming function outside the lock
+		if opts.StreamingFunc != nil && response.Message.Content != "" {
+			if errStream := opts.StreamingFunc(ctx, []byte(response.Message.Content)); errStream != nil {
+				return fmt.Errorf("streaming function error: %w", errStream)
+			}
 		}
 		return nil
 	}
@@ -164,6 +182,10 @@ func (o *LLM) GenerateContent(
 }
 
 func (o *LLM) convertToOllamaMessages(messages []schema.MessageContent) ([]api.Message, error) {
+	if len(messages) == 0 {
+		return nil, ErrNoMessages
+	}
+
 	chatMsgs := make([]api.Message, 0, len(messages))
 	for _, mc := range messages {
 		msg := api.Message{Role: typeToRole(mc.Role)}
@@ -184,6 +206,11 @@ func (o *LLM) convertToOllamaMessages(messages []schema.MessageContent) ([]api.M
 				return nil, fmt.Errorf("unsupported content part type: %T", part)
 			}
 		}
+
+		if !foundText {
+			return nil, ErrNoTextParts
+		}
+
 		msg.Content = sb.String()
 		chatMsgs = append(chatMsgs, msg)
 	}
@@ -215,14 +242,16 @@ func (o *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, 
 
 	resp, err := o.client.Embed(ctx, req)
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
-			o.logger.InfoContext(ctx, "Embedding model not found, attempting to pull.", "model", o.options.model)
+		// Check for "not found" error and attempt to pull model
+		if isModelNotFoundError(err) {
+			o.logger.InfoContext(ctx, "Embedding model not found, attempting to pull", "model", o.options.model)
 			if pullErr := o.EnsureModel(ctx); pullErr != nil {
-				return nil, fmt.Errorf("failed to pull model after embedding attempt: %w", pullErr)
+				return nil, fmt.Errorf("failed to pull model: %w", pullErr)
 			}
+			// Retry embedding after pull
 			resp, err = o.client.Embed(ctx, req)
 			if err != nil {
-				return nil, fmt.Errorf("embedding failed even after pulling model: %w", err)
+				return nil, fmt.Errorf("embedding failed after pulling model: %w", err)
 			}
 		} else {
 			o.logger.ErrorContext(ctx, "Batch embed API call failed", "error", err)
@@ -250,7 +279,8 @@ func (o *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 
 	resp, err := o.client.Embed(ctx, req)
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+		if isModelNotFoundError(err) {
+			o.logger.InfoContext(ctx, "Model not found, attempting to pull", "model", o.options.model)
 			if pullErr := o.EnsureModel(ctx); pullErr != nil {
 				return nil, fmt.Errorf("failed to pull model: %w", pullErr)
 			}
@@ -263,7 +293,7 @@ func (o *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 		}
 	}
 
-	if len(resp.Embeddings) != 1 {
+	if len(resp.Embeddings) == 0 {
 		return nil, ErrEmptyResponse
 	}
 
@@ -271,6 +301,7 @@ func (o *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 }
 
 func (o *LLM) EnsureModel(ctx context.Context) error {
+	// Fast path: check if model details are already cached
 	o.detailsMutex.RLock()
 	if o.details != nil {
 		o.detailsMutex.RUnlock()
@@ -278,6 +309,7 @@ func (o *LLM) EnsureModel(ctx context.Context) error {
 	}
 	o.detailsMutex.RUnlock()
 
+	// Check if model exists
 	exists, err := o.ModelExists(ctx)
 	if err != nil {
 		o.logger.ErrorContext(ctx, "Failed to check model existence", "error", err)
@@ -288,7 +320,7 @@ func (o *LLM) EnsureModel(ctx context.Context) error {
 		return nil
 	}
 
-	o.logger.InfoContext(ctx, "Model not found locally, initiating pull")
+	o.logger.InfoContext(ctx, "Model not found locally, initiating pull", "model", o.options.model)
 
 	pullStart := time.Now()
 	err = o.PullModel(ctx, func(progress api.ProgressResponse) error {
@@ -318,7 +350,7 @@ func (o *LLM) EnsureModel(ctx context.Context) error {
 func (o *LLM) ModelExists(ctx context.Context) (bool, error) {
 	_, err := o.client.Show(ctx, &api.ShowRequest{Name: o.options.model})
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+		if isModelNotFoundError(err) {
 			return false, nil
 		}
 		return false, fmt.Errorf("model existence check failed: %w", err)
@@ -335,6 +367,7 @@ func (o *LLM) PullModel(ctx context.Context, progressFn func(api.ProgressRespons
 }
 
 func (o *LLM) GetModelDetails(ctx context.Context) (*schema.ModelDetails, error) {
+	// Fast path: return cached details
 	o.detailsMutex.RLock()
 	if o.details != nil {
 		cachedDetails := o.details
@@ -343,14 +376,16 @@ func (o *LLM) GetModelDetails(ctx context.Context) (*schema.ModelDetails, error)
 	}
 	o.detailsMutex.RUnlock()
 
+	// Slow path: fetch and cache details
 	o.detailsMutex.Lock()
 	defer o.detailsMutex.Unlock()
 
+	// Double-check after acquiring write lock
 	if o.details != nil {
 		return o.details, nil
 	}
 
-	o.logger.DebugContext(ctx, "Model details not cached, fetching from API...")
+	o.logger.DebugContext(ctx, "Model details not cached, fetching from API")
 	details, err := o.fetchModelDetails(ctx)
 	if err != nil {
 		return nil, err
@@ -363,22 +398,25 @@ func (o *LLM) GetModelDetails(ctx context.Context) (*schema.ModelDetails, error)
 func (o *LLM) fetchModelDetails(ctx context.Context) (*schema.ModelDetails, error) {
 	showResp, err := o.client.Show(ctx, &api.ShowRequest{Name: o.options.model})
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
-			o.logger.WarnContext(ctx, "Model not found when fetching details")
+		if isModelNotFoundError(err) {
+			o.logger.WarnContext(ctx, "Model not found when fetching details", "model", o.options.model)
 			return nil, ErrModelNotFound
 		}
 		return nil, fmt.Errorf("failed to retrieve model information: %w", err)
 	}
 
+	// Determine embedding dimension
 	var dim int64
 	testEmb, err := o.EmbedQuery(ctx, "test")
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "does not support") {
+		if strings.Contains(strings.ToLower(err.Error()), "does not support") ||
+			strings.Contains(strings.ToLower(err.Error()), "embedding") {
 			o.logger.DebugContext(ctx, "Model does not support embeddings; dimension set to 0")
 			dim = 0
 		} else {
-			o.logger.ErrorContext(ctx, "Failed to perform test embedding for dimension check", "error", err)
-			return nil, fmt.Errorf("failed to determine embedding dimension: %w", err)
+			o.logger.WarnContext(ctx, "Failed to perform test embedding for dimension check", "error", err)
+			// Don't fail here, just set dimension to 0
+			dim = 0
 		}
 	} else {
 		dim = int64(len(testEmb))
@@ -433,7 +471,7 @@ func (o *LLM) CountTokens(ctx context.Context, text string) (int, error) {
 	})
 
 	if err != nil {
-		return 0, fmt.Errorf("token counting via generation failed: %w", err)
+		return 0, fmt.Errorf("token counting failed: %w", err)
 	}
 
 	return tokenCount, nil
@@ -441,8 +479,17 @@ func (o *LLM) CountTokens(ctx context.Context, text string) (int, error) {
 
 func (o *LLM) determineModel(opts llms.CallOptions) string {
 	if opts.Model != "" {
-		o.logger.DebugContext(context.Background(), "Using model from call options", "model", opts.Model)
+		o.logger.Debug("Using model from call options", "model", opts.Model)
 		return opts.Model
 	}
 	return o.options.model
+}
+
+// Helper function to check if error indicates model not found
+func isModelNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "not found") || strings.Contains(errStr, "does not exist")
 }
