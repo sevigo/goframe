@@ -82,7 +82,7 @@ func TestGoPlugin_Chunking_WithGrouping(t *testing.T) {
 		largeContent.WriteString("package main\n\nimport \"fmt\"\n\n")
 
 		// Create content large enough to force multiple chunks (targetChunkSize is 3000)
-		for i := 0; i < 15; i++ {
+		for i := range 15 {
 			largeContent.WriteString(fmt.Sprintf(`
 // Function number %d is a long function.
 func function%d() {
