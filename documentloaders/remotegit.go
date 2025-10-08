@@ -34,7 +34,10 @@ func (l *RemoteGitRepoLoader) Load(ctx context.Context) ([]schema.Document, erro
 	}
 	defer cleanup()
 
-	localGitLoader := NewGit(tempPath, l.ParserRegistry)
+	localGitLoader, err := NewGit(tempPath, l.ParserRegistry)
+	if err != nil {
+		return nil, err
+	}
 
 	documents, err := localGitLoader.Load(ctx)
 	if err != nil {

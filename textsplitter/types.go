@@ -38,31 +38,6 @@ var (
 	ErrModelRequired          = errors.New("model name is required")
 )
 
-// contentPattern represents patterns for detecting content types
-type contentPattern struct {
-	patterns  []string
-	chunkType ChunkType
-}
-
-var (
-	contentPatterns = []contentPattern{
-		{
-			patterns:  []string{"func ", "function ", "def "},
-			chunkType: ChunkTypeFunction,
-		},
-		{
-			patterns:  []string{"class ", "struct "},
-			chunkType: ChunkTypeClass,
-		},
-		{
-			patterns:  []string{"import ", "#include"},
-			chunkType: ChunkTypeImports,
-		},
-	}
-
-	commentPrefixes = []string{"//", "#", "/*"}
-)
-
 // chunkingParameters holds the effective parameters for chunking
 type chunkingParameters struct {
 	ChunkSize        int

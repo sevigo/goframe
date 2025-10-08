@@ -24,6 +24,11 @@ var (
 	ErrModelNotFound       = errors.New("ollama: model not found")
 	ErrInvalidModel        = errors.New("ollama: invalid model specified")
 	ErrContextCanceled     = errors.New("ollama: context canceled")
+	ErrNilClient           = errors.New("ollama: client is nil")
+)
+
+const (
+	maxResponseSize = 10 * 1024 * 1024 // 10MB limit for streaming responses
 )
 
 type LLM struct {
@@ -74,6 +79,10 @@ func New(opts ...Option) (*LLM, error) {
 }
 
 func (o *LLM) Call(ctx context.Context, prompt string, options ...llms.CallOption) (string, error) {
+	if err := o.validateClient(ctx); err != nil {
+		return "", err
+	}
+
 	start := time.Now()
 	o.logger.DebugContext(ctx, "Starting simple call", "prompt_length", len(prompt))
 
@@ -95,6 +104,10 @@ func (o *LLM) GenerateContent(
 	messages []schema.MessageContent,
 	options ...llms.CallOption,
 ) (*schema.ContentResponse, error) {
+	if err := o.validateClient(ctx); err != nil {
+		return nil, err
+	}
+
 	start := time.Now()
 	o.logger.DebugContext(ctx, "Starting Ollama content generation", "message_count", len(messages))
 
@@ -133,21 +146,36 @@ func (o *LLM) GenerateContent(
 		req.Options["reasoning_effort"] = o.options.reasoningEffort
 	}
 
+	// Preallocate builder with reasonable capacity
 	var fullResponse strings.Builder
+	fullResponse.Grow(1024)
+
 	var finalResp api.ChatResponse
 	var mu sync.Mutex
 
 	fn := func(response api.ChatResponse) error {
+		// Check context cancellation
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		mu.Lock()
+		// Check size limit to prevent memory issues
+		if fullResponse.Len()+len(response.Message.Content) > maxResponseSize {
+			mu.Unlock()
+			return fmt.Errorf("response exceeds maximum size of %d bytes", maxResponseSize)
+		}
+
 		fullResponse.WriteString(response.Message.Content)
 		if response.Done {
 			finalResp = response
 		}
+		content := response.Message.Content
 		mu.Unlock()
 
 		// Call streaming function outside the lock
-		if opts.StreamingFunc != nil && response.Message.Content != "" {
-			if errStream := opts.StreamingFunc(ctx, []byte(response.Message.Content)); errStream != nil {
+		if opts.StreamingFunc != nil && content != "" {
+			if errStream := opts.StreamingFunc(ctx, []byte(content)); errStream != nil {
 				return fmt.Errorf("streaming function error: %w", errStream)
 			}
 		}
@@ -162,14 +190,20 @@ func (o *LLM) GenerateContent(
 		return nil, err
 	}
 
+	// Safely read final values
+	mu.Lock()
+	finalContent := fullResponse.String()
+	finalInfo := finalResp
+	mu.Unlock()
+
 	response := &schema.ContentResponse{
 		Choices: []*schema.ContentChoice{
 			{
-				Content: fullResponse.String(),
+				Content: finalContent,
 				GenerationInfo: map[string]any{
-					"CompletionTokens": finalResp.EvalCount,
-					"PromptTokens":     finalResp.PromptEvalCount,
-					"TotalTokens":      finalResp.EvalCount + finalResp.PromptEvalCount,
+					"CompletionTokens": finalInfo.EvalCount,
+					"PromptTokens":     finalInfo.PromptEvalCount,
+					"TotalTokens":      finalInfo.EvalCount + finalInfo.PromptEvalCount,
 					"Duration":         duration,
 					"Model":            model,
 				},
@@ -177,7 +211,9 @@ func (o *LLM) GenerateContent(
 		},
 	}
 
-	o.logger.InfoContext(ctx, "Content generation completed", "duration", duration)
+	o.logger.InfoContext(ctx, "Content generation completed",
+		"duration", duration,
+		"tokens", finalInfo.EvalCount+finalInfo.PromptEvalCount)
 	return response, nil
 }
 
@@ -231,6 +267,10 @@ func typeToRole(typ schema.ChatMessageType) string {
 }
 
 func (o *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error) {
+	if err := o.validateClient(ctx); err != nil {
+		return nil, err
+	}
+
 	if len(texts) == 0 {
 		return [][]float32{}, nil
 	}
@@ -272,6 +312,10 @@ func (o *LLM) EmbedQueries(ctx context.Context, texts []string) ([][]float32, er
 }
 
 func (o *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	if err := o.validateClient(ctx); err != nil {
+		return nil, err
+	}
+
 	req := &api.EmbedRequest{
 		Model: o.options.model,
 		Input: text,
@@ -301,6 +345,14 @@ func (o *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 }
 
 func (o *LLM) EnsureModel(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context canceled: %w", err)
+	}
+
+	if err := o.validateClient(ctx); err != nil {
+		return err
+	}
+
 	// Fast path: check if model details are already cached
 	o.detailsMutex.RLock()
 	if o.details != nil {
@@ -324,6 +376,11 @@ func (o *LLM) EnsureModel(ctx context.Context) error {
 
 	pullStart := time.Now()
 	err = o.PullModel(ctx, func(progress api.ProgressResponse) error {
+		// Check for context cancellation during pull
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		if progress.Total > 0 {
 			percent := (float64(progress.Completed) / float64(progress.Total)) * 100
 			o.logger.InfoContext(ctx, "Model pull progress",
@@ -348,6 +405,14 @@ func (o *LLM) EnsureModel(ctx context.Context) error {
 }
 
 func (o *LLM) ModelExists(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, fmt.Errorf("context canceled: %w", err)
+	}
+
+	if err := o.validateClient(ctx); err != nil {
+		return false, err
+	}
+
 	_, err := o.client.Show(ctx, &api.ShowRequest{Name: o.options.model})
 	if err != nil {
 		if isModelNotFoundError(err) {
@@ -359,6 +424,10 @@ func (o *LLM) ModelExists(ctx context.Context) (bool, error) {
 }
 
 func (o *LLM) PullModel(ctx context.Context, progressFn func(api.ProgressResponse) error) error {
+	if err := o.validateClient(ctx); err != nil {
+		return err
+	}
+
 	req := &ollamaclient.PullRequest{
 		Model:  o.options.model,
 		Stream: true,
@@ -367,6 +436,14 @@ func (o *LLM) PullModel(ctx context.Context, progressFn func(api.ProgressRespons
 }
 
 func (o *LLM) GetModelDetails(ctx context.Context) (*schema.ModelDetails, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context canceled: %w", err)
+	}
+
+	if err := o.validateClient(ctx); err != nil {
+		return nil, err
+	}
+
 	// Fast path: return cached details
 	o.detailsMutex.RLock()
 	if o.details != nil {
@@ -395,6 +472,7 @@ func (o *LLM) GetModelDetails(ctx context.Context) (*schema.ModelDetails, error)
 	return o.details, nil
 }
 
+// FIXED: This no longer calls methods that might try to acquire locks
 func (o *LLM) fetchModelDetails(ctx context.Context) (*schema.ModelDetails, error) {
 	showResp, err := o.client.Show(ctx, &api.ShowRequest{Name: o.options.model})
 	if err != nil {
@@ -405,9 +483,9 @@ func (o *LLM) fetchModelDetails(ctx context.Context) (*schema.ModelDetails, erro
 		return nil, fmt.Errorf("failed to retrieve model information: %w", err)
 	}
 
-	// Determine embedding dimension
+	// Determine embedding dimension - use direct API call to avoid deadlock
 	var dim int64
-	testEmb, err := o.EmbedQuery(ctx, "test")
+	testEmb, err := o.testEmbeddingDimension(ctx)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "does not support") ||
 			strings.Contains(strings.ToLower(err.Error()), "embedding") {
@@ -439,6 +517,24 @@ func (o *LLM) fetchModelDetails(ctx context.Context) (*schema.ModelDetails, erro
 	return details, nil
 }
 
+func (o *LLM) testEmbeddingDimension(ctx context.Context) ([]float32, error) {
+	req := &api.EmbedRequest{
+		Model: o.options.model,
+		Input: "test",
+	}
+
+	resp, err := o.client.Embed(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(resp.Embeddings) == 0 {
+		return nil, ErrEmptyResponse
+	}
+
+	return resp.Embeddings[0], nil
+}
+
 func (o *LLM) GetDimension(ctx context.Context) (int, error) {
 	details, err := o.GetModelDetails(ctx)
 	if err != nil {
@@ -448,6 +544,10 @@ func (o *LLM) GetDimension(ctx context.Context) (int, error) {
 }
 
 func (o *LLM) CountTokens(ctx context.Context, text string) (int, error) {
+	if err := o.validateClient(ctx); err != nil {
+		return 0, err
+	}
+
 	if text == "" {
 		return 0, nil
 	}
@@ -464,6 +564,11 @@ func (o *LLM) CountTokens(ctx context.Context, text string) (int, error) {
 
 	var tokenCount int
 	err := o.client.Generate(ctx, req, func(resp ollamaclient.GenerateResponse) error {
+		// Check context cancellation
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		if resp.Done {
 			tokenCount = resp.PromptEvalCount
 		}
@@ -483,6 +588,19 @@ func (o *LLM) determineModel(opts llms.CallOptions) string {
 		return opts.Model
 	}
 	return o.options.model
+}
+
+// validateClient checks if the client is valid and context is not canceled
+func (o *LLM) validateClient(ctx context.Context) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("context canceled: %w", ctx.Err())
+	}
+
+	if o.client == nil {
+		return ErrNilClient
+	}
+
+	return nil
 }
 
 // Helper function to check if error indicates model not found

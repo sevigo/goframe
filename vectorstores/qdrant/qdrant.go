@@ -103,13 +103,19 @@ func New(opts ...Option) (vectorstores.VectorStore, error) {
 		return nil, fmt.Errorf("failed to create Qdrant client: %w", err)
 	}
 
-	batchConfig := BatchConfig{
-		BatchSize:      DefaultBatchSize,
-		MaxConcurrency: DefaultMaxConcurrency,
-		RetryAttempts:  DefaultRetryAttempts,
-		RetryDelay:     DefaultRetryDelay,
-		MaxRetryDelay:  DefaultMaxRetryDelay,
-		RetryJitter:    DefaultRetryJitter,
+	// Use the provided batch config, or create a default one.
+	var batchConfig BatchConfig
+	if storeOptions.batchConfig != nil {
+		batchConfig = *storeOptions.batchConfig
+	} else {
+		batchConfig = BatchConfig{
+			BatchSize:      DefaultBatchSize,
+			MaxConcurrency: DefaultMaxConcurrency,
+			RetryAttempts:  DefaultRetryAttempts,
+			RetryDelay:     DefaultRetryDelay,
+			MaxRetryDelay:  DefaultMaxRetryDelay,
+			RetryJitter:    DefaultRetryJitter,
+		}
 	}
 
 	store := &Store{
@@ -118,12 +124,12 @@ func New(opts ...Option) (vectorstores.VectorStore, error) {
 		collectionName: storeOptions.collectionName,
 		logger:         logger,
 		options:        storeOptions,
-		batchConfig:    batchConfig,
 	}
+	store.SetBatchConfig(batchConfig)
 
 	logger.Info("Qdrant store initialized successfully",
 		"config", storeOptions.String(),
-		"batch_config", batchConfig,
+		"batch_config", store.batchConfig,
 	)
 	return store, nil
 }
@@ -152,7 +158,7 @@ func (s *Store) validateAndNormalizeBatchConfig(config BatchConfig) BatchConfig 
 	if config.EmbeddingBatchSize < 0 {
 		config.EmbeddingBatchSize = 0
 	}
-	if config.EmbeddingMaxConcurrency < 0 {
+	if config.EmbeddingMaxConcurrency <= 0 {
 		config.EmbeddingMaxConcurrency = 0
 	}
 
@@ -229,9 +235,6 @@ func (p *embeddingBatchProcessor) getEffectiveEmbeddingBatchSize() int {
 }
 
 func (p *embeddingBatchProcessor) getEffectiveMaxConcurrency() int {
-	if p.batchConfig.EmbeddingMaxConcurrency <= 0 {
-		return p.batchConfig.MaxConcurrency
-	}
 	return p.batchConfig.EmbeddingMaxConcurrency
 }
 
