@@ -159,26 +159,3 @@ func (c *CodeAwareTextSplitter) validateContent(content, filePath string) error 
 
 	return nil
 }
-
-func (c *CodeAwareTextSplitter) isCommentDominatedContent(content string) bool {
-	commentLines, totalLines := 0, 0
-
-	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if len(trimmed) > 0 {
-			totalLines++
-			for _, prefix := range commentPrefixes {
-				if strings.HasPrefix(trimmed, prefix) {
-					commentLines++
-					break
-				}
-			}
-		}
-	}
-
-	if totalLines == 0 {
-		return false
-	}
-
-	return float64(commentLines)/float64(totalLines) > commentRatioThreshold
-}
