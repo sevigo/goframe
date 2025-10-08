@@ -5,407 +5,139 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"strconv"
 	"strings"
 
 	"github.com/sevigo/goframe/schema"
 )
 
+const (
+	// Target size for a chunk in characters. Adjust as needed.
+	// 2000-4000 characters is a good range for balancing context and size.
+	targetChunkSize = 3000
+)
+
+// Chunk implements the new grouping strategy for Go files. It iterates through
+// top-level declarations (functions, types, vars) and groups them into larger,
+// more context-rich chunks that do not exceed a target size.
 func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingOptions) ([]schema.CodeChunk, error) {
-	var chunks []schema.CodeChunk
+	if strings.TrimSpace(content) == "" {
+		return []schema.CodeChunk{}, nil
+	}
 
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "", content, parser.ParseComments)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse Go file: %w", err)
+		return nil, fmt.Errorf("failed to parse Go file for chunking: %w", err)
 	}
 
-	chunks = append(chunks, p.extractFunctionChunks(content, fset, file)...)
-	chunks = append(chunks, p.extractTypeChunks(content, fset, file)...)
-	chunks = append(chunks, p.extractVarConstChunks(content, fset, file)...)
-
-	if len(chunks) == 0 {
-		return []schema.CodeChunk{}, nil
-	}
-
-	p.logger.Debug("Created chunks for Go file", "count", len(chunks), "path", path)
-	for i, chunk := range chunks {
-		p.logger.Debug("Chunk info",
-			"index", i,
-			"type", chunk.Type,
-			"identifier", chunk.Identifier,
-			"lines", fmt.Sprintf("%d-%d", chunk.LineStart, chunk.LineEnd),
-		)
-	}
-
-	return chunks, nil
-}
-
-func (p *GoPlugin) extractFunctionChunks(content string, fset *token.FileSet, file *ast.File) []schema.CodeChunk {
-	var chunks []schema.CodeChunk
 	lines := strings.Split(content, "\n")
+	var chunks []schema.CodeChunk
+
+	var currentChunkContent strings.Builder
+	var currentChunkStartLine = -1
+	var lastDeclEndLine int
+
+	// Pre-calculate the package and import block to prepend to every chunk.
+	// This gives the LLM crucial context about the file's purpose and dependencies.
+	packageAndImports := p.extractPackageAndImports(file, lines, fset)
 
 	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
+		startPos := fset.Position(decl.Pos())
+		endPos := fset.Position(decl.End())
 
-		startPos := fset.Position(fn.Pos())
-		endPos := fset.Position(fn.End())
+		// Extract the raw text of the entire declaration block, including its doc comment.
+		declContent := p.extractDeclarationContent(lines, startPos.Line, endPos.Line)
 
-		var identifier string
-		if fn.Recv != nil && len(fn.Recv.List) > 0 {
-			receiverText := p.getExactReceiverText(content, fset, fn.Recv)
-			if receiverText != "" {
-				identifier = fmt.Sprintf("%s %s", receiverText, fn.Name.Name)
-			} else {
-				recv := p.getReceiverType(fn.Recv.List[0].Type)
-				identifier = fmt.Sprintf("(%s) %s", recv, fn.Name.Name)
+		// If the current chunk has content and adding the next declaration would
+		// exceed our target size, finalize the current chunk.
+		if currentChunkContent.Len() > 0 && (currentChunkContent.Len()+len(declContent) > targetChunkSize) {
+			chunkIdentifier := fmt.Sprintf("%s:%d-%d", path, currentChunkStartLine, lastDeclEndLine)
+			chunk := schema.CodeChunk{
+				Content:    packageAndImports + currentChunkContent.String(),
+				LineStart:  currentChunkStartLine,
+				LineEnd:    lastDeclEndLine,
+				Type:       "code_group",
+				Identifier: chunkIdentifier,
+				Annotations: map[string]string{
+					"type": "code_group",
+				},
 			}
-		} else {
-			identifier = fn.Name.Name
+			chunks = append(chunks, chunk)
+
+			// Reset for the next chunk.
+			currentChunkContent.Reset()
+			currentChunkStartLine = -1
 		}
 
-		startLine := startPos.Line - 1
-		endLine := min(endPos.Line, len(lines))
-
-		chunkContent := ""
-		docComment := p.extractDocComment(fn.Doc)
-		if docComment != "" {
-			chunkContent = docComment + "\n"
-		}
-		chunkContent += strings.Join(lines[startLine:endLine], "\n")
-
-		annotations := map[string]string{
-			"type": "function",
-			"name": fn.Name.Name,
+		// If this is the start of a new chunk, record its starting line number.
+		if currentChunkStartLine == -1 {
+			currentChunkStartLine = startPos.Line
 		}
 
-		if fn.Recv != nil && len(fn.Recv.List) > 0 {
-			recv := p.getReceiverType(fn.Recv.List[0].Type)
-			annotations["receiver"] = recv
-			annotations["is_method"] = "true"
-		} else {
-			annotations["is_method"] = "false"
-		}
+		currentChunkContent.WriteString(declContent)
+		currentChunkContent.WriteString("\n\n") // Add vertical space between declarations for clarity.
+		lastDeclEndLine = endPos.Line
+	}
 
-		annotations["signature"] = p.getFunctionSignature(fn)
-		annotations["visibility"] = p.getVisibility(fn.Name.Name)
-		if docComment != "" {
-			annotations["has_doc"] = "true"
-		}
-
+	// After the loop, add the final remaining chunk if it has any content.
+	if currentChunkContent.Len() > 0 {
+		chunkIdentifier := fmt.Sprintf("%s:%d-%d", path, currentChunkStartLine, lastDeclEndLine)
 		chunk := schema.CodeChunk{
-			Content:       chunkContent,
-			LineStart:     startPos.Line,
-			LineEnd:       endPos.Line,
-			Type:          "function",
-			Identifier:    identifier,
-			Annotations:   annotations,
-			ParentContext: p.buildParentContext(file, fn),
-			ContextLevel:  2,
+			Content:    packageAndImports + currentChunkContent.String(),
+			LineStart:  currentChunkStartLine,
+			LineEnd:    lastDeclEndLine,
+			Type:       "code_group",
+			Identifier: chunkIdentifier,
+			Annotations: map[string]string{
+				"type": "code_group",
+			},
 		}
-
 		chunks = append(chunks, chunk)
 	}
 
-	return chunks
+	p.logger.Debug("Created grouped chunks for Go file", "count", len(chunks), "path", path)
+	return chunks, nil
 }
 
-// Update buildParentContext to remove import redundancy
-func (p *GoPlugin) buildParentContext(file *ast.File, fn *ast.FuncDecl) string {
-	var context strings.Builder
-
+// extractPackageAndImports gets the package and import declarations as a formatted string.
+func (p *GoPlugin) extractPackageAndImports(file *ast.File, lines []string, fset *token.FileSet) string {
+	var header strings.Builder
 	if file.Name != nil {
-		context.WriteString(fmt.Sprintf("// Package: %s\n", file.Name.Name))
+		header.WriteString(fmt.Sprintf("package %s\n\n", file.Name.Name))
 	}
-
-	if fn.Recv != nil && len(fn.Recv.List) > 0 {
-		recv := p.getReceiverType(fn.Recv.List[0].Type)
-		context.WriteString(fmt.Sprintf("// Method of: %s\n", recv))
-		context.WriteString(fmt.Sprintf("// Function: %s\n", fn.Name.Name))
-	} else {
-		context.WriteString(fmt.Sprintf("// Function: %s\n", fn.Name.Name))
-	}
-
-	return context.String()
-}
-
-func (p *GoPlugin) extractTypeChunks(content string, fset *token.FileSet, file *ast.File) []schema.CodeChunk {
-	var chunks []schema.CodeChunk
-	lines := strings.Split(content, "\n")
 
 	for _, decl := range file.Decls {
 		genDecl, ok := decl.(*ast.GenDecl)
-		if !ok || genDecl.Tok != token.TYPE {
-			continue
-		}
-
-		for _, spec := range genDecl.Specs {
-			typeSpec, typeSpecOK := spec.(*ast.TypeSpec)
-			if !typeSpecOK {
-				continue
+		if ok && genDecl.Tok == token.IMPORT {
+			start := fset.Position(genDecl.Pos()).Line
+			end := fset.Position(genDecl.End()).Line
+			// Ensure start and end are within bounds before slicing.
+			if start > 0 && end <= len(lines) {
+				header.WriteString(strings.Join(lines[start-1:end], "\n"))
+				header.WriteString("\n\n")
 			}
-
-			startPos := fset.Position(genDecl.Pos())
-			endPos := fset.Position(genDecl.End())
-
-			startLine := startPos.Line - 1
-			endLine := min(endPos.Line, len(lines))
-
-			chunkContent := ""
-			docComment := p.extractDocComment(genDecl.Doc)
-			if docComment != "" {
-				chunkContent = docComment + "\n"
-			}
-			chunkContent += strings.Join(lines[startLine:endLine], "\n")
-
-			typeName := typeSpec.Name.Name
-			annotations := map[string]string{
-				"type":       "type_declaration",
-				"name":       typeName,
-				"visibility": p.getVisibility(typeName),
-			}
-
-			if docComment != "" {
-				annotations["has_doc"] = "true"
-			}
-
-			if structType, structTypeOK := typeSpec.Type.(*ast.StructType); structTypeOK {
-				annotations["structure_type"] = "struct"
-
-				if structType.Fields != nil && len(structType.Fields.List) > 0 {
-					fieldCount := len(structType.Fields.List)
-					annotations["field_count"] = strconv.Itoa(fieldCount)
-
-					var fieldNames []string
-					for _, field := range structType.Fields.List {
-						for _, name := range field.Names {
-							fieldNames = append(fieldNames, name.Name)
-						}
-					}
-					if len(fieldNames) > 0 {
-						annotations["field_names"] = strings.Join(fieldNames, ",")
-					}
-				}
-			}
-
-			if interfaceType, interfaceTypeOK := typeSpec.Type.(*ast.InterfaceType); interfaceTypeOK {
-				annotations["structure_type"] = "interface"
-
-				if interfaceType.Methods != nil && len(interfaceType.Methods.List) > 0 {
-					methodCount := len(interfaceType.Methods.List)
-					annotations["method_count"] = strconv.Itoa(methodCount)
-
-					var methodNames []string
-					for _, method := range interfaceType.Methods.List {
-						for _, name := range method.Names {
-							methodNames = append(methodNames, name.Name)
-						}
-					}
-					if len(methodNames) > 0 {
-						annotations["method_names"] = strings.Join(methodNames, ",")
-					}
-				}
-			}
-
-			if _, isAlias := typeSpec.Type.(*ast.Ident); isAlias {
-				annotations["structure_type"] = "alias"
-			}
-
-			chunk := schema.CodeChunk{
-				Content:     chunkContent,
-				LineStart:   startPos.Line,
-				LineEnd:     endPos.Line,
-				Type:        "type_declaration",
-				Identifier:  typeName,
-				Annotations: annotations,
-			}
-
-			chunks = append(chunks, chunk)
+			break // Assume only one import block per file for simplicity.
 		}
 	}
-
-	return chunks
+	return header.String()
 }
 
-func (p *GoPlugin) extractVarConstChunks(
-	content string,
-	fset *token.FileSet,
-	file *ast.File,
-) []schema.CodeChunk {
-	var chunks []schema.CodeChunk
-	lines := strings.Split(content, "\n")
+// extractDeclarationContent gets the full source text of a declaration using its line numbers.
+func (p *GoPlugin) extractDeclarationContent(lines []string, startLine, endLine int) string {
+	// The start and end lines are 1-based, so adjust for 0-based slice indexing.
+	startIdx := startLine - 1
+	endIdx := endLine
 
-	for _, decl := range file.Decls {
-		genDecl, ok := decl.(*ast.GenDecl)
-		if !ok || (genDecl.Tok != token.VAR && genDecl.Tok != token.CONST) {
-			continue
-		}
-
-		if !p.shouldCreateVarConstChunk(genDecl) {
-			continue
-		}
-
-		if len(genDecl.Specs) == 1 {
-			if chunk := p.createIndividualVarConstChunk(genDecl, fset, lines); chunk != nil {
-				chunks = append(chunks, *chunk)
-			}
-		} else {
-			chunk := p.createGroupedVarConstChunk(genDecl, fset, lines)
-			chunks = append(chunks, chunk)
-		}
+	// Add bounds checking for safety.
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	if endIdx > len(lines) {
+		endIdx = len(lines)
+	}
+	if startIdx >= endIdx {
+		return ""
 	}
 
-	return chunks
-}
-
-func (p *GoPlugin) shouldCreateVarConstChunk(genDecl *ast.GenDecl) bool {
-	hasExported := false
-	hasDoc := genDecl.Doc != nil && len(genDecl.Doc.List) > 0
-
-	for _, spec := range genDecl.Specs {
-		if valSpec, ok := spec.(*ast.ValueSpec); ok {
-			for _, name := range valSpec.Names {
-				if ast.IsExported(name.Name) {
-					hasExported = true
-					break
-				}
-			}
-			if hasExported {
-				break
-			}
-		}
-	}
-
-	return hasExported || hasDoc
-}
-
-func (p *GoPlugin) createIndividualVarConstChunk(
-	genDecl *ast.GenDecl,
-	fset *token.FileSet,
-	lines []string,
-) *schema.CodeChunk {
-	spec := genDecl.Specs[0]
-	valSpec, ok := spec.(*ast.ValueSpec)
-	if !ok || len(valSpec.Names) != 1 {
-		return nil
-	}
-
-	name := valSpec.Names[0]
-	startPos := fset.Position(genDecl.Pos())
-	endPos := fset.Position(genDecl.End())
-
-	chunkContent := p.buildChunkContent(genDecl, startPos.Line-1, min(endPos.Line, len(lines)), lines)
-	declType := p.getDeclType(genDecl.Tok)
-
-	annotations := map[string]string{
-		"type":       declType,
-		"names":      name.Name,
-		"count":      "1",
-		"visibility": p.getVisibility(name.Name),
-	}
-
-	if genDecl.Doc != nil && len(genDecl.Doc.List) > 0 {
-		annotations["has_doc"] = "true"
-	}
-
-	p.logger.Debug("Creating individual var/const chunk",
-		"identifier", name.Name,
-		"type", declType,
-		"start", startPos.Line,
-		"end", endPos.Line,
-	)
-
-	return &schema.CodeChunk{
-		Content:     chunkContent,
-		LineStart:   startPos.Line,
-		LineEnd:     endPos.Line,
-		Type:        declType,
-		Identifier:  name.Name,
-		Annotations: annotations,
-	}
-}
-
-func (p *GoPlugin) createGroupedVarConstChunk(
-	genDecl *ast.GenDecl,
-	fset *token.FileSet,
-	lines []string,
-) schema.CodeChunk {
-	startPos := fset.Position(genDecl.Pos())
-	endPos := fset.Position(genDecl.End())
-
-	chunkContent := p.buildChunkContent(genDecl, startPos.Line-1, min(endPos.Line, len(lines)), lines)
-	declType := p.getDeclType(genDecl.Tok)
-	identifiers := p.extractIdentifiers(genDecl)
-	identifier := strings.Join(identifiers, ", ")
-
-	annotations := map[string]string{
-		"type":       declType,
-		"names":      identifier,
-		"count":      strconv.Itoa(len(identifiers)),
-		"visibility": p.determineGroupVisibility(identifiers),
-	}
-
-	if genDecl.Doc != nil && len(genDecl.Doc.List) > 0 {
-		annotations["has_doc"] = "true"
-	}
-
-	return schema.CodeChunk{
-		Content:     chunkContent,
-		LineStart:   startPos.Line,
-		LineEnd:     endPos.Line,
-		Type:        declType,
-		Identifier:  identifier,
-		Annotations: annotations,
-	}
-}
-
-func (p *GoPlugin) buildChunkContent(genDecl *ast.GenDecl, startLine, endLine int, lines []string) string {
-	chunkContent := ""
-	if genDecl.Doc != nil && len(genDecl.Doc.List) > 0 {
-		chunkContent = p.extractRawDocComment(genDecl.Doc) + "\n\n"
-	}
-	chunkContent += strings.Join(lines[startLine:endLine], "\n")
-	return chunkContent
-}
-
-func (p *GoPlugin) getDeclType(tok token.Token) string {
-	if tok == token.CONST {
-		return "constant"
-	}
-	return "variable"
-}
-
-func (p *GoPlugin) extractIdentifiers(genDecl *ast.GenDecl) []string {
-	var identifiers []string
-	for _, spec := range genDecl.Specs {
-		if valSpec, ok := spec.(*ast.ValueSpec); ok {
-			for _, name := range valSpec.Names {
-				identifiers = append(identifiers, name.Name)
-			}
-		}
-	}
-	return identifiers
-}
-
-func (p *GoPlugin) determineGroupVisibility(identifiers []string) string {
-	allPublic := true
-	allPrivate := true
-
-	for _, name := range identifiers {
-		if ast.IsExported(name) {
-			allPrivate = false
-		} else {
-			allPublic = false
-		}
-	}
-
-	if allPublic {
-		return "public"
-	} else if allPrivate {
-		return "private"
-	}
-	return "mixed"
+	return strings.Join(lines[startIdx:endIdx], "\n")
 }

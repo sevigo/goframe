@@ -3,7 +3,6 @@ package golang
 import (
 	"fmt"
 	"go/ast"
-	"go/token"
 	"strings"
 )
 
@@ -152,50 +151,4 @@ func (p *GoPlugin) extractDocComment(doc *ast.CommentGroup) string {
 		return ""
 	}
 	return doc.Text()
-}
-
-// extractRawDocComment extracts raw documentation comments preserving original format
-func (p *GoPlugin) extractRawDocComment(doc *ast.CommentGroup) string {
-	if doc == nil {
-		return ""
-	}
-
-	var lines []string
-	for _, comment := range doc.List {
-		// ast.Comment.Text contains the raw comment including // or /* */
-		lines = append(lines, comment.Text)
-	}
-	return strings.Join(lines, "\n")
-}
-
-// getExactReceiverText extracts the exact receiver text from source
-func (p *GoPlugin) getExactReceiverText(content string, fset *token.FileSet, recv *ast.FieldList) string {
-	if recv == nil || len(recv.List) == 0 {
-		return ""
-	}
-
-	receiverStart := fset.Position(recv.Pos())
-	receiverEnd := fset.Position(recv.End())
-
-	lines := strings.Split(content, "\n")
-	if receiverStart.Line-1 >= len(lines) {
-		return ""
-	}
-
-	receiverLine := lines[receiverStart.Line-1]
-
-	// Extract the exact receiver text
-	if receiverEnd.Column > len(receiverLine) || receiverStart.Column-1 < 0 {
-		return ""
-	}
-
-	receiverText := receiverLine[receiverStart.Column-1 : receiverEnd.Column-1]
-	receiverText = strings.TrimSpace(receiverText)
-
-	// Ensure proper parentheses
-	if !strings.HasPrefix(receiverText, "(") {
-		receiverText = "(" + receiverText + ")"
-	}
-
-	return receiverText
 }
