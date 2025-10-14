@@ -107,12 +107,15 @@ func setupRAGSystem(logger *slog.Logger) (*chains.RetrievalQA, vectorstores.Vect
 func indexTerraformRepo(ctx context.Context, repoPath string, store vectorstores.VectorStore, registry parsers.ParserRegistry, logger *slog.Logger) error {
 	logger.Info("Starting to index Terraform files from repository...")
 
-	gitLoader := documentloaders.NewGit(
+	gitLoader, err := documentloaders.NewGit(
 		repoPath,
 		registry,
 		documentloaders.WithIncludeExts([]string{"tf"}),
 		documentloaders.WithLogger(logger),
 	)
+	if err != nil {
+		return fmt.Errorf("failed to create git loader: %w", err)
+	}
 
 	docs, err := gitLoader.Load(ctx)
 	if err != nil {

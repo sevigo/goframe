@@ -101,10 +101,10 @@ func TestGitLoader_Load(t *testing.T) {
 	require.NoError(t, err)
 
 	registry := newFakeRegistry()
-	loader := documentloaders.NewGit(tempDir, registry)
+	loader, err := documentloaders.NewGit(tempDir, registry)
+	require.NoError(t, err)
 
 	docs, err := loader.Load(context.Background())
-
 	require.NoError(t, err, "Load should not return an error")
 	require.NotNil(t, docs, "Load should return documents")
 

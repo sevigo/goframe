@@ -2,18 +2,40 @@ package documentloaders
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
+	"sync"
 
 	"github.com/sevigo/goframe/parsers"
 	"github.com/sevigo/goframe/schema"
 )
+
+const (
+	defaultBatchSize   = 256
+	maxFileSize        = 10 * 1024 * 1024  // 10MB
+	maxMemoryBuffer    = 100 * 1024 * 1024 // 100MB total buffer
+	defaultWorkerCount = 4
+)
+
+var (
+	ErrInvalidPath         = errors.New("documentloaders: invalid repository path")
+	ErrNilRegistry         = errors.New("documentloaders: parser registry is nil")
+	ErrPathNotExist        = errors.New("documentloaders: path does not exist")
+	ErrMemoryLimitExceeded = errors.New("documentloaders: memory limit exceeded")
+)
+
+// FileData is an in-memory representation of a file to be processed.
+type FileData struct {
+	Path     string
+	Content  string
+	FileInfo fs.FileInfo
+}
 
 type Loader interface {
 	Load(ctx context.Context) ([]schema.Document, error)
@@ -21,7 +43,6 @@ type Loader interface {
 }
 
 // GitLoader loads and processes documents from a git repository on the local file system.
-// It uses a ParserRegistry to apply language-specific chunking strategies.
 type GitLoader struct {
 	path           string
 	parserRegistry parsers.ParserRegistry
@@ -30,10 +51,13 @@ type GitLoader struct {
 }
 
 type gitLoaderOptions struct {
-	IncludeExts map[string]bool
-	ExcludeExts map[string]bool
-	ExcludeDirs map[string]bool
-	Logger      *slog.Logger
+	IncludeExts  map[string]bool
+	ExcludeExts  map[string]bool
+	ExcludeDirs  map[string]bool
+	Logger       *slog.Logger
+	BatchSize    int
+	WorkerCount  int
+	MaxMemBuffer int64
 }
 
 type GitLoaderOption func(*gitLoaderOptions)
@@ -46,10 +70,34 @@ func WithLogger(logger *slog.Logger) GitLoaderOption {
 	}
 }
 
+func WithBatchSize(size int) GitLoaderOption {
+	return func(opts *gitLoaderOptions) {
+		if size > 0 {
+			opts.BatchSize = size
+		}
+	}
+}
+
+func WithWorkerCount(count int) GitLoaderOption {
+	return func(opts *gitLoaderOptions) {
+		if count > 0 {
+			opts.WorkerCount = count
+		}
+	}
+}
+
+func WithMaxMemoryBuffer(bytes int64) GitLoaderOption {
+	return func(opts *gitLoaderOptions) {
+		if bytes > 0 {
+			opts.MaxMemBuffer = bytes
+		}
+	}
+}
+
 func WithExcludeExts(exts []string) GitLoaderOption {
 	return func(opts *gitLoaderOptions) {
 		if opts.ExcludeExts == nil {
-			opts.ExcludeExts = make(map[string]bool)
+			opts.ExcludeExts = make(map[string]bool, len(exts))
 		}
 		for _, ext := range exts {
 			if !strings.HasPrefix(ext, ".") {
@@ -63,7 +111,7 @@ func WithExcludeExts(exts []string) GitLoaderOption {
 func WithExcludeDirs(dirs []string) GitLoaderOption {
 	return func(opts *gitLoaderOptions) {
 		if opts.ExcludeDirs == nil {
-			opts.ExcludeDirs = make(map[string]bool)
+			opts.ExcludeDirs = make(map[string]bool, len(dirs))
 		}
 		for _, dir := range dirs {
 			opts.ExcludeDirs[dir] = true
@@ -74,7 +122,7 @@ func WithExcludeDirs(dirs []string) GitLoaderOption {
 func WithIncludeExts(exts []string) GitLoaderOption {
 	return func(opts *gitLoaderOptions) {
 		if opts.IncludeExts == nil {
-			opts.IncludeExts = make(map[string]bool)
+			opts.IncludeExts = make(map[string]bool, len(exts))
 		}
 		for _, ext := range exts {
 			if !strings.HasPrefix(ext, ".") {
@@ -85,9 +133,28 @@ func WithIncludeExts(exts []string) GitLoaderOption {
 	}
 }
 
-func NewGit(path string, registry parsers.ParserRegistry, opts ...GitLoaderOption) *GitLoader {
+func NewGit(path string, registry parsers.ParserRegistry, opts ...GitLoaderOption) (*GitLoader, error) {
+	if path == "" {
+		return nil, ErrInvalidPath
+	}
+
+	if registry == nil {
+		return nil, ErrNilRegistry
+	}
+
+	// Check if path exists
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w: %s", ErrPathNotExist, path)
+		}
+		return nil, fmt.Errorf("failed to access path: %w", err)
+	}
+
 	loaderOpts := gitLoaderOptions{
-		Logger: slog.Default(),
+		Logger:       slog.Default(),
+		BatchSize:    defaultBatchSize,
+		WorkerCount:  defaultWorkerCount,
+		MaxMemBuffer: maxMemoryBuffer,
 	}
 
 	for _, opt := range opts {
@@ -98,147 +165,273 @@ func NewGit(path string, registry parsers.ParserRegistry, opts ...GitLoaderOptio
 		path:           path,
 		parserRegistry: registry,
 		options:        loaderOpts,
-		logger:         loaderOpts.Logger.With("component", "git_loader"),
-	}
+		logger:         loaderOpts.Logger.With("component", "git_loader", "path", path),
+	}, nil
 }
 
+// LoadAndProcessStream uses a pipeline with controlled memory usage
 func (g *GitLoader) LoadAndProcessStream(ctx context.Context, processFn func(ctx context.Context, docs []schema.Document) error) error {
-	g.logger.InfoContext(ctx, "Starting repository stream processing", "path", g.path)
-	documentBatch := make([]schema.Document, 0, 256)
-	textParser, _ := g.parserRegistry.GetParser("text")
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 
-	err := filepath.WalkDir(g.path, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			g.logger.WarnContext(ctx, "Skipping unreadable path", "path", path, "error", err)
-			return nil
+	g.logger.InfoContext(ctx, "Starting streaming repository load")
+
+	// Create pipeline channels
+	fileChan := make(chan FileData, g.options.WorkerCount*2)
+	docChan := make(chan schema.Document, g.options.BatchSize*2)
+	errChan := make(chan error, 1)
+
+	// Context for cancellation
+	pipelineCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var wg sync.WaitGroup
+
+	// Stage 1: File discovery and reading
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer close(fileChan)
+
+		if err := g.walkAndReadFiles(pipelineCtx, fileChan); err != nil {
+			select {
+			case errChan <- fmt.Errorf("file walking failed: %w", err):
+			default:
+			}
+			cancel()
 		}
+	}()
+
+	var processorWg sync.WaitGroup
+	for i := range g.options.WorkerCount {
+		processorWg.Add(1)
+		go func(workerID int) {
+			defer processorWg.Done()
+			g.processFilesWorker(pipelineCtx, fileChan, docChan)
+		}(i)
+	}
+
+	// Close docChan when all processors are done
+	go func() {
+		processorWg.Wait()
+		close(docChan)
+	}()
+
+	// Stage 3: Batch and process documents
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		if err := g.batchAndProcess(pipelineCtx, docChan, processFn); err != nil {
+			select {
+			case errChan <- fmt.Errorf("batch processing failed: %w", err):
+			default:
+			}
+			cancel()
+		}
+	}()
+
+	// Wait for all stages to complete
+	wg.Wait()
+
+	// Check for errors
+	select {
+	case err := <-errChan:
+		return err
+	default:
+	}
+
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	g.logger.InfoContext(ctx, "Streaming repository load completed")
+	return nil
+}
+
+func (g *GitLoader) walkAndReadFiles(ctx context.Context, fileChan chan<- FileData) error {
+	var currentMemUsage int64
+
+	return filepath.WalkDir(g.path, func(path string, d fs.DirEntry, err error) error {
+		// Check context frequently
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 
-		if d.IsDir() {
-			dirName := d.Name()
-			if g.options.ExcludeDirs != nil && g.options.ExcludeDirs[dirName] {
-				g.logger.Debug("Skipping user-excluded directory", "path", path)
-				return filepath.SkipDir
-			}
-			if shouldSkipDir(dirName) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		ext := strings.ToLower(filepath.Ext(path))
-		if len(g.options.IncludeExts) > 0 && !g.options.IncludeExts[ext] {
-			return nil
-		}
-		if len(g.options.ExcludeExts) > 0 && g.options.ExcludeExts[ext] {
-			return nil
-		}
-
-		fileInfo, err := d.Info()
-		if err != nil {
-			g.logger.WarnContext(ctx, "Could not get file info, skipping", "path", path, "error", err)
-			return nil
-		}
-		if shouldSkipFile(path, fileInfo) {
-			g.logger.Debug("Skipping excluded file", "path", path, "size", fileInfo.Size())
-			return nil
-		}
-
-		fileDocuments := g.processFile(path, fileInfo, textParser)
-		documentBatch = append(documentBatch, fileDocuments...)
-
-		if len(documentBatch) >= 256 {
-			if err := processFn(ctx, documentBatch); err != nil {
-				return fmt.Errorf("processing function failed for batch: %w", err)
-			}
-			documentBatch = make([]schema.Document, 0, 256) // Reset batch
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	if len(documentBatch) > 0 {
-		if err := processFn(ctx, documentBatch); err != nil {
-			return fmt.Errorf("processing function failed for final batch: %w", err)
-		}
-	}
-	g.logger.InfoContext(ctx, "Repository stream processing completed", "path", g.path)
-	return nil
-}
-
-func (g *GitLoader) Load(ctx context.Context) ([]schema.Document, error) {
-	g.logger.InfoContext(ctx, "Starting repository load", "path", g.path)
-	var documents []schema.Document
-
-	textParser, _ := g.parserRegistry.GetParser("text")
-
-	err := filepath.WalkDir(g.path, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			g.logger.WarnContext(ctx, "Skipping unreadable path", "path", path, "error", err)
 			return nil
 		}
 
 		if d.IsDir() {
-			dirName := d.Name()
-			if g.options.ExcludeDirs != nil && g.options.ExcludeDirs[dirName] {
-				g.logger.Debug("Skipping user-excluded directory", "path", path)
-				return filepath.SkipDir
-			}
-			if shouldSkipDir(dirName) {
-				return filepath.SkipDir
-			}
-			return nil
+			return g.handleDirectory(d)
 		}
 
-		ext := strings.ToLower(filepath.Ext(path))
-		if len(g.options.IncludeExts) > 0 && !g.options.IncludeExts[ext] {
-			return nil
-		}
-		if len(g.options.ExcludeExts) > 0 && g.options.ExcludeExts[ext] {
+		// Check file filters
+		if !g.shouldProcessFile(path) {
 			return nil
 		}
 
 		fileInfo, err := d.Info()
 		if err != nil {
-			g.logger.WarnContext(ctx, "Could not get file info, skipping", "path", path, "error", err)
+			g.logger.WarnContext(ctx, "Could not get file info", "path", path, "error", err)
 			return nil
 		}
 
 		if shouldSkipFile(path, fileInfo) {
-			g.logger.Debug("Skipping excluded file", "path", path, "size", fileInfo.Size())
+			g.logger.DebugContext(ctx, "Skipping file", "path", path, "size", fileInfo.Size())
 			return nil
 		}
 
-		fileDocuments := g.processFile(path, fileInfo, textParser)
-		documents = append(documents, fileDocuments...)
+		// Check memory limit
+		if currentMemUsage+fileInfo.Size() > g.options.MaxMemBuffer {
+			g.logger.WarnContext(ctx, "Memory buffer limit reached, skipping file",
+				"path", path,
+				"current_usage", currentMemUsage,
+				"limit", g.options.MaxMemBuffer)
+			return nil
+		}
 
+		contentBytes, err := os.ReadFile(path)
+		if err != nil {
+			g.logger.WarnContext(ctx, "Cannot read file", "path", path, "error", err)
+			return nil
+		}
+
+		currentMemUsage += fileInfo.Size()
+
+		select {
+		case fileChan <- FileData{
+			Path:     path,
+			Content:  string(contentBytes),
+			FileInfo: fileInfo,
+		}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
+		return nil
+	})
+}
+
+func (g *GitLoader) processFilesWorker(ctx context.Context, fileChan <-chan FileData, docChan chan<- schema.Document) {
+	textParser, _ := g.parserRegistry.GetParser("text")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case fileData, ok := <-fileChan:
+			if !ok {
+				return
+			}
+
+			docs := g.processFile(fileData.Path, fileData.FileInfo, textParser, fileData.Content)
+
+			for _, doc := range docs {
+				select {
+				case docChan <- doc:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}
+}
+
+func (g *GitLoader) batchAndProcess(ctx context.Context, docChan <-chan schema.Document, processFn func(ctx context.Context, docs []schema.Document) error) error {
+	batch := make([]schema.Document, 0, g.options.BatchSize)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case doc, ok := <-docChan:
+			if !ok {
+				// Channel closed, process final batch
+				if len(batch) > 0 {
+					if err := processFn(ctx, batch); err != nil {
+						return fmt.Errorf("final batch processing failed: %w", err)
+					}
+				}
+				return nil
+			}
+
+			batch = append(batch, doc)
+
+			if len(batch) >= g.options.BatchSize {
+				if err := processFn(ctx, batch); err != nil {
+					return fmt.Errorf("batch processing failed: %w", err)
+				}
+				batch = make([]schema.Document, 0, g.options.BatchSize)
+			}
+		}
+	}
+}
+
+func (g *GitLoader) handleDirectory(d fs.DirEntry) error {
+	dirName := d.Name()
+	if g.options.ExcludeDirs != nil && g.options.ExcludeDirs[dirName] {
+		g.logger.Debug("Skipping user-excluded directory", "dir", dirName)
+		return filepath.SkipDir
+	}
+	if shouldSkipDir(dirName) {
+		g.logger.Debug("Skipping default-excluded directory", "dir", dirName)
+		return filepath.SkipDir
+	}
+	return nil
+}
+
+func (g *GitLoader) shouldProcessFile(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+
+	// Check include list first (whitelist)
+	if len(g.options.IncludeExts) > 0 {
+		return g.options.IncludeExts[ext]
+	}
+
+	// Check exclude list (blacklist)
+	if len(g.options.ExcludeExts) > 0 {
+		return !g.options.ExcludeExts[ext]
+	}
+
+	return true
+}
+
+func (g *GitLoader) Load(ctx context.Context) ([]schema.Document, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
+	g.logger.InfoContext(ctx, "Starting full repository load")
+
+	var documents []schema.Document
+	var mu sync.Mutex
+
+	err := g.LoadAndProcessStream(ctx, func(ctx context.Context, docs []schema.Document) error {
+		mu.Lock()
+		documents = append(documents, docs...)
+		mu.Unlock()
 		return nil
 	})
 
 	if err != nil {
-		g.logger.ErrorContext(ctx, "Repository walk failed", "error", err)
 		return nil, err
 	}
 
-	g.logger.InfoContext(ctx, "Repository load completed", "path", g.path, "total_documents", len(documents))
+	g.logger.InfoContext(ctx, "Repository load completed", "total_documents", len(documents))
 	return documents, nil
 }
 
-func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser schema.ParserPlugin) []schema.Document {
-	contentBytes, err := os.ReadFile(path)
-	if err != nil {
-		g.logger.Warn("Cannot read file, skipping", "path", path, "error", err)
-		return nil
-	}
-	// Replace any invalid byte sequences with the Unicode replacement character.
-	content := strings.ToValidUTF8(string(contentBytes), "\uFFFD")
+// processFile now accepts content as an argument to avoid reading from disk
+func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser schema.ParserPlugin, content string) []schema.Document {
+	// Optimize: Pre-allocate builder with estimated size
+	validContent := strings.ToValidUTF8(content, "\uFFFD")
 
 	relPath, err := filepath.Rel(g.path, path)
 	if err != nil {
-		g.logger.Warn("Could not get relative path, using absolute", "error", err, "full_path", path)
+		g.logger.Warn("Could not get relative path, using absolute", "error", err, "path", path)
 		relPath = path
 	}
 
@@ -250,47 +443,61 @@ func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser sc
 
 	parser, err := g.parserRegistry.GetParserForFile(path, fileInfo)
 	if err != nil {
-		g.logger.Debug("No specific parser found, using text fallback", "path", path)
+		g.logger.Debug("No specific parser found, using text fallback", "path", relPath)
 		parser = textParser
 	}
 
 	if parser == nil {
-		g.logger.Warn("No parser available, treating as single document", "path", path)
-		return []schema.Document{schema.NewDocument(content, baseMetadata)}
+		g.logger.Warn("No parser available, treating as single document", "path", relPath)
+		return []schema.Document{schema.NewDocument(validContent, baseMetadata)}
 	}
 
-	chunks, err := parser.Chunk(content, path, nil)
-	if err != nil {
-		g.logger.Warn("Chunking failed or returned no chunks, treating as single document", "path", path, "parser", parser.Name(), "error", err)
-		return []schema.Document{schema.NewDocument(content, baseMetadata)}
-	}
-	if len(chunks) == 0 {
-		// The parser ran successfully but found no semantic units to chunk.
-		// This is a normal edge case, so we log it at INFO level and use the fallback.
-		g.logger.Info("No semantic chunks found by parser, treating as single document", "path", path, "parser", parser.Name())
-		return []schema.Document{schema.NewDocument(content, baseMetadata)}
+	chunks, err := parser.Chunk(validContent, path, nil)
+	if err != nil || len(chunks) == 0 {
+		g.logger.Info("Chunking failed or returned no chunks",
+			"path", relPath,
+			"parser", parser.Name(),
+			"error", err)
+		return []schema.Document{schema.NewDocument(validContent, baseMetadata)}
 	}
 
 	documents := make([]schema.Document, 0, len(chunks))
 	for i, chunk := range chunks {
 		chunkMetadata := buildChunkMetadata(baseMetadata, chunk, i, len(chunks))
-
-		var enrichedContentBuilder strings.Builder
-		source, _ := chunkMetadata["source"].(string)
-		identifier, _ := chunkMetadata["identifier"].(string)
-		chunkType, _ := chunkMetadata["chunk_type"].(string)
-
-		enrichedContentBuilder.WriteString(fmt.Sprintf("File: %s\n", source))
-		if chunkType != "" && identifier != "" {
-			enrichedContentBuilder.WriteString(fmt.Sprintf("Type: %s\nIdentifier: %s\n", chunkType, identifier))
-		}
-		enrichedContentBuilder.WriteString("---\n")
-		enrichedContentBuilder.WriteString(chunk.Content)
-
-		doc := schema.NewDocument(enrichedContentBuilder.String(), chunkMetadata)
+		enrichedContent := buildEnrichedContent(chunk, chunkMetadata)
+		doc := schema.NewDocument(enrichedContent, chunkMetadata)
 		documents = append(documents, doc)
 	}
+
 	return documents
+}
+
+func buildEnrichedContent(chunk schema.CodeChunk, metadata map[string]any) string {
+	source, _ := metadata["source"].(string)
+	identifier, _ := metadata["identifier"].(string)
+	chunkType, _ := metadata["chunk_type"].(string)
+
+	// Pre-calculate size for efficiency
+	estimatedSize := len(chunk.Content) + len(source) + len(identifier) + len(chunkType) + 50
+	var builder strings.Builder
+	builder.Grow(estimatedSize)
+
+	builder.WriteString("File: ")
+	builder.WriteString(source)
+	builder.WriteString("\n")
+
+	if chunkType != "" && identifier != "" {
+		builder.WriteString("Type: ")
+		builder.WriteString(chunkType)
+		builder.WriteString("\nIdentifier: ")
+		builder.WriteString(identifier)
+		builder.WriteString("\n")
+	}
+
+	builder.WriteString("---\n")
+	builder.WriteString(chunk.Content)
+
+	return builder.String()
 }
 
 func buildChunkMetadata(baseMetadata map[string]any, chunk schema.CodeChunk, chunkIndex, totalChunks int) map[string]any {
@@ -307,29 +514,30 @@ func buildChunkMetadata(baseMetadata map[string]any, chunk schema.CodeChunk, chu
 	for k, v := range chunk.Annotations {
 		chunkMetadata[k] = v
 	}
+
 	return chunkMetadata
 }
 
 func shouldSkipDir(name string) bool {
-	skipDirs := []string{
-		".git", ".svn", ".hg",
-		"vendor", "node_modules", "__pycache__",
-		"build", "dist", "target", "out", "bin",
-		".vscode", ".idea", ".vs",
-		".DS_Store", "Thumbs.db",
+	// Use a map for O(1) lookup instead of slice
+	skipDirs := map[string]bool{
+		".git": true, ".svn": true, ".hg": true,
+		"vendor": true, "node_modules": true, "__pycache__": true,
+		"build": true, "dist": true, "target": true, "out": true, "bin": true,
+		".vscode": true, ".idea": true, ".vs": true,
+		".DS_Store": true, "Thumbs.db": true,
 	}
-	return slices.Contains(skipDirs, name)
+	return skipDirs[name]
 }
 
 func shouldSkipFile(path string, info fs.FileInfo) bool {
-	const maxFileSize = 10 * 1024 * 1024 // 10MB
 	if info.Size() > maxFileSize {
 		return true
 	}
 
 	ext := strings.ToLower(filepath.Ext(path))
-	// A list of common binary file extensions.
-	// PDF is intentionally not included, as it can be parsed.
+
+	// Use a map for O(1) lookup
 	binaryExts := map[string]bool{
 		".exe": true, ".dll": true, ".so": true, ".dylib": true,
 		".png": true, ".jpg": true, ".jpeg": true, ".gif": true,

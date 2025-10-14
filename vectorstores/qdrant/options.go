@@ -29,6 +29,7 @@ type options struct {
 	timeout        int
 	retryAttempts  int
 	batchSize      int
+	batchConfig    *BatchConfig
 }
 
 // Option defines a function type for configuring Qdrant store options.
