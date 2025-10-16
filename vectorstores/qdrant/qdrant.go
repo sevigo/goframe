@@ -1103,27 +1103,32 @@ func (s *Store) getCollectionName(opts vectorstores.Options) string {
 }
 
 func (s *Store) ensureCollection(ctx context.Context, collectionName string) error {
+	s.logger.DebugContext(ctx, "EnsureCollection: Starting check", "collection", collectionName)
+
 	exists, err := s.collectionExists(ctx, collectionName)
 	if err != nil {
 		return fmt.Errorf("failed to check collection existence: %w", err)
 	}
 
 	if exists {
+		s.logger.DebugContext(ctx, "EnsureCollection: Collection already exists, proceeding.", "collection", collectionName)
 		return nil
 	}
 
+	s.logger.InfoContext(ctx, "EnsureCollection: Collection does not exist, attempting to create it.", "collection", collectionName)
 	if s.embedder == nil {
+		s.logger.ErrorContext(ctx, "EnsureCollection: Cannot create collection without an embedder.")
 		return ErrMissingEmbedder
 	}
 
+	s.logger.DebugContext(ctx, "EnsureCollection: Getting vector dimension from embedder...")
 	dimension, err := s.embedder.GetDimension(ctx)
 	if err != nil {
+		s.logger.ErrorContext(ctx, "EnsureCollection: Failed to get dimension from embedder", "error", err)
 		return fmt.Errorf("could not get embedder dimension: %w", err)
 	}
 
-	s.logger.InfoContext(ctx, "Creating collection automatically",
-		"collection", collectionName, "dimension", dimension)
-
+	s.logger.DebugContext(ctx, "EnsureCollection: Sending CreateCollection request to Qdrant...")
 	_, err = s.client.GetCollectionsClient().Create(ctx, &qdrant.CreateCollection{
 		CollectionName: collectionName,
 		VectorsConfig: &qdrant.VectorsConfig{
@@ -1136,6 +1141,7 @@ func (s *Store) ensureCollection(ctx context.Context, collectionName string) err
 		},
 	})
 	if err != nil {
+		s.logger.ErrorContext(ctx, "EnsureCollection: gRPC call to create collection failed", "error", err)
 		return fmt.Errorf("failed to create qdrant collection: %w", err)
 	}
 
@@ -1145,7 +1151,7 @@ func (s *Store) ensureCollection(ctx context.Context, collectionName string) err
 		return ctx.Err()
 	}
 
-	s.logger.InfoContext(ctx, "Collection created successfully", "collection", collectionName)
+	s.logger.InfoContext(ctx, "EnsureCollection: Collection created successfully", "collection", collectionName)
 	return nil
 }
 

@@ -426,7 +426,6 @@ func (g *GitLoader) Load(ctx context.Context) ([]schema.Document, error) {
 
 // processFile now accepts content as an argument to avoid reading from disk
 func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser schema.ParserPlugin, content string) []schema.Document {
-	// Optimize: Pre-allocate builder with estimated size
 	validContent := strings.ToValidUTF8(content, "\uFFFD")
 
 	relPath, err := filepath.Rel(g.path, path)
@@ -464,40 +463,11 @@ func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser sc
 	documents := make([]schema.Document, 0, len(chunks))
 	for i, chunk := range chunks {
 		chunkMetadata := buildChunkMetadata(baseMetadata, chunk, i, len(chunks))
-		enrichedContent := buildEnrichedContent(chunk, chunkMetadata)
-		doc := schema.NewDocument(enrichedContent, chunkMetadata)
+		doc := schema.NewDocument(chunk.Content, chunkMetadata)
 		documents = append(documents, doc)
 	}
 
 	return documents
-}
-
-func buildEnrichedContent(chunk schema.CodeChunk, metadata map[string]any) string {
-	source, _ := metadata["source"].(string)
-	identifier, _ := metadata["identifier"].(string)
-	chunkType, _ := metadata["chunk_type"].(string)
-
-	// Pre-calculate size for efficiency
-	estimatedSize := len(chunk.Content) + len(source) + len(identifier) + len(chunkType) + 50
-	var builder strings.Builder
-	builder.Grow(estimatedSize)
-
-	builder.WriteString("File: ")
-	builder.WriteString(source)
-	builder.WriteString("\n")
-
-	if chunkType != "" && identifier != "" {
-		builder.WriteString("Type: ")
-		builder.WriteString(chunkType)
-		builder.WriteString("\nIdentifier: ")
-		builder.WriteString(identifier)
-		builder.WriteString("\n")
-	}
-
-	builder.WriteString("---\n")
-	builder.WriteString(chunk.Content)
-
-	return builder.String()
 }
 
 func buildChunkMetadata(baseMetadata map[string]any, chunk schema.CodeChunk, chunkIndex, totalChunks int) map[string]any {
@@ -519,7 +489,6 @@ func buildChunkMetadata(baseMetadata map[string]any, chunk schema.CodeChunk, chu
 }
 
 func shouldSkipDir(name string) bool {
-	// Use a map for O(1) lookup instead of slice
 	skipDirs := map[string]bool{
 		".git": true, ".svn": true, ".hg": true,
 		"vendor": true, "node_modules": true, "__pycache__": true,
