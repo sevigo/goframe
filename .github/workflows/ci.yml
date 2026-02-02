@@ -10,29 +10,17 @@ jobs:
   build-and-test:
     name: Build and Test
     runs-on: ubuntu-latest
-
+    
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Specify the Go version your project uses.
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.25'
+          cache: true
 
-      # The cache is invalidated if go.sum or the linter config changes.
-      - name: Cache Go modules and linter
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/golangci-lint
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}-${{ hashFiles('.golangci.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-
-      # This fails if 'go mod tidy' produces any changes, ensuring that go.mod/go.sum are committed.
       - name: Verify Dependencies
         run: |
           go mod tidy
@@ -42,14 +30,16 @@ jobs:
             exit 1
           fi
 
-      # This reuses the same logic as local development.
-      - name: Lint Code
-        run: make lint
+      - name: Run Linter
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.63
+          args: --timeout=5m
 
-      # This automatically handles the testcontainers setup via the DOCKER_ENV variable in the Makefile.
       - name: Run Tests
-        run: make test
+        # Run generic tests. We don't filter by -short as it's not implemented,
+        # but we rely on setup-go caching to speed up builds.
+        run: go test -v ./...
 
-      # This is a good way to verify that the library's public API hasn't been broken.
       - name: Build Examples
         run: make build-examples
