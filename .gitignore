@@ -31,3 +31,8 @@ go.work.sum
 
 # env file
 .env
+
+# AI Assistant
+.agent/
+llm_context.txt
+test_output*.txt
