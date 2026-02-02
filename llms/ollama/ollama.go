@@ -3,6 +3,7 @@ package ollama
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -15,6 +16,18 @@ import (
 	"github.com/sevigo/goframe/llms"
 	"github.com/sevigo/goframe/schema"
 )
+
+type authTransport struct {
+	base   http.RoundTripper
+	apiKey string
+}
+
+func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.apiKey != "" {
+		req.Header.Set("Authorization", t.apiKey)
+	}
+	return t.base.RoundTrip(req)
+}
 
 type LLM struct {
 	client       *api.Client
@@ -37,12 +50,36 @@ func New(opts ...Option) (*LLM, error) {
 		o.model = "llama3" // Default model if none specified
 	}
 
-	serverURL, _ := url.Parse("http://127.0.0.1:11434")
+	defaultURL := "http://127.0.0.1:11434"
+	if o.apiKey != "" {
+		defaultURL = "https://ollama.com"
+	}
+
+	serverURL, _ := url.Parse(defaultURL)
 	if o.ollamaServerURL != nil {
 		serverURL = o.ollamaServerURL
 	}
 
-	client := api.NewClient(serverURL, o.httpClient)
+	httpClient := o.httpClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+
+	if o.apiKey != "" {
+		httpClient = &http.Client{
+			Transport: &authTransport{
+				base:   httpClient.Transport,
+				apiKey: o.apiKey,
+			},
+			Timeout: httpClient.Timeout,
+		}
+		if httpClient.Transport.(*authTransport).base == nil {
+			httpClient.Transport.(*authTransport).base = http.DefaultTransport
+		}
+		slog.Debug("Ollama client initialized with API key", "prefix", o.apiKey[:4]+"...")
+	}
+
+	client := api.NewClient(serverURL, httpClient)
 
 	llm := &LLM{
 		client:  client,
@@ -278,4 +315,30 @@ func (o *LLM) determineModel(opts llms.CallOptions) string {
 		return opts.Model
 	}
 	return o.options.model
+}
+
+func (o *LLM) PullModel(ctx context.Context, name string) error {
+	o.logger.Info("Pulling model", "model", name)
+	return o.client.Pull(ctx, &api.PullRequest{Name: name}, func(resp api.ProgressResponse) error {
+		if resp.Total > 0 {
+			percent := float64(resp.Completed) / float64(resp.Total) * 100
+			if int(percent)%25 == 0 { // Log every 25%
+				o.logger.Debug("Pull progress", "model", name, "percent", fmt.Sprintf("%.2f%%", percent))
+			}
+		}
+		return nil
+	})
+}
+
+func (o *LLM) HasModel(ctx context.Context, name string) (bool, error) {
+	list, err := o.client.List(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, m := range list.Models {
+		if m.Name == name {
+			return true, nil
+		}
+	}
+	return false, nil
 }

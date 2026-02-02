@@ -34,5 +34,5 @@ go.work.sum
 
 # AI Assistant
 .agent/
-llm_context.txt
-test_output*.txt
+*.log
+*.txt

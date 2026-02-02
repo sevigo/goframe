@@ -38,7 +38,7 @@ func (p *ProtobufParser) Extensions() []string {
 // CanHandle determines if the parser should process a given file.
 func (p *ProtobufParser) CanHandle(path string, info fs.FileInfo) bool {
 	// Reject directories
-	if info.IsDir() {
+	if info != nil && info.IsDir() {
 		return false
 	}
 

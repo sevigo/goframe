@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
@@ -66,12 +67,33 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	ctx := context.Background()
 
+	// Load API key from .env file if it exists
+	envMap := loadEnv(".env")
+	if len(envMap) == 0 {
+		envMap = loadEnv("examples/qdrant-ultimate-rag/.env")
+	}
+	apiKey := envMap["OLLAMA_API_KEY"]
+	if apiKey == "" {
+		apiKey = os.Getenv("OLLAMA_API_KEY")
+	}
+
+	if apiKey != "" {
+		logger.Debug("Loaded API key", "prefix", apiKey[:4]+"...")
+	} else {
+		logger.Warn("No API key found in .env or environment")
+	}
+
 	// 1. Initialize Components
 	logger.Info("Step 1: Initializing Ollama components")
 
+	const (
+		embModel   = "qwen3-embedding:0.6b"
+		coderModel = "qwen3-coder:480b-cloud"
+	)
+
 	// Embedding model
 	embLLM, err := ollama.New(
-		ollama.WithModel("qwen3-embedding:0.6b"),
+		ollama.WithModel(embModel),
 		ollama.WithLogger(logger),
 	)
 	if err != nil {
@@ -79,9 +101,10 @@ func main() {
 		return
 	}
 
-	// Coder model (Cloud class or local)
+	// Coder model (Cloud or local)
 	coderLLM, err := ollama.New(
-		ollama.WithModel("qwen3-coder"),
+		ollama.WithModel(coderModel),
+		ollama.WithAPIKey(apiKey),
 		ollama.WithLogger(logger),
 	)
 	if err != nil {
@@ -89,15 +112,54 @@ func main() {
 		return
 	}
 
-	embedder, _ := embeddings.NewEmbedder(embLLM)
+	// Programmatic Pre-flight Check: Ensure models are available (local only)
+	for _, m := range []struct {
+		name string
+		llm  *ollama.LLM
+	}{
+		{embModel, embLLM},
+		{coderModel, coderLLM},
+	} {
+		// If we are using an API key, we assume it's a cloud model and skip pre-flight
+		// because ollama.com might not support /api/tags or /api/pull with API keys.
+		if apiKey != "" && m.name == coderModel {
+			logger.Info("Cloud model detected, skipping pre-flight", "model", m.name)
+			continue
+		}
+
+		has, err := m.llm.HasModel(ctx, m.name)
+		if err != nil {
+			logger.Warn("Failed to check for model", "model", m.name, "error", err)
+		} else if !has {
+			logger.Info("Model not found locally, pulling...", "model", m.name)
+			if err := m.llm.PullModel(ctx, m.name); err != nil {
+				logger.Error("Failed to pull model", "model", m.name, "error", err)
+				return
+			}
+		} else {
+			logger.Info("Model verified", "model", m.name)
+		}
+	}
+
+	embedder, err := embeddings.NewEmbedder(embLLM)
+	if err != nil {
+		logger.Error("Failed to create embedder", "error", err)
+		return
+	}
 	tokenizer := &OllamaTokenizerAdapter{llm: coderLLM}
 
 	// 2. Load Repository Code
 	logger.Info("Step 2: Loading repository code from current directory")
 	repoPath, _ := filepath.Abs(".")
-	registry := parsers.NewRegistry(logger)
+	registry, err := parsers.RegisterLanguagePlugins(logger)
+	if err != nil {
+		logger.Error("Failed to register language plugins", "error", err)
+		return
+	}
+
 	loader, err := documentloaders.NewGit(repoPath, registry,
 		documentloaders.WithBatchSize(50),
+		documentloaders.WithIncludeExts([]string{".go"}), // Scan only Go files
 	)
 	if err != nil {
 		logger.Error("Failed to create git loader", "error", err)
@@ -205,4 +267,32 @@ Answer (be technical and concise):`, contextBuilder.String(), query)
 	}
 
 	fmt.Printf("\n\n=== ULTIMATE TEST RESULT ===\n\n%s\n\n", answer)
+}
+
+// loadEnv is a simple .env file parser
+func loadEnv(path string) map[string]string {
+	env := make(map[string]string)
+	file, err := os.Open(path)
+	if err != nil {
+		return env
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") || line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			val := strings.TrimSpace(parts[1])
+			// Remove quotes if present
+			val = strings.Trim(val, `"'`)
+			env[key] = val
+		}
+	}
+	return env
 }

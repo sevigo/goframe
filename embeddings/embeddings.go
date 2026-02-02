@@ -36,6 +36,10 @@ func NewEmbedder(client Embedder, opts ...Option) (Embedder, error) {
 		embedderOpts.BatchSize = 32
 	}
 
+	if client == nil {
+		return nil, errors.New("client cannot be nil")
+	}
+
 	if _, ok := client.(*EmbedderImpl); ok {
 		return nil, errors.New("cannot wrap an already-wrapped EmbedderImpl")
 	}
