@@ -10,160 +10,106 @@ The framework is built around a set of core interfaces for LLMs, Embedders, and 
 
 ## Core Features
 
--   **Pluggable LLM Clients**: A clean interface for interacting with different LLMs.
-    - **Ollama**: Full-featured client for local LLMs, including automatic model pulling.
--   **Vector Store Abstraction**: A unified interface for vector databases.
-    - **Qdrant**: A robust implementation with support for collection management, metadata filtering, and similarity search.
--   **Unified Embedding Interface**: Decouples embedding generation from its usage.
+-   **Scalable Agentic Infrastructure**: Built for high-performance agentic workflows.
+    -   **Streaming Ingestion**: Process massive repositories with flat memory usage.
+    -   **Binary Quantization**: 30x memory reduction for vector storage.
+-   **Graph-Like Retrieval**: Go beyond simple similarity search.
+    -   **Impact Analysis**: Find downstream dependents ("who uses this code?").
+    -   **Dependency Verification**: Trace upstream dependencies ("what does this use?").
+    -   **Multi-Language Support**: Automatic metadata extraction for **Go** and **TypeScript/TSX**.
+-   **Pluggable Architecture**:
+    -   **LLMs**: Clean interfaces for Ollama (local) and cloud providers.
+    -   **Vector Stores**: Robust Qdrant implementation with metadata filtering.
+    -   **Embeddings**: Decoupled embedding generation.
 -   **Advanced Document Processing**:
-    - **Document Loaders**: Load documents from various sources (e.g., `GitLoader` for local repositories).
-    - **Code-Aware Text Splitting**: Intelligently chunks files based on their semantic structure.
--   **Language-Specific Parsers**: A powerful plugin system for understanding different file types.
-    - **Go**: Chunks by functions, types, and top-level declarations.
-    - **Markdown**: Chunks by hierarchical heading structure.
-    - **YAML & JSON**: Chunks by top-level keys and large structures.
-    - **PDF**: Chunks by pages and paragraphs.
-    - **CSV & Text**: Semantic chunking for structured and plain text.
--   **Standardized Schema**: Common data structures (`Document`, `CodeChunk`, etc.) for consistent data flow.
+    -   **GitLoader**: Smart loading with automatic metadata extraction (imports, packages).
+    -   **Code-Aware Splitter**: Semantically chunks code while preserving context.
+    -   **Parsers**: Plugins for Go, TypeScript, Markdown, JSON, YAML, PDF, and more.
 
 ## Architecture
 
-GoFrame follows a modular, pipeline-oriented architecture ideal for RAG workflows.
+GoFrame follows a modular pipeline:
 
 ```
-[Source Data] -> [Document Loader] -> [Parser Plugin] -> [Code-Aware Splitter] -> [Embedding Model] -> [Vector Store]
- (e.g., Git Repo)     (git.go)        (e.g., golang)         (code_aware.go)        (ollama.go)          (qdrant.go)
+[Source Code] -> [GitLoader] -> [Parser Plugin] -> [CodeAwareSplitter] -> [Embedder] -> [VectorStore]
+(Go, TS, etc.)   (Extracts Metadata)  (AST Analysis)    (Propagates Metadata)    (Ollama)      (Qdrant)
 ```
 
-1.  **Load**: A `DocumentLoader` reads content from a source.
-2.  **Split**: The `CodeAwareTextSplitter` uses a `ParserPlugin` to break the content into meaningful `CodeChunk`s.
-3.  **Embed**: An `Embedder` (wrapping an LLM like Ollama's `nomic-embed-text`) converts each chunk's content into a vector.
-4.  **Store**: A `VectorStore` (like Qdrant) stores the chunks and their vector embeddings.
-5.  **Retrieve**: The application can then perform a `SimilaritySearch` against the `VectorStore` to find relevant documents for a given query.
+1.  **Load & Analyze**: `GitLoader` reads files and uses language parsers to extract *file-level metadata* (imports, package name).
+2.  **Split & Propagate**: `CodeAwareTextSplitter` chunks the code, propagating the file-level metadata to every chunk.
+3.  **Embed & Index**: content is embedded and stored in Qdrant with enriched metadata.
+4.  **Graph Retrieval**: The `DependencyRetriever` uses this metadata to traverse the dependency graph.
 
 ## Getting Started
 
 ### Prerequisites
 
 -   Go 1.21 or later.
--   (Optional) [Ollama](https://ollama.com/) running locally for the example.
--   (Optional) [Docker](https://www.docker.com/) for running Qdrant.
+-   [Ollama](https://ollama.com/) (for embeddings & local LLMs).
+-   [Docker](https://www.docker.com/) (for Qdrant).
 
 ### Installation
 
-Add GoFrame to your project's dependencies:
 ```bash
 go get github.com/sevigo/goframe@latest
 ```
 
-## Quick Usage
+## Usage Examples
 
-Here is a simple example of how to use GoFrame's components to embed and search documents.
+### 1. Basic RAG
 
 ```go
-package main
+// Initialize components...
+store, _ := qdrant.New(qdrant.WithCollectionName("my-docs"))
 
-import (
-	"context"
-	"fmt"
-	"log/slog"
+// Add documents
+docs := []schema.Document{
+    schema.NewDocument("Paris is the capital of France.", map[string]any{"continent": "Europe"}),
+}
+store.AddDocuments(ctx, docs)
 
-	"github.com/sevigo/goframe/embeddings"
-	"github.com/sevigo/goframe/llms/ollama"
-	"github.com/sevigo/goframe/schema"
-	"github.com/sevigo/goframe/vectorstores"
-	"github.com/sevigo/goframe/vectorstores/qdrant"
-)
+// Search
+results, _ := store.SimilaritySearch(ctx, "Europe capital", 1)
+```
 
-func main() {
-	ctx := context.Background()
-	logger := slog.Default()
+### 2. Graph / Dependency Analysis
 
-	// 1. Initialize an embedder using Ollama
-	// Note: The client will automatically pull the model if not present.
-	ollamaEmbedder, _ := ollama.New(ollama.WithModel("nomic-embed-text"))
-	embedder, _ := embeddings.NewEmbedder(ollamaEmbedder)
+Perform sophisticated code navigation using the `DependencyRetriever`.
 
-	// 2. Initialize the Qdrant vector store
-	store, _ := qdrant.New(
-		qdrant.WithEmbedder(embedder),
-		qdrant.WithCollectionName("my-docs"),
-		qdrant.WithLogger(logger),
-	)
+```go
+import "github.com/sevigo/goframe/vectorstores"
 
-	// 3. Add documents to the store
-	docs := []schema.Document{
-		schema.NewDocument("Paris is the capital of France.", map[string]any{"continent": "Europe"}),
-		schema.NewDocument("London is the capital of the UK.", map[string]any{"continent": "Europe"}),
-		schema.NewDocument("Tokyo is the capital of Japan.", map[string]any{"continent": "Asia"}),
-	}
-	_, err := store.AddDocuments(ctx, docs)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println("Documents added successfully.")
+// Initialize retriever
+retriever := vectorstores.NewDependencyRetriever(store)
 
-	// 4. Perform a similarity search with a metadata filter
-	query := "Which city is in Europe?"
-	results, err := store.SimilaritySearch(ctx, query, 2, vectorstores.WithFilter("continent", "Europe"))
-	if err != nil {
-		panic(err)
-	}
+// 1. Impact Analysis: Who imports "my/package"?
+network, _ := retriever.GetContextNetwork(ctx, "github.com/my/project/pkg", nil)
+for _, dependent := range network.Dependents {
+    fmt.Printf("File identifying impact: %s\n", dependent.Metadata["source"])
+}
 
-	fmt.Printf("\nFound %d results for query: %q\n", len(results), query)
-	for _, doc := range results {
-		fmt.Printf("- %s\n", doc.PageContent)
-	}
+// 2. Upstream Verification: What does "my/package" depend on?
+// (Pass known imports to verify their existence in the graph)
+network, _ = retriever.GetContextNetwork(ctx, "github.com/my/project/pkg", []string{"fmt", "os"})
+for _, dep := range network.Dependencies {
+    fmt.Printf("Verified dependency: %s\n", dep.Metadata["source"])
 }
 ```
 
-## Running the Full Example
+## Running the Ultimate RAG Demo
 
-A more comprehensive example demonstrating advanced features is available in the `examples/` directory.
-
-### 1. Start Services
-
-First, ensure Qdrant and Ollama are running.
-
-**Qdrant:**
-```bash
-docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
-```
-
-**Ollama:**
-Make sure the Ollama application is running on your machine.
-
-### 2. Pull the Embedding Model
-
-While the GoFrame client will pull the model automatically, it's good practice to do it manually for a smoother first run.
+The `examples/qdrant-ultimate-rag` is a production-grade demonstration featuring:
+*   Full repository ingestion (Go & TypeScript).
+*   Streaming processing pipeline.
+*   Graph Retrieval verification.
 
 ```bash
-ollama pull nomic-embed-text
-```
+# Set up environment
+export OLLAMA_API_KEY=your_key_if_using_cloud
 
-### 3. Run the Example Code
-
-Execute the `main.go` file from the project root:
-```bash
-go run ./examples/ollama-qdrant-vectorstore-example/main.go
-```
-The program will create a collection, add documents, run several search scenarios.
-
-### 4. Run the Ultimate RAG Integration Test (Optimized)
-
-For a production-ready demonstration of streaming ingestion, binary quantization, and cloud model integration:
-
-```bash
-# 1. Ensure you have an OLLAMA_API_KEY in examples/qdrant-ultimate-rag/.env
-# 2. Run the test
+# Run the full integration test
 go run ./examples/qdrant-ultimate-rag/main.go
 ```
-
-This test demonstrates:
-- **Streaming Ingestion**: Processing large codebases with flat memory usage.
-- **Binary Quantization**: 30x memory reduction in Qdrant.
-- **Pre-flight Checks**: Programmatic validation and pulling of required models.
-- **Hybrid Cloud/Local Flow**: Using local embeddings with high-parameter cloud reasoning models (`qwen3-coder:480b-cloud`).
 
 ---
 
