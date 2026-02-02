@@ -19,17 +19,19 @@ const (
 var ErrInvalidOptions = errors.New("qdrant: invalid options provided")
 
 type options struct {
-	collectionName string
-	qdrantURL      url.URL
-	embedder       embeddings.Embedder
-	apiKey         string
-	contentKey     string
-	logger         *slog.Logger
-	useTLS         bool
-	timeout        int
-	retryAttempts  int
-	batchSize      int
-	batchConfig    *BatchConfig
+	collectionName     string
+	qdrantURL          url.URL
+	embedder           embeddings.Embedder
+	apiKey             string
+	contentKey         string
+	logger             *slog.Logger
+	useTLS             bool
+	timeout            int
+	retryAttempts      int
+	batchSize          int
+	batchConfig        *BatchConfig
+	binaryQuantization bool
+	payloadIndexes     []string
 }
 
 // Option defines a function type for configuring Qdrant store options.
@@ -146,6 +148,20 @@ func WithBatchSize(size int) Option {
 	}
 }
 
+// WithBinaryQuantization enables binary quantization for the collection.
+func WithBinaryQuantization(enabled bool) Option {
+	return func(opts *options) {
+		opts.binaryQuantization = enabled
+	}
+}
+
+// WithPayloadIndex specifies keys to be indexed in the payload.
+func WithPayloadIndex(keys ...string) Option {
+	return func(opts *options) {
+		opts.payloadIndexes = append(opts.payloadIndexes, keys...)
+	}
+}
+
 func applyDefaults(opts *options) {
 	if opts.logger == nil {
 		opts.logger = slog.Default()
@@ -243,15 +259,17 @@ func (opts *options) String() string {
 
 func (opts *options) Clone() options {
 	return options{
-		collectionName: opts.collectionName,
-		qdrantURL:      opts.qdrantURL,
-		embedder:       opts.embedder,
-		apiKey:         opts.apiKey,
-		contentKey:     opts.contentKey,
-		logger:         opts.logger,
-		useTLS:         opts.useTLS,
-		timeout:        opts.timeout,
-		retryAttempts:  opts.retryAttempts,
-		batchSize:      opts.batchSize,
+		collectionName:     opts.collectionName,
+		qdrantURL:          opts.qdrantURL,
+		embedder:           opts.embedder,
+		apiKey:             opts.apiKey,
+		contentKey:         opts.contentKey,
+		logger:             opts.logger,
+		useTLS:             opts.useTLS,
+		timeout:            opts.timeout,
+		retryAttempts:      opts.retryAttempts,
+		batchSize:          opts.batchSize,
+		binaryQuantization: opts.binaryQuantization,
+		payloadIndexes:     opts.payloadIndexes,
 	}
 }

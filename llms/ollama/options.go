@@ -13,6 +13,7 @@ type options struct {
 	logger          *slog.Logger
 	thinking        *bool
 	reasoningEffort string
+	apiKey          string
 }
 
 type Option func(*options)
@@ -71,5 +72,11 @@ func WithThinking(enabled bool) Option {
 func WithReasoningEffort(effort string) Option {
 	return func(opts *options) {
 		opts.reasoningEffort = effort
+	}
+}
+
+func WithAPIKey(apiKey string) Option {
+	return func(opts *options) {
+		opts.apiKey = apiKey
 	}
 }

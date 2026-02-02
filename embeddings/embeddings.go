@@ -36,6 +36,10 @@ func NewEmbedder(client Embedder, opts ...Option) (Embedder, error) {
 		embedderOpts.BatchSize = 32
 	}
 
+	if client == nil {
+		return nil, errors.New("client cannot be nil")
+	}
+
 	if _, ok := client.(*EmbedderImpl); ok {
 		return nil, errors.New("cannot wrap an already-wrapped EmbedderImpl")
 	}
@@ -59,12 +63,27 @@ func (e *EmbedderImpl) EmbedQueries(ctx context.Context, texts []string) ([][]fl
 		return [][]float32{}, nil
 	}
 
-	processedTexts := make([]string, len(texts))
-	for i, text := range texts {
-		processedTexts[i] = e.opts.QueryPrefix + e.preprocessText(text)
+	allEmbeddings := make([][]float32, 0, len(texts))
+	for i := 0; i < len(texts); i += e.opts.BatchSize {
+		end := i + e.opts.BatchSize
+		if end > len(texts) {
+			end = len(texts)
+		}
+
+		batch := texts[i:end]
+		processedBatch := make([]string, len(batch))
+		for j, text := range batch {
+			processedBatch[j] = e.opts.QueryPrefix + e.preprocessText(text)
+		}
+
+		batchEmbeddings, err := e.client.EmbedDocuments(ctx, processedBatch)
+		if err != nil {
+			return nil, err
+		}
+		allEmbeddings = append(allEmbeddings, batchEmbeddings...)
 	}
 
-	return e.EmbedDocuments(ctx, processedTexts)
+	return allEmbeddings, nil
 }
 
 func (e *EmbedderImpl) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error) {
@@ -78,12 +97,27 @@ func (e *EmbedderImpl) EmbedDocuments(ctx context.Context, texts []string) ([][]
 	default:
 	}
 
-	processedTexts := make([]string, len(texts))
-	for i, text := range texts {
-		processedTexts[i] = e.opts.DocumentPrefix + e.preprocessText(text)
+	allEmbeddings := make([][]float32, 0, len(texts))
+	for i := 0; i < len(texts); i += e.opts.BatchSize {
+		end := i + e.opts.BatchSize
+		if end > len(texts) {
+			end = len(texts)
+		}
+
+		batch := texts[i:end]
+		processedBatch := make([]string, len(batch))
+		for j, text := range batch {
+			processedBatch[j] = e.opts.DocumentPrefix + e.preprocessText(text)
+		}
+
+		batchEmbeddings, err := e.client.EmbedDocuments(ctx, processedBatch)
+		if err != nil {
+			return nil, err
+		}
+		allEmbeddings = append(allEmbeddings, batchEmbeddings...)
 	}
 
-	return e.client.EmbedDocuments(ctx, processedTexts)
+	return allEmbeddings, nil
 }
 
 func (e *EmbedderImpl) GetDimension(ctx context.Context) (int, error) {

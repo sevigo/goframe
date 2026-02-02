@@ -147,7 +147,25 @@ Execute the `main.go` file from the project root:
 ```bash
 go run ./examples/ollama-qdrant-vectorstore-example/main.go
 ```
-The program will create a collection, add documents, run several search scenarios (including a filtered search), demonstrate deletion, and clean up after itself.
+The program will create a collection, add documents, run several search scenarios.
+
+### 4. Run the Ultimate RAG Integration Test (Optimized)
+
+For a production-ready demonstration of streaming ingestion, binary quantization, and cloud model integration:
+
+```bash
+# 1. Ensure you have an OLLAMA_API_KEY in examples/qdrant-ultimate-rag/.env
+# 2. Run the test
+go run ./examples/qdrant-ultimate-rag/main.go
+```
+
+This test demonstrates:
+- **Streaming Ingestion**: Processing large codebases with flat memory usage.
+- **Binary Quantization**: 30x memory reduction in Qdrant.
+- **Pre-flight Checks**: Programmatic validation and pulling of required models.
+- **Hybrid Cloud/Local Flow**: Using local embeddings with high-parameter cloud reasoning models (`qwen3-coder:480b-cloud`).
+
+---
 
 ## Core Components
 
