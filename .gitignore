@@ -31,3 +31,10 @@ go.work.sum
 
 # env file
 .env
+
+# LLM context script
+concat_context.js
+llm_context.txt
+
+# AI Assistant directory
+.agent/

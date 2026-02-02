@@ -2,8 +2,8 @@ package ollama
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -13,22 +13,11 @@ import (
 	"github.com/ollama/ollama/api"
 	"github.com/sevigo/goframe/embeddings"
 	"github.com/sevigo/goframe/llms"
-	"github.com/sevigo/goframe/llms/ollama/ollamaclient"
 	"github.com/sevigo/goframe/schema"
 )
 
-var (
-	ErrEmptyResponse       = errors.New("ollama: empty response received")
-	ErrIncompleteEmbedding = errors.New("ollama: not all input texts were embedded")
-	ErrNoMessages          = errors.New("ollama: no messages provided")
-	ErrNoTextParts         = errors.New("ollama: no text parts found in message")
-	ErrModelNotFound       = errors.New("ollama: model not found")
-	ErrInvalidModel        = errors.New("ollama: invalid model specified")
-	ErrContextCanceled     = errors.New("ollama: context canceled")
-)
-
 type LLM struct {
-	client       *ollamaclient.Client
+	client       *api.Client
 	options      options
 	logger       *slog.Logger
 	details      *schema.ModelDetails
@@ -45,20 +34,15 @@ func New(opts ...Option) (*LLM, error) {
 	o := applyOptions(opts...)
 
 	if o.model == "" {
-		return nil, ErrInvalidModel
+		o.model = "llama3" // Default model if none specified
 	}
 
-	var client *ollamaclient.Client
-	var err error
-
+	serverURL, _ := url.Parse("http://127.0.0.1:11434")
 	if o.ollamaServerURL != nil {
-		client, err = ollamaclient.NewClient(o.ollamaServerURL, o.httpClient)
-	} else {
-		client, err = ollamaclient.NewDefaultClient()
+		serverURL = o.ollamaServerURL
 	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to create ollama client: %w", err)
-	}
+
+	client := api.NewClient(serverURL, o.httpClient)
 
 	llm := &LLM{
 		client:  client,
@@ -71,20 +55,7 @@ func New(opts ...Option) (*LLM, error) {
 }
 
 func (o *LLM) Call(ctx context.Context, prompt string, options ...llms.CallOption) (string, error) {
-	start := time.Now()
-	o.logger.DebugContext(ctx, "Starting simple call", "prompt_length", len(prompt))
-
-	result, err := llms.GenerateFromSinglePrompt(ctx, o, prompt, options...)
-
-	duration := time.Since(start)
-	if err != nil {
-		o.logger.ErrorContext(ctx, "Call failed", "error", err, "duration", duration)
-		return "", err
-	}
-
-	o.logger.DebugContext(ctx, "Call completed successfully",
-		"response_length", len(result), "duration", duration)
-	return result, nil
+	return llms.GenerateFromSinglePrompt(ctx, o, prompt, options...)
 }
 
 func (o *LLM) GenerateContent(
@@ -92,12 +63,7 @@ func (o *LLM) GenerateContent(
 	messages []schema.MessageContent,
 	options ...llms.CallOption,
 ) (*schema.ContentResponse, error) {
-	if o.logger == nil {
-		o.logger = slog.Default()
-	}
-
 	start := time.Now()
-	o.logger.DebugContext(ctx, "Starting Ollama content generation", "message_count", len(messages))
 
 	opts := llms.CallOptions{}
 	for _, opt := range options {
@@ -105,25 +71,49 @@ func (o *LLM) GenerateContent(
 	}
 	model := o.determineModel(opts)
 
-	chatMsgs, err := o.convertToOllamaMessages(messages)
-	if err != nil {
-		o.logger.ErrorContext(ctx, "Failed to convert messages", "error", err)
-		return nil, err
+	chatMsgs := make([]api.Message, 0, len(messages))
+	for _, mc := range messages {
+		msg := api.Message{
+			Role:    typeToRole(mc.Role),
+			Content: mc.String(),
+		}
+		chatMsgs = append(chatMsgs, msg)
 	}
 
-	isStreamingFunc := opts.StreamingFunc != nil
+	ollamaOpts := map[string]any{}
+	if opts.Temperature > 0 {
+		ollamaOpts["temperature"] = float32(opts.Temperature)
+	}
+	if opts.MaxTokens > 0 {
+		ollamaOpts["num_predict"] = opts.MaxTokens
+	}
+	if len(opts.StopWords) > 0 {
+		ollamaOpts["stop"] = opts.StopWords
+	}
+	if opts.TopP > 0 {
+		ollamaOpts["top_p"] = float32(opts.TopP)
+	}
+	if opts.TopK > 0 {
+		ollamaOpts["top_k"] = opts.TopK
+	}
+	if opts.Seed > 0 {
+		ollamaOpts["seed"] = opts.Seed
+	}
 
 	req := &api.ChatRequest{
 		Model:    model,
 		Messages: chatMsgs,
-		Stream:   &isStreamingFunc,
+		Options:  ollamaOpts,
+		Stream:   new(bool),
 	}
+	*req.Stream = opts.StreamingFunc != nil
+
 	var fullResponse strings.Builder
 	var finalResp api.ChatResponse
 
 	fn := func(response api.ChatResponse) error {
 		fullResponse.WriteString(response.Message.Content)
-		if opts.StreamingFunc != nil {
+		if opts.StreamingFunc != nil && response.Message.Content != "" {
 			if errStream := opts.StreamingFunc(ctx, []byte(response.Message.Content)); errStream != nil {
 				return fmt.Errorf("streaming function returned an error: %w", errStream)
 			}
@@ -134,11 +124,11 @@ func (o *LLM) GenerateContent(
 		return nil
 	}
 
-	err = o.client.GenerateChat(ctx, req, fn)
+	err := o.client.Chat(ctx, req, fn)
 	duration := time.Since(start)
 
 	if err != nil {
-		o.logger.ErrorContext(ctx, "Ollama client failed", "error", err, "duration", duration)
+		o.logger.ErrorContext(ctx, "Ollama chat failed", "error", err, "duration", duration)
 		return nil, err
 	}
 
@@ -159,33 +149,6 @@ func (o *LLM) GenerateContent(
 
 	o.logger.InfoContext(ctx, "Content generation completed", "duration", duration)
 	return response, nil
-}
-
-func (o *LLM) convertToOllamaMessages(messages []schema.MessageContent) ([]api.Message, error) {
-	chatMsgs := make([]api.Message, 0, len(messages))
-	for _, mc := range messages {
-		msg := api.Message{Role: typeToRole(mc.Role)}
-
-		var sb strings.Builder
-		foundText := false
-
-		for _, p := range mc.Parts {
-			switch part := p.(type) {
-			case schema.TextContent:
-				if foundText {
-					sb.WriteString("\n")
-				} else {
-					foundText = true
-				}
-				sb.WriteString(part.Text)
-			default:
-				return nil, fmt.Errorf("unsupported content part type: %T", part)
-			}
-		}
-		msg.Content = sb.String()
-		chatMsgs = append(chatMsgs, msg)
-	}
-	return chatMsgs, nil
 }
 
 func typeToRole(typ schema.ChatMessageType) string {
@@ -211,29 +174,9 @@ func (o *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, 
 		Input: texts,
 	}
 
-	start := time.Now()
 	resp, err := o.client.Embed(ctx, req)
-	duration := time.Since(start)
-
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
-			o.logger.InfoContext(ctx, "Embedding model not found, attempting to pull.", "model", o.options.model)
-			if pullErr := o.EnsureModel(ctx); pullErr != nil {
-				return nil, fmt.Errorf("failed to pull model after embedding attempt: %w", pullErr)
-			}
-			resp, err = o.client.Embed(ctx, req)
-			if err != nil {
-				return nil, fmt.Errorf("embedding failed even after pulling model: %w", err)
-			}
-		} else {
-			o.logger.ErrorContext(ctx, "Batch embed API call failed", "error", err, "duration", duration)
-			return nil, fmt.Errorf("batch embedding generation failed: %w", err)
-		}
-	}
-
-	if len(resp.Embeddings) != len(texts) {
-		o.logger.ErrorContext(ctx, "Embedding count mismatch", "expected", len(texts), "got", len(resp.Embeddings))
-		return nil, ErrIncompleteEmbedding
+		return nil, fmt.Errorf("ollama embed failing: %w", err)
 	}
 
 	return resp.Embeddings, nil
@@ -247,163 +190,45 @@ func (o *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 
 	resp, err := o.client.Embed(ctx, req)
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
-			if pullErr := o.EnsureModel(ctx); pullErr != nil {
-				return nil, fmt.Errorf("failed to pull model: %w", pullErr)
-			}
-			resp, err = o.client.Embed(ctx, req)
-			if err != nil {
-				return nil, fmt.Errorf("query embedding failed after pull: %w", err)
-			}
-		} else {
-			return nil, err
-		}
+		return nil, err
 	}
 
-	if len(resp.Embeddings) != 1 {
-		return nil, ErrEmptyResponse
+	if len(resp.Embeddings) == 0 {
+		return nil, fmt.Errorf("ollama: empty embedding response")
 	}
 
 	return resp.Embeddings[0], nil
 }
 
-func (o *LLM) EnsureModel(ctx context.Context) error {
-	o.detailsMutex.RLock()
-	if o.details != nil {
-		o.detailsMutex.RUnlock()
-		return nil
-	}
-	o.detailsMutex.RUnlock()
-
-	exists, err := o.ModelExists(ctx)
-	if err != nil {
-		o.logger.ErrorContext(ctx, "Failed to check model existence", "error", err)
-		return fmt.Errorf("model existence check failed: %w", err)
-	}
-
-	if exists {
-		return nil
-	}
-
-	o.logger.InfoContext(ctx, "Model not found locally, initiating pull")
-
-	pullStart := time.Now()
-	err = o.PullModel(ctx, func(progress api.ProgressResponse) error {
-		if progress.Total > 0 {
-			percent := (float64(progress.Completed) / float64(progress.Total)) * 100
-			o.logger.InfoContext(ctx, "Model pull progress",
-				"status", progress.Status,
-				"percent", fmt.Sprintf("%.1f%%", percent),
-				"completed", progress.Completed,
-				"total", progress.Total)
-		} else {
-			o.logger.InfoContext(ctx, "Model pull status", "status", progress.Status)
-		}
-		return nil
-	})
-
-	pullDuration := time.Since(pullStart)
-	if err != nil {
-		o.logger.ErrorContext(ctx, "Model pull failed", "error", err, "duration", pullDuration)
-		return fmt.Errorf("model pull failed: %w", err)
-	}
-
-	o.logger.InfoContext(ctx, "Model pull completed successfully", "duration", pullDuration)
-	return nil
-}
-
-func (o *LLM) ModelExists(ctx context.Context) (bool, error) {
-	_, err := o.client.Show(ctx, &api.ShowRequest{Name: o.options.model})
-	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
-			return false, nil
-		}
-		return false, fmt.Errorf("model existence check failed: %w", err)
-	}
-	return true, nil
-}
-
-func (o *LLM) PullModel(ctx context.Context, progressFn func(api.ProgressResponse) error) error {
-	req := &ollamaclient.PullRequest{
-		Model:  o.options.model,
-		Stream: true,
-	}
-	return o.client.Pull(ctx, req, progressFn)
-}
-
 func (o *LLM) GetModelDetails(ctx context.Context) (*schema.ModelDetails, error) {
 	o.detailsMutex.RLock()
 	if o.details != nil {
-		cachedDetails := o.details
-		o.detailsMutex.RUnlock()
-		return cachedDetails, nil
+		return o.details, nil
 	}
 	o.detailsMutex.RUnlock()
 
 	o.detailsMutex.Lock()
 	defer o.detailsMutex.Unlock()
 
-	if o.details != nil {
-		return o.details, nil
-	}
-
-	o.logger.DebugContext(ctx, "Model details not cached, fetching from API...")
-	details, err := o.fetchModelDetails(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	o.details = details
-	return o.details, nil
-}
-
-func (o *LLM) fetchModelDetails(ctx context.Context) (*schema.ModelDetails, error) {
 	showResp, err := o.client.Show(ctx, &api.ShowRequest{Name: o.options.model})
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
-			o.logger.WarnContext(ctx, "Model not found when fetching details")
-			return nil, ErrModelNotFound
-		}
-		return nil, fmt.Errorf("failed to retrieve model information: %w", err)
+		return nil, fmt.Errorf("fetching model details: %w", err)
 	}
 
 	var dim int64
 	testEmb, err := o.EmbedQuery(ctx, "test")
-	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "does not support") {
-			o.logger.DebugContext(ctx, "Model does not support embeddings; dimension set to 0")
-			dim = 0
-		} else {
-			o.logger.ErrorContext(ctx, "Failed to perform test embedding for dimension check", "error", err)
-			return nil, fmt.Errorf("failed to determine embedding dimension: %w", err)
-		}
-	} else {
+	if err == nil {
 		dim = int64(len(testEmb))
-		o.logger.DebugContext(ctx, "Determined embedding dimension", "dimension", dim)
 	}
 
-	details := &schema.ModelDetails{
+	o.details = &schema.ModelDetails{
 		Family:        showResp.Details.Family,
 		ParameterSize: showResp.Details.ParameterSize,
 		Quantization:  showResp.Details.QuantizationLevel,
 		Dimension:     dim,
 	}
 
-	o.logger.InfoContext(ctx, "Model details retrieved and cached",
-		"family", details.Family,
-		"parameters", details.ParameterSize,
-		"quantization", details.Quantization,
-		"dimension", details.Dimension)
-
-	return details, nil
-}
-
-func (o *LLM) GetDimension(ctx context.Context) (int, error) {
-	details, err := o.GetModelDetails(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get embedding dimension: %w", err)
-	}
-	return int(details.Dimension), nil
+	return o.details, nil
 }
 
 func (o *LLM) CountTokens(ctx context.Context, text string) (int, error) {
@@ -411,24 +236,24 @@ func (o *LLM) CountTokens(ctx context.Context, text string) (int, error) {
 		return 0, nil
 	}
 
-	stream := false
-	req := &ollamaclient.GenerateRequest{
+	req := &api.GenerateRequest{
 		Model:  o.options.model,
 		Prompt: text,
-		Stream: &stream,
+		Stream: new(bool), // Defaults to false
 		Options: map[string]any{
-			"num_predict": 0,
+			"num_predict": 0, // Just count tokens, don't generate
 		},
 	}
 
 	var tokenCount int
-	err := o.client.Generate(ctx, req, func(resp ollamaclient.GenerateResponse) error {
+	fn := func(resp api.GenerateResponse) error {
 		if resp.Done {
 			tokenCount = resp.PromptEvalCount
 		}
 		return nil
-	})
+	}
 
+	err := o.client.Generate(ctx, req, fn)
 	if err != nil {
 		return 0, fmt.Errorf("token counting via generation failed: %w", err)
 	}
@@ -436,9 +261,16 @@ func (o *LLM) CountTokens(ctx context.Context, text string) (int, error) {
 	return tokenCount, nil
 }
 
+func (o *LLM) GetDimension(ctx context.Context) (int, error) {
+	details, err := o.GetModelDetails(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return int(details.Dimension), nil
+}
+
 func (o *LLM) determineModel(opts llms.CallOptions) string {
 	if opts.Model != "" {
-		o.logger.DebugContext(context.Background(), "Using model from call options", "model", opts.Model)
 		return opts.Model
 	}
 	return o.options.model

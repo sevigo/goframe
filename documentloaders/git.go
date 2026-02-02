@@ -171,6 +171,7 @@ func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser sc
 		g.logger.Warn("Could not get relative path, using absolute", "error", err, "full_path", path)
 		relPath = path
 	}
+	relPath = filepath.ToSlash(relPath)
 
 	baseMetadata := map[string]any{
 		"source":    relPath,
