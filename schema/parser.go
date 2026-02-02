@@ -15,6 +15,7 @@ type ParserPlugin interface {
 type FileMetadata struct {
 	FilePath    string                 `json:"file_path"`
 	Language    string                 `json:"language"`
+	PackageName string                 `json:"package_name"`
 	Imports     []string               `json:"imports"`
 	Definitions []CodeEntityDefinition `json:"definitions"`
 	Symbols     []CodeSymbol           `json:"symbols"`

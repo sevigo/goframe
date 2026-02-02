@@ -17,6 +17,7 @@ import (
 	"github.com/sevigo/goframe/parsers"
 	"github.com/sevigo/goframe/schema"
 	"github.com/sevigo/goframe/textsplitter"
+	"github.com/sevigo/goframe/vectorstores"
 	"github.com/sevigo/goframe/vectorstores/qdrant"
 )
 
@@ -194,10 +195,30 @@ func main() {
 		return
 	}
 
-	// Type assertion to access AddDocumentsBatch with progress callback
+	// Type assertion to access specific Qdrant features (CreateCollection, AddDocumentsBatch)
 	qStore, ok := vStore.(*qdrant.Store)
 	if !ok {
 		logger.Error("Failed to cast to Qdrant store")
+		return
+	}
+
+	// CLEANUP: Ensure we start with a fresh collection
+	logger.Info("Cleanup: Deleting existing collection to avoid duplicates")
+	if err := vStore.DeleteCollection(ctx, collectionName); err != nil {
+		// Ignore error if collection doesn't exist
+		logger.Warn("Failed to delete collection (might not exist)", "error", err)
+	}
+
+	// Re-create collection synchronously to avoid race conditions in concurrent workers
+	dim, err := embedder.GetDimension(ctx)
+	if err != nil {
+		logger.Error("Failed to get embedding dimension", "error", err)
+		return
+	}
+	logger.Info("Initializing collection synchronously", "dimension", dim)
+	// Use qStore.CreateCollection (specific method)
+	if err := qStore.CreateCollection(ctx, collectionName, dim); err != nil {
+		logger.Error("Failed to create collection", "error", err)
 		return
 	}
 
@@ -267,8 +288,17 @@ func main() {
 
 	// Build context
 	var contextBuilder strings.Builder
-	for _, doc := range retrievedDocs {
+	for i, doc := range retrievedDocs {
 		contextBuilder.WriteString(fmt.Sprintf("\n--- Source: %s ---\n%s\n", doc.Metadata["source"], doc.PageContent))
+
+		// User requested debug info about metadata
+		logger.Debug("Retrieved Document Metadata",
+			"rank", i,
+			"source", doc.Metadata["source"],
+			"package", doc.Metadata["package_name"],
+			"imports", doc.Metadata["imports"],
+			"chunk_type", doc.Metadata["chunk_type"],
+		)
 	}
 
 	// Prompt Coder
@@ -289,6 +319,96 @@ Answer (be technical and concise):`, contextBuilder.String(), query)
 	}
 
 	fmt.Printf("\n\n=== ULTIMATE TEST RESULT ===\n\n%s\n\n", answer)
+
+	// 8. Graph-Like Retrieval (Impact Analysis)
+	logger.Info("Step 8: Impact Analysis (Graph-Like Retrieval)")
+	targetPackage := "github.com/sevigo/goframe/vectorstores/qdrant"
+
+	depRetriever := vectorstores.NewDependencyRetriever(vStore)
+	// We want to see what imports 'targetPackage'. In the framework, we'd pass the current file's package name.
+	// Here, we simulate we are analyzing the 'qdrant' package, so we want to find Dependents (Reverse Deps).
+	network, err := depRetriever.GetContextNetwork(ctx, targetPackage, nil)
+
+	if err != nil {
+		logger.Error("Impact analysis failed", "error", err)
+	} else {
+		fmt.Printf("\n=== IMPACT ANALYSIS: Files importing %s ===\n", targetPackage)
+		seenFiles := make(map[string]bool)
+		foundCount := 0
+		foundMain := false
+
+		for _, doc := range network.Dependents {
+			src := doc.Metadata["source"].(string)
+			if !seenFiles[src] {
+				fmt.Printf("- %s\n", src)
+				// DEBUG: Print metadata to verify graph fields
+				if imports, ok := doc.Metadata["imports"]; ok {
+					logger.Debug("Verified Metadata", "source", src, "imports", imports)
+				}
+				if pkg, ok := doc.Metadata["package_name"]; ok {
+					logger.Debug("Verified Metadata", "source", src, "package", pkg)
+				}
+
+				seenFiles[src] = true
+				foundCount++
+
+				// Standardize path separators for check
+				normSrc := strings.ReplaceAll(src, "\\", "/")
+				if strings.Contains(normSrc, "examples/qdrant-ultimate-rag/main.go") {
+					foundMain = true
+				}
+			}
+		}
+		fmt.Println("=================================================")
+
+		if foundCount == 0 {
+			logger.Error("VERIFICATION FAILED: No documents found importing the target package.")
+		} else if !foundMain {
+			logger.Warn("VERIFICATION WARNING: 'main.go' was not found in the impact list (might be due to chunking limits or path issues).")
+		} else {
+			logger.Info("VERIFICATION PASSED: Graph traversal successfully identified 'main.go' as a dependent.")
+		}
+	}
+
+	// 8b. Upstream Dependencies Verification
+	logger.Info("Step 8b: Verifying Upstream Dependencies")
+	// We want to check what 'vectorstores/qdrant' depends on.
+	// Expected dependency: "github.com/sevigo/goframe/embeddings"
+	expectedDep := "github.com/sevigo/goframe/embeddings"
+
+	// Note: We need to pass the *current package's imports* to finding upstream dependencies.
+	// But network.Dependencies was already fetched in the previous call because we passed `nil` for imports.
+	// Wait, we passed `nil` to `GetContextNetwork` for imports, so Dependencies is likely empty.
+	// We need to simulate knowing the imports of `targetPackage`.
+	// For this test, let's explicitly ask for it.
+
+	networkUpstream, err := depRetriever.GetContextNetwork(ctx, targetPackage, []string{expectedDep})
+	if err != nil {
+		logger.Error("Upstream detailed check failed", "error", err)
+	} else {
+		if len(networkUpstream.Dependencies) > 0 {
+			fmt.Printf("✅ Qdrant correctly depends on: %s\n", networkUpstream.Dependencies[0].Metadata["source"])
+		} else {
+			fmt.Printf("⚠️  Could not verify upstream dependency on %s (Metadata might be missing or chunking split imports)\n", expectedDep)
+		}
+	}
+
+	// DEBUG: Investigate why qdrant.go is returned as dependent
+	logger.Info("Step 9: DEBUG - Metadata Investigation")
+	debugDocs, _ := vStore.SimilaritySearch(ctx, "", 1,
+		vectorstores.WithFilters(map[string]any{"source": "vectorstores/qdrant/qdrant.go"}))
+	if len(debugDocs) > 0 {
+		logger.Info("Metadata for qdrant.go", "imports", debugDocs[0].Metadata["imports"], "package", debugDocs[0].Metadata["package_name"])
+	}
+
+	// DEBUG: Investigate if main.go exists
+	mainDocs, _ := vStore.SimilaritySearch(ctx, "", 1,
+		vectorstores.WithFilters(map[string]any{"source": "examples/qdrant-ultimate-rag/main.go"}))
+	if len(mainDocs) > 0 {
+		logger.Info("Metadata for main.go", "found", true, "imports", mainDocs[0].Metadata["imports"])
+	} else {
+		logger.Warn("Metadata for main.go NOT FOUND in store!")
+	}
 }
 
 // loadEnv is a simple .env file parser

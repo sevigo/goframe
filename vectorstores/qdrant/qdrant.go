@@ -488,8 +488,12 @@ func (s *Store) SimilaritySearch(
 	options ...vectorstores.Option,
 ) ([]schema.Document, error) {
 	if strings.TrimSpace(query) == "" {
-		s.logger.WarnContext(ctx, "Empty query provided")
-		return []schema.Document{}, nil
+		// Allow empty query if filters are present
+		opts := vectorstores.ParseOptions(options...)
+		if len(opts.Filters) == 0 {
+			s.logger.WarnContext(ctx, "Empty query provided with no filters")
+			return []schema.Document{}, nil
+		}
 	}
 
 	if numDocuments <= 0 {
@@ -967,6 +971,11 @@ func (s *Store) ensureCollection(ctx context.Context, collectionName string) err
 
 	_, err = s.client.GetCollectionsClient().Create(ctx, req)
 	if err != nil {
+		// Check if error is "AlreadyExists" (race condition during concurrent ops)
+		if stat, ok := status.FromError(err); ok && stat.Code() == codes.AlreadyExists {
+			s.logger.DebugContext(ctx, "EnsureCollection: Collection created by another process concurrently", "collection", collectionName)
+			return nil
+		}
 		s.logger.ErrorContext(ctx, "EnsureCollection: gRPC call to create collection failed", "error", err)
 		return fmt.Errorf("failed to create qdrant collection: %w", err)
 	}
@@ -1129,6 +1138,20 @@ func buildQdrantFilter(filters map[string]any) *qdrant.Filter {
 				int64Slice[i] = int64(num)
 			}
 			match = &qdrant.Match{MatchValue: &qdrant.Match_Integers{Integers: &qdrant.RepeatedIntegers{Integers: int64Slice}}}
+		case []any:
+			// Attempt to determine the type of elements in the slice
+			if len(v) > 0 {
+				switch v[0].(type) {
+				case string:
+					strSlice := make([]string, len(v))
+					for i, elem := range v {
+						if str, ok := elem.(string); ok {
+							strSlice[i] = str
+						}
+					}
+					match = &qdrant.Match{MatchValue: &qdrant.Match_Keywords{Keywords: &qdrant.RepeatedStrings{Strings: strSlice}}}
+				}
+			}
 		default:
 			slog.Warn("Unsupported filter type for key", "key", key, "type", fmt.Sprintf("%T", v))
 			continue

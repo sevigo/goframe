@@ -452,6 +452,19 @@ func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser sc
 		return []schema.Document{schema.NewDocument(validContent, baseMetadata)}
 	}
 
+	// Try to extract language-specific metadata (e.g. imports, package name)
+	if meta, err := parser.ExtractMetadata(validContent, path); err == nil {
+		if meta.PackageName != "" {
+			baseMetadata["package_name"] = meta.PackageName
+		}
+		if len(meta.Imports) > 0 {
+			baseMetadata["imports"] = meta.Imports
+		}
+	} else {
+		// Just debug log, not critical
+		g.logger.Debug("Metadata extraction skipped or failed", "path", relPath, "error", err)
+	}
+
 	chunks, err := parser.Chunk(validContent, path, nil)
 	if err != nil || len(chunks) == 0 {
 		g.logger.Info("Chunking failed or returned no chunks",

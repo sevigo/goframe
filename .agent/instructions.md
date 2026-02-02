@@ -35,3 +35,7 @@ You are an expert Go developer working on `goframe`, a framework for building LL
 - Extend retrieval capabilities in `chains/` and `documentloaders/`.
 - Automate repetitive tasks using workflows in `.agent/workflows/`.
 - Ensure all new features are accompanied by tests and examples.
+
+## Workflow & Git Rules
+- **NEVER merge to main independently**: Do not merge feature branches into `main` yourself.
+- **Push & Wait**: After pushing a feature branch, notify the user and wait for their feedback.
