@@ -141,11 +141,25 @@ func (p *PDFPlugin) extractPageText(page pdf.Page, pageNum int, filePath string)
 	return ""
 }
 
+var (
+	// Regex for cleaning text
+	multiSpaceRegex   = regexp.MustCompile(`[ \t]+`)
+	newlineSpaceRegex = regexp.MustCompile(`\n[ \t]*\n`)
+	multiNewlineRegex = regexp.MustCompile(`\n{3,}`)
+
+	// Regex for sanitizing identifiers
+	nonAlphanumericRegex = regexp.MustCompile(`[^a-z0-9_]+`)
+	multiUnderscoreRegex = regexp.MustCompile(`_{2,}`)
+
+	// Regex for splitting paragraphs
+	paragraphRegex = regexp.MustCompile(paragraphSeparatorRegex)
+)
+
 // cleanExtractedText normalizes extracted text
 func (p *PDFPlugin) cleanExtractedText(text string) string {
-	text = regexp.MustCompile(`[ \t]+`).ReplaceAllString(text, " ")
-	text = regexp.MustCompile(`\n[ \t]*\n`).ReplaceAllString(text, "\n\n")
-	text = regexp.MustCompile(`\n{3,}`).ReplaceAllString(text, "\n\n")
+	text = multiSpaceRegex.ReplaceAllString(text, " ")
+	text = newlineSpaceRegex.ReplaceAllString(text, "\n\n")
+	text = multiNewlineRegex.ReplaceAllString(text, "\n\n")
 
 	text = strings.ReplaceAll(text, "ﬂ", "fl")
 	text = strings.ReplaceAll(text, `"`, `\"`)
@@ -327,8 +341,7 @@ func (p *PDFPlugin) isLikelySectionHeader(line string) bool {
 
 func (p *PDFPlugin) splitContentIntoParagraphs(text string, lineOffset int, pageNum int, filePath string, sectionIdentifier string, opts *internal_model.CodeChunkingOptions) []internal_model.CodeChunk {
 	var chunks []internal_model.CodeChunk
-	paraRegex := regexp.MustCompile(paragraphSeparatorRegex)
-	paragraphs := paraRegex.Split(text, -1)
+	paragraphs := paragraphRegex.Split(text, -1)
 
 	currentLineInDoc := lineOffset
 
@@ -508,9 +521,9 @@ func isMostlyCapsOrTitleCase(s string) bool {
 
 func sanitizeIdentifier(id string) string {
 	id = strings.ToLower(id)
-	id = regexp.MustCompile(`[^a-z0-9_]+`).ReplaceAllString(id, "_")
+	id = nonAlphanumericRegex.ReplaceAllString(id, "_")
 	id = strings.Trim(id, "_")
-	id = regexp.MustCompile(`_{2,}`).ReplaceAllString(id, "_")
+	id = multiUnderscoreRegex.ReplaceAllString(id, "_")
 	if len(id) > 60 {
 		id = id[:60]
 	}
