@@ -74,9 +74,19 @@ func New(opts ...Option) (*LLM, error) {
 			Timeout: httpClient.Timeout,
 		}
 		if httpClient.Transport.(*authTransport).base == nil {
-			httpClient.Transport.(*authTransport).base = http.DefaultTransport
+			// Create a specialized transport for high concurrency
+			t := http.DefaultTransport.(*http.Transport).Clone()
+			t.MaxIdleConns = 100
+			t.MaxIdleConnsPerHost = 20 // Optimize for concurrent ingestion (4-8 workers)
+			httpClient.Transport.(*authTransport).base = t
 		}
 		slog.Debug("Ollama client initialized with API key", "prefix", o.apiKey[:4]+"...")
+	} else if httpClient.Transport == nil {
+		// Optimize default transport if no API key but default client
+		t := http.DefaultTransport.(*http.Transport).Clone()
+		t.MaxIdleConns = 100
+		t.MaxIdleConnsPerHost = 20
+		httpClient.Transport = t
 	}
 
 	client := api.NewClient(serverURL, httpClient)
