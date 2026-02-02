@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sevigo/goframe/documentloaders"
@@ -200,36 +201,57 @@ func main() {
 		return
 	}
 
-	// 2, 3, 5. Load, Split, and Ingest in a stream
+	// 2, 3, 5. Load, Split, and Ingest in a concurrent pipeline
 	logger.Info("Step 2-5: Loading, Splitting, and Ingesting in a streaming pipeline")
 	start := time.Now()
 
-	totalProcessed := 0
+	// Create a channel for batches of split documents
+	ingestChan := make(chan []schema.Document, 10) // buffer 10 batches
+	var ingestWg sync.WaitGroup
+
+	// Start Ingestion Workers (Concurrent Uploads)
+	// We use 4 workers to allow overlapping Qdrant uploads (Network/Embedding I/O)
+	// regardless of the loader speed.
+	numIngestWorkers := 4
+
+	for i := 0; i < numIngestWorkers; i++ {
+		ingestWg.Add(1)
+		go func() {
+			defer ingestWg.Done()
+			for batchDocs := range ingestChan {
+				// Ingest into Qdrant
+				// AddDocumentsBatch will handle its own internal batching/concurrency if batchDocs is large,
+				// but here we rely on having multiple workers processing moderate-sized batches in parallel.
+				ids, err := qStore.AddDocumentsBatch(ctx, batchDocs, nil)
+				if err != nil {
+					logger.Error("Failed to ingest batch", "error", err)
+					// In a real app, we might want to cancel the pipeline here
+					continue
+				}
+
+				// Simple progress reporting
+				count := len(ids)
+				// Note: In a real high-concurrency scenario, use atomic.AddInt32
+				// For this example, we just print progress loosely.
+				fmt.Printf("\rApprox Ingested Batch: %d docs", count)
+			}
+		}()
+	}
+
 	err = loader.LoadAndProcessStream(ctx, func(streamCtx context.Context, batchDocs []schema.Document) error {
-		// Split the documents in this batch
+		// Split the documents in this batch (CPU bound)
 		splitDocs, err := splitter.SplitDocuments(streamCtx, batchDocs)
 		if err != nil {
 			return fmt.Errorf("failed to split batch: %w", err)
 		}
 
-		// Ingest into Qdrant (AddDocumentsBatch handles internal concurrency and retry)
-		// We use a simplified AddDocuments here or simply AddDocumentsBatch
-		// Since we already have a batch, AddDocuments is sufficient,
-		// but AddDocumentsBatch is safe too.
-		processedIDs, err := qStore.AddDocumentsBatch(streamCtx, splitDocs, nil)
-		if err != nil {
-			return fmt.Errorf("failed to ingest batch: %w", err)
-		}
-
-		totalProcessed += len(processedIDs)
-		fmt.Printf("\rIngested: %d documents (Elapsed: %v)", totalProcessed, time.Since(start).Round(time.Second))
+		// Send to ingestion workers (non-blocking if buffer has space)
+		ingestChan <- splitDocs
 		return nil
 	})
 
-	if err != nil {
-		logger.Error("Streaming pipeline failed", "error", err)
-		return
-	}
+	close(ingestChan) // Signal workers to finish
+	ingestWg.Wait()   // Wait for all uploads to complete
 	fmt.Println("\nIngestion complete in", time.Since(start))
 
 	// 6. Perform RAG Query
