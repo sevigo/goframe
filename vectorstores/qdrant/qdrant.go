@@ -712,7 +712,7 @@ func (s *Store) CreateCollection(ctx context.Context, name string, dimension int
 		return ErrCollectionExists
 	}
 
-	_, err = s.client.GetCollectionsClient().Create(ctx, &qdrant.CreateCollection{
+	req := &qdrant.CreateCollection{
 		CollectionName: name,
 		VectorsConfig: &qdrant.VectorsConfig{
 			Config: &qdrant.VectorsConfig_Params{
@@ -722,7 +722,22 @@ func (s *Store) CreateCollection(ctx context.Context, name string, dimension int
 				},
 			},
 		},
-	})
+	}
+
+	// Apply Binary Quantization if configured in store options
+	if s.options.binaryQuantization {
+		s.logger.DebugContext(ctx, "CreateCollection: Enabling binary quantization")
+		always := true
+		req.QuantizationConfig = &qdrant.QuantizationConfig{
+			Quantization: &qdrant.QuantizationConfig_Binary{
+				Binary: &qdrant.BinaryQuantization{
+					AlwaysRam: &always,
+				},
+			},
+		}
+	}
+
+	_, err = s.client.GetCollectionsClient().Create(ctx, req)
 
 	duration := time.Since(start)
 	if err != nil {
@@ -733,6 +748,17 @@ func (s *Store) CreateCollection(ctx context.Context, name string, dimension int
 
 	s.logger.InfoContext(ctx, "Collection created successfully",
 		"name", name, "dimension", dimension, "duration", duration)
+
+	// Apply Payload Indexes if configured in store options
+	if len(s.options.payloadIndexes) > 0 {
+		s.logger.InfoContext(ctx, "CreateCollection: Creating payload indexes", "keys", s.options.payloadIndexes)
+		for _, key := range s.options.payloadIndexes {
+			if err := s.createPayloadIndex(ctx, name, key); err != nil {
+				s.logger.WarnContext(ctx, "Failed to create payload index", "key", key, "error", err)
+			}
+		}
+	}
+
 	return nil
 }
 
