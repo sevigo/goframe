@@ -88,12 +88,31 @@ func (c *CodeAwareTextSplitter) splitSingleDocument(ctx context.Context, doc sch
 		return nil, fmt.Errorf("failed to chunk document content for source %q: %w", source, err)
 	}
 
+	// Extract metadata to propagate to chunks
+	var extraMetadata map[string]any
+	if parser, err := c.parserRegistry.GetParserForFile(source, nil); err == nil {
+		if meta, err := parser.ExtractMetadata(doc.PageContent, source); err == nil {
+			extraMetadata = make(map[string]any)
+			if meta.PackageName != "" {
+				extraMetadata["package_name"] = meta.PackageName
+			}
+			if len(meta.Imports) > 0 {
+				extraMetadata["imports"] = meta.Imports
+			}
+		}
+	}
+
 	splitDocs := make([]schema.Document, 0, len(codeChunks))
 	for _, chunk := range codeChunks {
 		newMetadata := make(map[string]any)
 		for k, v := range doc.Metadata {
 			newMetadata[k] = v
 		}
+		// Apply extra metadata (package, imports)
+		for k, v := range extraMetadata {
+			newMetadata[k] = v
+		}
+
 		newMetadata["line_start"] = chunk.LineStart
 		newMetadata["line_end"] = chunk.LineEnd
 		for k, v := range chunk.Annotations {

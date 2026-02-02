@@ -17,6 +17,7 @@ import (
 	"github.com/sevigo/goframe/parsers"
 	"github.com/sevigo/goframe/schema"
 	"github.com/sevigo/goframe/textsplitter"
+	"github.com/sevigo/goframe/vectorstores"
 	"github.com/sevigo/goframe/vectorstores/qdrant"
 )
 
@@ -289,6 +290,30 @@ Answer (be technical and concise):`, contextBuilder.String(), query)
 	}
 
 	fmt.Printf("\n\n=== ULTIMATE TEST RESULT ===\n\n%s\n\n", answer)
+
+	// 8. Graph-Like Retrieval (Impact Analysis)
+	logger.Info("Step 8: Impact Analysis (Graph-Like Retrieval)")
+	targetPackage := "github.com/sevigo/goframe/vectorstores/qdrant"
+
+	depRetriever := vectorstores.NewDependencyRetriever(vStore)
+	// We want to see what imports 'targetPackage'. In the framework, we'd pass the current file's package name.
+	// Here, we simulate we are analyzing the 'qdrant' package, so we want to find Dependents (Reverse Deps).
+	network, err := depRetriever.GetContextNetwork(ctx, targetPackage, nil)
+
+	if err != nil {
+		logger.Error("Impact analysis failed", "error", err)
+	} else {
+		fmt.Printf("\n=== IMPACT ANALYSIS: Files importing %s ===\n", targetPackage)
+		seenFiles := make(map[string]bool)
+		for _, doc := range network.Dependents {
+			src := doc.Metadata["source"].(string)
+			if !seenFiles[src] {
+				fmt.Printf("- %s\n", src)
+				seenFiles[src] = true
+			}
+		}
+		fmt.Println("=================================================")
+	}
 }
 
 // loadEnv is a simple .env file parser
