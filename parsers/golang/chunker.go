@@ -38,19 +38,87 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
 	var lastDeclEndLine int
 
 	// Pre-calculate the package and import block to prepend to every chunk.
-	// This gives the LLM crucial context about the file's purpose and dependencies.
 	packageAndImports := p.extractPackageAndImports(file, lines, fset)
+
+	// Determine where to start scanning for declarations (after imports)
+	for _, decl := range file.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if ok && genDecl.Tok == token.IMPORT {
+			lastDeclEndLine = fset.Position(decl.End()).Line
+		}
+	}
+	// If no imports, start after package declaration
+	if lastDeclEndLine == 0 && file.Name != nil {
+		lastDeclEndLine = fset.Position(file.Name.End()).Line
+	}
 
 	for _, decl := range file.Decls {
 		startPos := fset.Position(decl.Pos())
 		endPos := fset.Position(decl.End())
 
-		// Extract the raw text of the entire declaration block, including its doc comment.
+		// Skip import declarations as they are handled in the header
+		if genDecl, ok := decl.(*ast.GenDecl); ok && genDecl.Tok == token.IMPORT {
+			continue
+		}
+
+		// Capture any gap content (comments, whitespace) between the last declaration and this one
+		gapContent := ""
+		if lastDeclEndLine > 0 && startPos.Line > lastDeclEndLine+1 {
+			gapContent = p.extractDeclarationContent(lines, lastDeclEndLine+1, startPos.Line-1)
+			if strings.TrimSpace(gapContent) != "" {
+				gapContent += "\n\n"
+			} else {
+				gapContent = "" // Don't add just whitespace if not needed
+			}
+		}
+
+		// Extract the raw text of the entire declaration block
 		declContent := p.extractDeclarationContent(lines, startPos.Line, endPos.Line)
 
-		// If the current chunk has content and adding the next declaration would
-		// exceed our target size, finalize the current chunk.
-		if currentChunkContent.Len() > 0 && (currentChunkContent.Len()+len(declContent) > targetChunkSize) {
+		// Combined content of gap + declaration
+		fullNewContent := gapContent + declContent
+		totalAddSize := len(fullNewContent)
+
+		// 1. Check if the new declaration ITSELF is too large to fit in a standard chunk
+		if totalAddSize > targetChunkSize {
+			// Flush current chunk if any
+			if currentChunkContent.Len() > 0 {
+				chunkIdentifier := fmt.Sprintf("%s:%d-%d", path, currentChunkStartLine, lastDeclEndLine)
+				chunk := schema.CodeChunk{
+					Content:    packageAndImports + currentChunkContent.String(),
+					LineStart:  currentChunkStartLine,
+					LineEnd:    lastDeclEndLine,
+					Type:       "code_group",
+					Identifier: chunkIdentifier,
+					Annotations: map[string]string{
+						"type": "code_group",
+					},
+				}
+				chunks = append(chunks, chunk)
+				currentChunkContent.Reset()
+				currentChunkStartLine = -1
+			}
+
+			// Sub-chunk the large declaration using internal recursive splitter
+			subSplits := p.recursiveSplit(fullNewContent, targetChunkSize, 200)
+
+			for i, sub := range subSplits {
+				chunkIdentifier := fmt.Sprintf("%s:%d-%d:part%d", path, startPos.Line, endPos.Line, i)
+				chunks = append(chunks, schema.CodeChunk{
+					Content:    packageAndImports + sub,
+					LineStart:  startPos.Line, // Approximate line tracking for sub-chunks
+					LineEnd:    endPos.Line,
+					Type:       "code_group_split",
+					Identifier: chunkIdentifier,
+				})
+			}
+
+			lastDeclEndLine = endPos.Line
+			continue
+		}
+
+		// 2. Normal flow: Check if adding to current chunk exceeds limit
+		if currentChunkContent.Len() > 0 && (currentChunkContent.Len()+totalAddSize > targetChunkSize) {
 			chunkIdentifier := fmt.Sprintf("%s:%d-%d", path, currentChunkStartLine, lastDeclEndLine)
 			chunk := schema.CodeChunk{
 				Content:    packageAndImports + currentChunkContent.String(),
@@ -71,10 +139,14 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
 
 		// If this is the start of a new chunk, record its starting line number.
 		if currentChunkStartLine == -1 {
+			// If we have gap content, strictly speaking the chunk starts at the gap.
 			currentChunkStartLine = startPos.Line
+			if gapContent != "" && lastDeclEndLine > 0 {
+				currentChunkStartLine = lastDeclEndLine + 1
+			}
 		}
 
-		currentChunkContent.WriteString(declContent)
+		currentChunkContent.WriteString(fullNewContent)
 		currentChunkContent.WriteString("\n\n") // Add vertical space between declarations for clarity.
 		lastDeclEndLine = endPos.Line
 	}
@@ -140,4 +212,88 @@ func (p *GoPlugin) extractDeclarationContent(lines []string, startLine, endLine 
 	}
 
 	return strings.Join(lines[startIdx:endIdx], "\n")
+}
+
+// recursiveSplit splits text using a list of separators
+func (p *GoPlugin) recursiveSplit(text string, chunkSize, chunkOverlap int) []string {
+	if len(text) <= chunkSize {
+		return []string{text}
+	}
+	separators := []string{"\n\n", "\n", " ", ""}
+	return p.splitTextRecursive(text, separators, chunkSize, chunkOverlap)
+}
+
+func (p *GoPlugin) splitTextRecursive(text string, separators []string, chunkSize, chunkOverlap int) []string {
+	var finalChunks []string
+	if len(text) <= chunkSize {
+		return []string{text}
+	}
+	if len(separators) == 0 {
+		return []string{text}
+	}
+	separator := separators[0]
+	remainingSeparators := separators[1:]
+	splits := strings.Split(text, separator)
+	var goodSplits []string
+	currentSplit := ""
+	for _, split := range splits {
+		if len(split) == 0 {
+			continue
+		}
+		if len(currentSplit) > 0 && len(currentSplit)+len(separator)+len(split) <= chunkSize {
+			currentSplit += separator + split
+		} else {
+			if len(currentSplit) > 0 {
+				goodSplits = append(goodSplits, currentSplit)
+			}
+			currentSplit = split
+		}
+	}
+	if currentSplit != "" {
+		goodSplits = append(goodSplits, currentSplit)
+	}
+
+	for _, split := range goodSplits {
+		if len(split) <= chunkSize {
+			finalChunks = append(finalChunks, split)
+		} else {
+			recursiveChunks := p.splitTextRecursive(split, remainingSeparators, chunkSize, chunkOverlap)
+			finalChunks = append(finalChunks, recursiveChunks...)
+		}
+	}
+
+	// Merge with overlap if needed
+	if chunkOverlap > 0 && len(finalChunks) > 1 {
+		return p.mergeWithOverlap(finalChunks, chunkSize, chunkOverlap)
+	}
+
+	return finalChunks
+}
+
+func (p *GoPlugin) mergeWithOverlap(chunks []string, chunkSize, chunkOverlap int) []string {
+	var mergedChunks []string
+	currentChunk := ""
+	separator := "\n"
+	for i, chunk := range chunks {
+		if currentChunk == "" {
+			currentChunk = chunk
+			continue
+		}
+		var overlap string
+		if len(currentChunk) > chunkOverlap {
+			overlap = currentChunk[len(currentChunk)-chunkOverlap:]
+		} else {
+			overlap = currentChunk
+		}
+		if len(currentChunk)+len(separator)+len(chunk) <= chunkSize {
+			currentChunk += separator + chunk
+		} else {
+			mergedChunks = append(mergedChunks, currentChunk)
+			currentChunk = overlap + separator + chunk
+		}
+		if i == len(chunks)-1 {
+			mergedChunks = append(mergedChunks, currentChunk)
+		}
+	}
+	return mergedChunks
 }
