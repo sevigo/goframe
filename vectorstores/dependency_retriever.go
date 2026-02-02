@@ -38,22 +38,15 @@ func (r *DependencyRetriever) GetContextNetwork(ctx context.Context, packageName
 	// We want to find documents where 'package_name' is in our 'imports' list.
 	// Filter: package_name IN [imports]
 	if len(imports) > 0 {
-		// Convert imports to interface slice for the filter
-		importsAny := make([]any, len(imports))
-		for i, v := range imports {
-			importsAny[i] = v
-		}
-
+		// Filter: package_name IN [imports]
+		// We pass []string directly. The store implementation should handle []string or convert []any containing strings.
 		filterDeps := map[string]any{
-			"package_name": importsAny, // Qdrant/Store should interpret slice as "IN" or "Match_Any"
+			"package_name": imports,
 		}
 
-		// We use a generic query because we are filtering by exact metadata match,
-		// but VectorStore interface usually requires a query string for SimilaritySearch.
-		//Ideally, we would perform a pure filter search, but SimilaritySearch with a dummy query works if the store supports it.
-		// Alternatively, if the Store supports a "Search" method without query vector, better.
-		// For now, using SimilaritySearch with generic query text.
-		deps, err := r.store.SimilaritySearch(ctx, "", 10, WithFilters(filterDeps))
+		// We use "*" as a dummy query to ensure the vector store processes the request.
+		// Pure metadata filtering often requires a non-empty query in some implementations.
+		deps, err := r.store.SimilaritySearch(ctx, "*", 10, WithFilters(filterDeps))
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch dependencies: %w", err)
 		}
@@ -68,7 +61,7 @@ func (r *DependencyRetriever) GetContextNetwork(ctx context.Context, packageName
 			"imports": packageName, // Qdrant/Store should interpret string val against array field as "CONTAINS"
 		}
 
-		impacts, err := r.store.SimilaritySearch(ctx, "", 10, WithFilters(filterImpact))
+		impacts, err := r.store.SimilaritySearch(ctx, "*", 10, WithFilters(filterImpact))
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch impact: %w", err)
 		}
