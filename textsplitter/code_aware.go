@@ -15,7 +15,12 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
-const MaxParentTextLength = 2000
+const (
+	// MaxParentTextLength defines the default limit for parent context storage
+	MaxParentTextLength = 2000
+	// DefaultChunkSize is the fallback size if not provided
+	DefaultChunkSize = 2048
+)
 
 type ParentContextConfig struct {
 	Enabled       bool
@@ -35,7 +40,7 @@ type CodeAwareTextSplitter struct {
 	estimationRatio float64
 
 	parentConfig  ParentContextConfig
-	parentIDCache sync.Map // map[string]string: key -> hash
+	parentIDCache sync.Map // cache for deterministic IDs: key -> hash
 }
 
 var _ TextSplitter = (*CodeAwareTextSplitter)(nil)
@@ -54,7 +59,7 @@ func NewCodeAware(
 	}
 
 	splitterOpts := options{
-		chunkSize:       2048,
+		chunkSize:       DefaultChunkSize,
 		chunkOverlap:    200,
 		minChunkSize:    50,
 		maxChunkSize:    16000,
@@ -78,8 +83,9 @@ func NewCodeAware(
 	}, nil
 }
 
+// SplitDocuments takes a slice of documents and returns a new slice with split content.
 func (c *CodeAwareTextSplitter) SplitDocuments(ctx context.Context, docs []schema.Document) ([]schema.Document, error) {
-	finalDocs := make([]schema.Document, 0)
+	var finalDocs []schema.Document
 	for _, doc := range docs {
 		chunks, err := c.splitSingleDocument(ctx, doc)
 		if err != nil {
@@ -98,16 +104,16 @@ func (c *CodeAwareTextSplitter) splitSingleDocument(ctx context.Context, doc sch
 		return nil, errors.New("document metadata is missing 'source' key")
 	}
 
-	codeChunks, err := c.ChunkFileWithFileInfo(ctx, doc.PageContent, source, c.modelName, nil, nil)
+	// 1. Identify Parser once
+	parser, err := c.parserRegistry.GetParserForFile(source, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to chunk document content for source %q: %w", source, err)
+		c.logger.Debug("No specific parser found for metadata extraction", "source", source)
 	}
 
-	// Extract metadata to propagate to chunks
-	var extraMetadata map[string]any
-	if parser, err := c.parserRegistry.GetParserForFile(source, nil); err == nil {
+	// 2. Extract specific metadata (Package, Imports, and Test status)
+	extraMetadata := make(map[string]any)
+	if parser != nil {
 		if meta, err := parser.ExtractMetadata(doc.PageContent, source); err == nil {
-			extraMetadata = make(map[string]any)
 			if meta.PackageName != "" {
 				extraMetadata["package_name"] = meta.PackageName
 			}
@@ -117,17 +123,32 @@ func (c *CodeAwareTextSplitter) splitSingleDocument(ctx context.Context, doc sch
 		}
 	}
 
+	// Quick Win: Mark as test file based on naming conventions
+	if isTestFile(source) {
+		extraMetadata["is_test"] = true
+	}
+
+	// 3. Perform Chunking
+	codeChunks, err := c.ChunkFileWithFileInfo(ctx, doc.PageContent, source, c.modelName, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to chunk document content for source %q: %w", source, err)
+	}
+
+	// 4. Map chunks back to full Documents with merged metadata
 	splitDocs := make([]schema.Document, 0, len(codeChunks))
 	for _, chunk := range codeChunks {
-		newMetadata := make(map[string]any)
+		newMetadata := make(map[string]any, len(doc.Metadata)+len(extraMetadata)+5)
+
+		// Priority 1: Original Doc Metadata
 		for k, v := range doc.Metadata {
 			newMetadata[k] = v
 		}
-		// Apply extra metadata (package, imports)
+		// Priority 2: Inferred Language Metadata
 		for k, v := range extraMetadata {
 			newMetadata[k] = v
 		}
 
+		// Priority 3: Chunk-specific data
 		newMetadata["line_start"] = chunk.LineStart
 		newMetadata["line_end"] = chunk.LineEnd
 		if chunk.ParentID != "" {
@@ -139,6 +160,7 @@ func (c *CodeAwareTextSplitter) splitSingleDocument(ctx context.Context, doc sch
 		for k, v := range chunk.Annotations {
 			newMetadata[k] = v
 		}
+
 		splitDocs = append(splitDocs, schema.NewDocument(chunk.Content, newMetadata))
 	}
 	return splitDocs, nil
@@ -161,6 +183,7 @@ func (c *CodeAwareTextSplitter) ChunkFileWithFileInfo(
 	params := c.calculateEffectiveParameters(ctx, opts, filePath, len(content), modelName)
 	pluginOpts := c.createPluginOptions(opts, params)
 
+	// Try language-aware chunking
 	if chunks, err := c.tryLanguageSpecificChunking(ctx, content, filePath, fileInfo, pluginOpts, modelName); err == nil && len(chunks) > 0 {
 		validChunks := c.postProcessChunks(ctx, chunks, params, modelName, filePath)
 		if len(validChunks) > 0 {
@@ -168,6 +191,7 @@ func (c *CodeAwareTextSplitter) ChunkFileWithFileInfo(
 		}
 	}
 
+	// Fallback to character-based recursive splitting
 	return c.intelligentFallbackChunk(ctx, content, filePath, params, modelName)
 }
 
@@ -179,7 +203,7 @@ func (c *CodeAwareTextSplitter) generateParentID(filePath, identifier string, li
 
 	h := sha256.New()
 	h.Write([]byte(key))
-	id := hex.EncodeToString(h.Sum(nil))[:16]
+	id := hex.EncodeToString(h.Sum(nil))[:16] // 16 chars is usually enough for collisions in local repos
 	c.parentIDCache.Store(key, id)
 	return id
 }
@@ -193,7 +217,6 @@ func (c *CodeAwareTextSplitter) truncateParentText(text string) string {
 }
 
 // TruncateParentText reduces text length while preserving start and end context.
-// It is UTF-8 safe by using rune slicing.
 func TruncateParentText(text string, maxLen int) string {
 	if len(text) <= maxLen {
 		return text
@@ -204,9 +227,14 @@ func TruncateParentText(text string, maxLen int) string {
 		return text
 	}
 
-	// Keep beginning and end for context
-	half := (maxLen - 5) / 2
-	return string(runes[:half]) + "\n...\n" + string(runes[len(runes)-half:])
+	// Keep beginning and end for context, add an ellipsis bridge
+	separator := "\n...\n"
+	half := (maxLen - len(separator)) / 2
+	if half < 1 {
+		return string(runes[:maxLen])
+	}
+
+	return string(runes[:half]) + separator + string(runes[len(runes)-half:])
 }
 
 func (c *CodeAwareTextSplitter) createPluginOptions(opts *schema.CodeChunkingOptions, params chunkingParameters) *schema.CodeChunkingOptions {
@@ -236,4 +264,16 @@ func (c *CodeAwareTextSplitter) validateContent(content, filePath string) error 
 	}
 
 	return nil
+}
+
+// isTestFile checks if the filename follows common testing conventions across supported languages.
+func isTestFile(path string) bool {
+	lower := strings.ToLower(path)
+	return strings.HasSuffix(lower, "_test.go") ||
+		strings.HasSuffix(lower, ".test.ts") ||
+		strings.HasSuffix(lower, ".spec.ts") ||
+		strings.HasSuffix(lower, ".test.tsx") ||
+		strings.HasSuffix(lower, ".spec.tsx") ||
+		strings.HasSuffix(lower, ".test.js") ||
+		strings.HasSuffix(lower, ".spec.js")
 }
