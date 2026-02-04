@@ -2,14 +2,19 @@ package sparse
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,9 +29,15 @@ var (
 	tokenizerInstance *tokenizer.Tokenizer
 )
 
-// EnsureModelDownloaded downloads the model artifacts directly from GCS.
-// We avoid using fastembed.NewFlagEmbedding because it initializes the ONNX runtime,
-// which requires a C library that might not be present. We only need the tokenizer files.
+const (
+	// modelURL is the remote location of the BGE small sparse model.
+	modelURL = "https://github.com/qdrant/fast-embed/raw/main/fast_embed/models/fast-bge-small-en-v1.5.tar.gz"
+	// expectedSHA256 is the verified checksum of the model archive.
+	expectedSHA256 = "498720d335ad93e06cb3a4602859971001d11b47202512d53cc141f6ae7f0767"
+)
+
+// EnsureModelDownloaded downloads the model artifacts directly.
+// We only need the tokenizer files for sparse vector generation.
 func EnsureModelDownloaded() (string, error) {
 	modelName := "fast-bge-small-en-v1.5"
 	cacheDir := os.Getenv("GOFRAME_CACHE_DIR")
@@ -43,23 +54,20 @@ func EnsureModelDownloaded() (string, error) {
 		return modelPath, nil
 	}
 
-	// Download
-	url := fmt.Sprintf("https://storage.googleapis.com/qdrant-fastembed/%s.tar.gz", modelName)
-	if err := downloadAndExtract(url, cacheDir); err != nil {
+	if err := downloadAndExtract(modelURL, cacheDir); err != nil {
 		return "", fmt.Errorf("failed to download and extract model: %w", err)
 	}
 
 	return modelPath, nil
 }
 
-func downloadAndExtract(url, targetDir string) error {
+func downloadAndExtract(url, destination string) error {
 	client := &http.Client{
 		Timeout: 5 * time.Minute,
 	}
-
 	resp, err := client.Get(url)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to download model: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -67,10 +75,18 @@ func downloadAndExtract(url, targetDir string) error {
 		return fmt.Errorf("bad status: %s", resp.Status)
 	}
 
-	// Untar
-	gzr, err := gzip.NewReader(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		return fmt.Errorf("failed to read model body: %w", err)
+	}
+
+	if err := verifyChecksum(body, expectedSHA256); err != nil {
 		return err
+	}
+
+	gzr, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create gzip reader: %w", err)
 	}
 	defer gzr.Close()
 
@@ -82,32 +98,40 @@ func downloadAndExtract(url, targetDir string) error {
 			break
 		}
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to read tar: %w", err)
 		}
 
-		target := filepath.Join(targetDir, header.Name)
+		target := filepath.Join(destination, header.Name)
 
 		switch header.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, 0755); err != nil {
-				return err
+				return fmt.Errorf("failed to create dir: %w", err)
 			}
 		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-				return err
+				return fmt.Errorf("failed to create parent dir: %w", err)
 			}
-			f, err := os.Create(target)
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, os.FileMode(header.Mode))
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to open file: %w", err)
 			}
-
-			// Copy content to file
 			_, copyErr := io.Copy(f, tr)
-			f.Close() // Explicit close
+			f.Close()
 			if copyErr != nil {
-				return copyErr
+				return fmt.Errorf("failed to extract file: %w", copyErr)
 			}
 		}
+	}
+	return nil
+}
+
+func verifyChecksum(data []byte, expected string) error {
+	h := sha256.New()
+	h.Write(data)
+	actual := hex.EncodeToString(h.Sum(nil))
+	if actual != expected {
+		return fmt.Errorf("checksum mismatch: expected %s, got %s", expected, actual)
 	}
 	return nil
 }
@@ -121,7 +145,6 @@ func GetTokenizer() (*tokenizer.Tokenizer, error) {
 			return
 		}
 
-		// Load tokenizer.json
 		tokenizerPath := filepath.Join(modelPath, "tokenizer.json")
 		tk, err := pretrained.FromFile(tokenizerPath)
 		if err != nil {
@@ -133,29 +156,33 @@ func GetTokenizer() (*tokenizer.Tokenizer, error) {
 	return tokenizerInstance, vocabErr
 }
 
-// GenerateSparseVector converts text into a SparseVector using a Bag-of-Tokens approach.
-// It tokenizes the text and counts the frequency of each token.
-// The resulting vector is L2 normalized.
+// GenerateSparseVector converts text into a normalized SparseVector using Bag-of-Tokens.
+// The resulting vector is L2-normalized to unit length for consistent similarity scoring.
+// Special tokens (PAD, CLS, SEP) are filtered out to reduce noise and index size.
+//
+// Returns error if:
+//   - Text cannot be tokenized
+//   - No valid tokens remain after filtering
+//   - Normalization fails (due to zero norm)
 func GenerateSparseVector(ctx context.Context, text string) (*schema.SparseVector, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, errors.New("text cannot be empty")
+	}
+
 	tk, err := GetTokenizer()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tokenizer: %w", err)
 	}
 
-	// Tokenize
-	// We explicitly enable truncation to avoid issues with very long texts,
-	// though for sparse vectors we might want all tokens.
-	// For now let's behave like a standard embedding model (512 tokens).
+	// Truncation is handled by default tokenizer settings if configured in tokenizer.json.
 	encodings, err := tk.EncodeSingle(text)
 	if err != nil {
-		return nil, fmt.Errorf("failed to tokenize text: %w", err)
+		return nil, fmt.Errorf("failed to encode text: %w", err)
 	}
 
-	// Count token frequencies
 	tokenCounts := make(map[uint32]float32)
 	for _, id := range encodings.Ids {
-		// Skip special tokens if possible (0 is padding).
-		// 101/102 are usually CLS/SEP in BERT models, which are noise for sparse vectors.
+		// Skip special tokens: 0 (PAD), 101 (CLS), 102 (SEP) are noise for BOW sparse vectors.
 		if id == 0 || id == 101 || id == 102 {
 			continue
 		}
@@ -163,27 +190,24 @@ func GenerateSparseVector(ctx context.Context, text string) (*schema.SparseVecto
 	}
 
 	if len(tokenCounts) == 0 {
-		return nil, fmt.Errorf("no tokens generated")
+		return nil, errors.New("no valid tokens generated after filtering special tokens")
 	}
 
-	// Calculate L2 norm for normalization
-	var norm float64
+	var normSq float64
 	for _, count := range tokenCounts {
-		norm += float64(count * count)
+		normSq += float64(count) * float64(count)
 	}
-	norm = math.Sqrt(norm)
+	norm := math.Sqrt(normSq)
 
-	// Convert to SparseVector struct with normalized values
+	if norm <= 0 {
+		return nil, fmt.Errorf("invalid normalization: norm=%f for %d tokens", norm, len(tokenCounts))
+	}
+
 	indices := make([]uint32, 0, len(tokenCounts))
 	values := make([]float32, 0, len(tokenCounts))
-
 	for id, count := range tokenCounts {
 		indices = append(indices, id)
-		if norm > 0 {
-			values = append(values, float32(float64(count)/norm))
-		} else {
-			values = append(values, count)
-		}
+		values = append(values, float32(float64(count)/norm))
 	}
 
 	return &schema.SparseVector{

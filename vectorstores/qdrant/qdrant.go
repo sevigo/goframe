@@ -541,6 +541,9 @@ func (s *Store) SimilaritySearch(
 	}
 
 	opts := vectorstores.ParseOptions(options...)
+	if err := s.validateHybridSearchOptions(opts); err != nil {
+		return nil, err
+	}
 	collectionName := s.getCollectionName(opts)
 
 	embedStart := time.Now()
@@ -560,10 +563,10 @@ func (s *Store) SimilaritySearch(
 	if len(s.options.sparseVectors) > 0 && opts.SparseQuery != nil {
 		sparseName := s.options.sparseVectors[0]
 
-		// If dense vector is default (empty string), we should pass nil to Using
 		var denseNamePtr *string
 		if DefaultDenseVectorName != "" {
-			denseNamePtr = &[]string{DefaultDenseVectorName}[0] // Safe pointer
+			name := DefaultDenseVectorName
+			denseNamePtr = &name
 		}
 
 		queryPoints := &qdrant.QueryPoints{
@@ -604,6 +607,14 @@ func (s *Store) SimilaritySearch(
 			return nil, fmt.Errorf("qdrant hybrid query failed: %w", err)
 		}
 		results = queryResult.GetResult()
+
+		s.logger.DebugContext(ctx, "Hybrid similarity search executed",
+			"fusion", "RRF",
+			"dense_limit", limit,
+			"sparse_limit", limit,
+			"results", len(results),
+			"duration", time.Since(searchStart),
+		)
 	} else {
 		searchResult, err := s.client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
 			CollectionName: collectionName,
@@ -625,6 +636,12 @@ func (s *Store) SimilaritySearch(
 			return nil, fmt.Errorf("qdrant search failed: %w", err)
 		}
 		results = searchResult.GetResult()
+
+		s.logger.DebugContext(ctx, "Dense similarity search executed",
+			"limit", limit,
+			"results", len(results),
+			"duration", time.Since(searchStart),
+		)
 	}
 
 	docs := make([]schema.Document, 0, len(results))
@@ -658,6 +675,9 @@ func (s *Store) SimilaritySearchWithScores(
 	}
 
 	opts := vectorstores.ParseOptions(options...)
+	if err := s.validateHybridSearchOptions(opts); err != nil {
+		return nil, err
+	}
 	collectionName := s.getCollectionName(opts)
 
 	queryVector, err := s.embedder.EmbedQuery(ctx, query)
@@ -668,6 +688,7 @@ func (s *Store) SimilaritySearchWithScores(
 
 	filter := buildQdrantFilter(opts.Filters)
 	limit := uint64(numDocuments)
+	searchStart := time.Now()
 
 	var results []*qdrant.ScoredPoint
 	if len(s.options.sparseVectors) > 0 && opts.SparseQuery != nil {
@@ -675,7 +696,8 @@ func (s *Store) SimilaritySearchWithScores(
 
 		var denseNamePtr *string
 		if DefaultDenseVectorName != "" {
-			denseNamePtr = &[]string{DefaultDenseVectorName}[0]
+			name := DefaultDenseVectorName
+			denseNamePtr = &name
 		}
 
 		queryPoints := &qdrant.QueryPoints{
@@ -718,6 +740,12 @@ func (s *Store) SimilaritySearchWithScores(
 			return nil, fmt.Errorf("qdrant hybrid query failed: %w", err)
 		}
 		results = queryResult.GetResult()
+
+		s.logger.DebugContext(ctx, "Hybrid similarity search with scores executed",
+			"fusion", "RRF",
+			"results", len(results),
+			"duration", time.Since(searchStart),
+		)
 	} else {
 		searchResult, err := s.client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
 			CollectionName: collectionName,
@@ -864,20 +892,7 @@ func (s *Store) CreateCollection(ctx context.Context, name string, dimension int
 		},
 	}
 
-	if len(s.options.sparseVectors) > 0 {
-		sparseConfig := make(map[string]*qdrant.SparseVectorParams)
-		onDisk := true
-		for _, sparseName := range s.options.sparseVectors {
-			sparseConfig[sparseName] = &qdrant.SparseVectorParams{
-				Index: &qdrant.SparseIndexConfig{
-					OnDisk: &onDisk,
-				},
-			}
-		}
-		req.SparseVectorsConfig = &qdrant.SparseVectorConfig{
-			Map: sparseConfig,
-		}
-	}
+	req.SparseVectorsConfig = s.buildSparseVectorConfig()
 
 	// Apply Binary Quantization if configured in store options
 	if s.options.binaryQuantization {
@@ -1007,11 +1022,16 @@ func (s *Store) SimilaritySearchBatch(
 	limit := uint64(numDocuments)
 	var batchResults [][]schema.Document
 
-	if len(s.options.sparseVectors) > 0 && len(opts.SparseQueries) == len(queryVectors) {
+	if len(s.options.sparseVectors) > 0 {
+		if len(opts.SparseQueries) != len(queryVectors) {
+			return nil, fmt.Errorf("sparse query count (%d) must match query count (%d)",
+				len(opts.SparseQueries), len(queryVectors))
+		}
 		sparseName := s.options.sparseVectors[0]
 		var denseNamePtr *string
 		if DefaultDenseVectorName != "" {
-			denseNamePtr = &[]string{DefaultDenseVectorName}[0]
+			name := DefaultDenseVectorName
+			denseNamePtr = &name
 		}
 
 		queryRequests := make([]*qdrant.QueryPoints, 0, len(queryVectors))
@@ -1068,6 +1088,9 @@ func (s *Store) SimilaritySearchBatch(
 			batchResults[i] = docs
 		}
 	} else {
+		if len(opts.SparseQueries) > 0 {
+			s.logger.WarnContext(ctx, "Sparse queries provided but no sparse vectors configured")
+		}
 		searchRequests := make([]*qdrant.SearchPoints, 0, len(queryVectors))
 		for _, vector := range queryVectors {
 			searchRequests = append(searchRequests, &qdrant.SearchPoints{
@@ -1184,20 +1207,7 @@ func (s *Store) ensureCollection(ctx context.Context, collectionName string) err
 		}
 	}
 
-	if len(s.options.sparseVectors) > 0 {
-		sparseConfig := make(map[string]*qdrant.SparseVectorParams)
-		onDisk := true
-		for _, sparseName := range s.options.sparseVectors {
-			sparseConfig[sparseName] = &qdrant.SparseVectorParams{
-				Index: &qdrant.SparseIndexConfig{
-					OnDisk: &onDisk,
-				},
-			}
-		}
-		req.SparseVectorsConfig = &qdrant.SparseVectorConfig{
-			Map: sparseConfig,
-		}
-	}
+	req.SparseVectorsConfig = s.buildSparseVectorConfig()
 
 	_, err = s.client.GetCollectionsClient().Create(ctx, req)
 	if err != nil {
@@ -1404,5 +1414,36 @@ func buildQdrantFilter(filters map[string]any) *qdrant.Filter {
 
 	return &qdrant.Filter{
 		Must: conditions,
+	}
+}
+
+func (s *Store) validateHybridSearchOptions(opts vectorstores.Options) error {
+	if opts.SparseQuery != nil && len(s.options.sparseVectors) == 0 {
+		return ErrMissingSparseName
+	}
+	if opts.SparseQuery != nil {
+		if len(opts.SparseQuery.Indices) != len(opts.SparseQuery.Values) {
+			return fmt.Errorf("sparse vector indices and values length mismatch")
+		}
+	}
+	return nil
+}
+
+func (s *Store) buildSparseVectorConfig() *qdrant.SparseVectorConfig {
+	if len(s.options.sparseVectors) == 0 {
+		return nil
+	}
+
+	sparseConfig := make(map[string]*qdrant.SparseVectorParams)
+	onDisk := true
+	for _, sparseName := range s.options.sparseVectors {
+		sparseConfig[sparseName] = &qdrant.SparseVectorParams{
+			Index: &qdrant.SparseIndexConfig{
+				OnDisk: &onDisk,
+			},
+		}
+	}
+	return &qdrant.SparseVectorConfig{
+		Map: sparseConfig,
 	}
 }

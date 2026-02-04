@@ -67,7 +67,9 @@ func main() {
 	// 3. Prepare Documents
 	// Clean up previous runs
 	fmt.Printf("Cleaning up collection %s...\n", collectionName)
-	_ = store.DeleteCollection(ctx, collectionName)
+	if err := store.DeleteCollection(ctx, collectionName); err != nil {
+		log.Printf("Warning: could not delete existing collection (this is normal if it doesn't exist): %v", err)
+	}
 
 	// We'll create documents where dense search might be ambiguous but sparse (keyword) is precise.
 	texts := []string{

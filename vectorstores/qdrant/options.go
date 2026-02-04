@@ -277,7 +277,9 @@ func (opts *options) Clone() options {
 		timeout:            opts.timeout,
 		retryAttempts:      opts.retryAttempts,
 		batchSize:          opts.batchSize,
+		batchConfig:        opts.batchConfig,
 		binaryQuantization: opts.binaryQuantization,
-		payloadIndexes:     opts.payloadIndexes,
+		payloadIndexes:     append([]string{}, opts.payloadIndexes...),
+		sparseVectors:      append([]string{}, opts.sparseVectors...),
 	}
 }
