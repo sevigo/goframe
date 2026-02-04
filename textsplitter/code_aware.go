@@ -2,15 +2,25 @@ package textsplitter
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/sevigo/goframe/parsers"
 	"github.com/sevigo/goframe/schema"
 )
+
+const MaxParentTextLength = 2000
+
+type ParentContextConfig struct {
+	Enabled       bool
+	MaxTextLength int
+}
 
 type CodeAwareTextSplitter struct {
 	tokenizer      Tokenizer
@@ -23,6 +33,9 @@ type CodeAwareTextSplitter struct {
 	maxChunkSize    int
 	modelName       string
 	estimationRatio float64
+
+	parentConfig  ParentContextConfig
+	parentIDCache sync.Map // map[string]string: key -> hash
 }
 
 var _ TextSplitter = (*CodeAwareTextSplitter)(nil)
@@ -52,14 +65,16 @@ func NewCodeAware(
 	}
 
 	return &CodeAwareTextSplitter{
-		parserRegistry: registry,
-		tokenizer:      tokenizer,
-		logger:         logger.With("component", "code_aware_splitter"),
-		chunkSize:      splitterOpts.chunkSize,
-		chunkOverlap:   splitterOpts.chunkOverlap,
-		modelName:      splitterOpts.modelName,
-		minChunkSize:   splitterOpts.minChunkSize,
-		maxChunkSize:   splitterOpts.maxChunkSize,
+		parserRegistry:  registry,
+		tokenizer:       tokenizer,
+		logger:          logger.With("component", "code_aware_splitter"),
+		chunkSize:       splitterOpts.chunkSize,
+		chunkOverlap:    splitterOpts.chunkOverlap,
+		modelName:       splitterOpts.modelName,
+		minChunkSize:    splitterOpts.minChunkSize,
+		maxChunkSize:    splitterOpts.maxChunkSize,
+		estimationRatio: splitterOpts.estimationRatio,
+		parentConfig:    splitterOpts.parentConfig,
 	}, nil
 }
 
@@ -115,6 +130,12 @@ func (c *CodeAwareTextSplitter) splitSingleDocument(ctx context.Context, doc sch
 
 		newMetadata["line_start"] = chunk.LineStart
 		newMetadata["line_end"] = chunk.LineEnd
+		if chunk.ParentID != "" {
+			newMetadata["parent_id"] = chunk.ParentID
+		}
+		if chunk.FullParentText != "" {
+			newMetadata["full_parent_text"] = chunk.FullParentText
+		}
 		for k, v := range chunk.Annotations {
 			newMetadata[k] = v
 		}
@@ -141,13 +162,51 @@ func (c *CodeAwareTextSplitter) ChunkFileWithFileInfo(
 	pluginOpts := c.createPluginOptions(opts, params)
 
 	if chunks, err := c.tryLanguageSpecificChunking(ctx, content, filePath, fileInfo, pluginOpts, modelName); err == nil && len(chunks) > 0 {
-		validChunks := c.postProcessChunks(ctx, chunks, params, modelName)
+		validChunks := c.postProcessChunks(ctx, chunks, params, modelName, filePath)
 		if len(validChunks) > 0 {
 			return validChunks, nil
 		}
 	}
 
 	return c.intelligentFallbackChunk(ctx, content, filePath, params, modelName)
+}
+
+func (c *CodeAwareTextSplitter) generateParentID(filePath, identifier string, lineStart int) string {
+	key := fmt.Sprintf("%s:%s:%d", filePath, identifier, lineStart)
+	if id, ok := c.parentIDCache.Load(key); ok {
+		return id.(string)
+	}
+
+	h := sha256.New()
+	h.Write([]byte(key))
+	id := hex.EncodeToString(h.Sum(nil))[:16]
+	c.parentIDCache.Store(key, id)
+	return id
+}
+
+func (c *CodeAwareTextSplitter) truncateParentText(text string) string {
+	maxLen := MaxParentTextLength
+	if c.parentConfig.MaxTextLength > 0 {
+		maxLen = c.parentConfig.MaxTextLength
+	}
+	return TruncateParentText(text, maxLen)
+}
+
+// TruncateParentText reduces text length while preserving start and end context.
+// It is UTF-8 safe by using rune slicing.
+func TruncateParentText(text string, maxLen int) string {
+	if len(text) <= maxLen {
+		return text
+	}
+
+	runes := []rune(text)
+	if len(runes) <= maxLen {
+		return text
+	}
+
+	// Keep beginning and end for context
+	half := (maxLen - 5) / 2
+	return string(runes[:half]) + "\n...\n" + string(runes[len(runes)-half:])
 }
 
 func (c *CodeAwareTextSplitter) createPluginOptions(opts *schema.CodeChunkingOptions, params chunkingParameters) *schema.CodeChunkingOptions {

@@ -53,6 +53,13 @@ type CodeChunk struct {
 	ParentContext   string            `json:"parentContext"`
 	ContextLevel    int               `json:"contextLevel"`
 	Sparse          *SparseVector     `json:"sparse,omitempty"`
+	// ParentID uniquely identifies the parent code structure (function/class) this chunk belongs to.
+	// Empty for top-level chunks that are not split.
+	ParentID string `json:"parentID,omitempty"`
+
+	// FullParentText contains the complete text of the parent structure.
+	// WARNING: This can be large. Logic should truncate this before storage.
+	FullParentText string `json:"fullParentText,omitempty"`
 }
 
 type CodeChunkingOptions struct {

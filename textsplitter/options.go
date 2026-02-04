@@ -8,6 +8,7 @@ type options struct {
 	maxChunkSize    int
 	modelName       string
 	estimationRatio float64
+	parentConfig    ParentContextConfig
 }
 
 // Option is a function type for configuring the splitter.
@@ -61,5 +62,12 @@ func WithEstimationRatio(ratio float64) Option {
 		if ratio > 0 {
 			o.estimationRatio = ratio
 		}
+	}
+}
+
+// WithParentContextConfig sets the parent context configuration.
+func WithParentContextConfig(config ParentContextConfig) Option {
+	return func(o *options) {
+		o.parentConfig = config
 	}
 }

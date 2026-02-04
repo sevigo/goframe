@@ -14,13 +14,15 @@ import (
 
 	"github.com/sevigo/goframe/parsers"
 	"github.com/sevigo/goframe/schema"
+	"github.com/sevigo/goframe/textsplitter"
 )
 
 const (
-	defaultBatchSize   = 256
-	maxFileSize        = 10 * 1024 * 1024  // 10MB
-	maxMemoryBuffer    = 100 * 1024 * 1024 // 100MB total buffer
-	defaultWorkerCount = 4
+	defaultBatchSize    = 256
+	maxFileSize         = 10 * 1024 * 1024  // 10MB
+	maxMemoryBuffer     = 100 * 1024 * 1024 // 100MB total buffer
+	defaultWorkerCount  = 4
+	maxParentTextLength = 2000
 )
 
 var (
@@ -523,6 +525,10 @@ func buildChunkMetadata(baseMetadata map[string]any, chunk schema.CodeChunk, chu
 	chunkMetadata["line_end"] = chunk.LineEnd
 	chunkMetadata["chunk_index"] = chunkIndex
 	chunkMetadata["total_chunks"] = totalChunks
+	chunkMetadata["parent_id"] = chunk.ParentID
+	if chunk.FullParentText != "" {
+		chunkMetadata["full_parent_text"] = truncateParentText(chunk.FullParentText)
+	}
 
 	for k, v := range chunk.Annotations {
 		chunkMetadata[k] = v
@@ -564,4 +570,8 @@ func shouldSkipFile(path string, info fs.FileInfo) bool {
 	}
 
 	return binaryExts[ext]
+}
+
+func truncateParentText(text string) string {
+	return textsplitter.TruncateParentText(text, maxParentTextLength)
 }
