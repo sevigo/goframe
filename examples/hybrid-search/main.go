@@ -141,7 +141,15 @@ func main() {
 	}
 
 	for i, res := range resultsWithScore {
+		parentID, _ := res.Document.Metadata["parent_id"].(string)
+		fullParent, _ := res.Document.Metadata["full_parent_text"].(string)
 		fmt.Printf("%d. [Score: %.4f] %s\n", i+1, res.Score, res.Document.PageContent)
+		if parentID != "" {
+			fmt.Printf("   [ParentID: %s]\n", parentID[:8])
+		}
+		if fullParent != "" {
+			fmt.Printf("   [FullParent: %s...]\n", fullParent[:20])
+		}
 	}
 
 	// Basic assertion

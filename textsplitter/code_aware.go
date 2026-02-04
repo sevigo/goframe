@@ -2,6 +2,8 @@ package textsplitter
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -115,6 +117,12 @@ func (c *CodeAwareTextSplitter) splitSingleDocument(ctx context.Context, doc sch
 
 		newMetadata["line_start"] = chunk.LineStart
 		newMetadata["line_end"] = chunk.LineEnd
+		if chunk.ParentID != "" {
+			newMetadata["parent_id"] = chunk.ParentID
+		}
+		if chunk.FullParentText != "" {
+			newMetadata["full_parent_text"] = chunk.FullParentText
+		}
 		for k, v := range chunk.Annotations {
 			newMetadata[k] = v
 		}
@@ -141,13 +149,19 @@ func (c *CodeAwareTextSplitter) ChunkFileWithFileInfo(
 	pluginOpts := c.createPluginOptions(opts, params)
 
 	if chunks, err := c.tryLanguageSpecificChunking(ctx, content, filePath, fileInfo, pluginOpts, modelName); err == nil && len(chunks) > 0 {
-		validChunks := c.postProcessChunks(ctx, chunks, params, modelName)
+		validChunks := c.postProcessChunks(ctx, chunks, params, modelName, filePath)
 		if len(validChunks) > 0 {
 			return validChunks, nil
 		}
 	}
 
 	return c.intelligentFallbackChunk(ctx, content, filePath, params, modelName)
+}
+
+func (c *CodeAwareTextSplitter) generateParentID(filePath, identifier string) string {
+	h := sha256.New()
+	h.Write([]byte(filePath + ":" + identifier))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func (c *CodeAwareTextSplitter) createPluginOptions(opts *schema.CodeChunkingOptions, params chunkingParameters) *schema.CodeChunkingOptions {

@@ -523,6 +523,8 @@ func buildChunkMetadata(baseMetadata map[string]any, chunk schema.CodeChunk, chu
 	chunkMetadata["line_end"] = chunk.LineEnd
 	chunkMetadata["chunk_index"] = chunkIndex
 	chunkMetadata["total_chunks"] = totalChunks
+	chunkMetadata["parent_id"] = chunk.ParentID
+	chunkMetadata["full_parent_text"] = chunk.FullParentText
 
 	for k, v := range chunk.Annotations {
 		chunkMetadata[k] = v

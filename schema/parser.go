@@ -53,6 +53,8 @@ type CodeChunk struct {
 	ParentContext   string            `json:"parentContext"`
 	ContextLevel    int               `json:"contextLevel"`
 	Sparse          *SparseVector     `json:"sparse,omitempty"`
+	ParentID        string            `json:"parentID,omitempty"`
+	FullParentText  string            `json:"fullParentText,omitempty"`
 }
 
 type CodeChunkingOptions struct {

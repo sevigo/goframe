@@ -56,12 +56,20 @@ func (c *CodeAwareTextSplitter) enrichChunksWithTokenCounts(
 }
 
 // postProcessChunks applies post-processing to chunks from language plugins.
-func (c *CodeAwareTextSplitter) postProcessChunks(ctx context.Context, chunks []model.CodeChunk, params chunkingParameters, modelName string) []model.CodeChunk {
+func (c *CodeAwareTextSplitter) postProcessChunks(ctx context.Context, chunks []model.CodeChunk, params chunkingParameters, modelName, filePath string) []model.CodeChunk {
 	var processedChunks []model.CodeChunk
 
 	for _, chunk := range chunks {
 		if !c.isValidChunk(chunk) {
 			continue
+		}
+
+		// Assign parent info if missing (i.e., this chunk is considered a parent)
+		if chunk.ParentID == "" {
+			chunk.ParentID = c.generateParentID(filePath, chunk.Identifier)
+		}
+		if chunk.FullParentText == "" {
+			chunk.FullParentText = chunk.Content
 		}
 
 		if chunk.TokenCount > params.ChunkSize*2 {
@@ -144,11 +152,13 @@ func (c *CodeAwareTextSplitter) createSubChunk(originalChunk model.CodeChunk, co
 	maps.Copy(annotations, originalChunk.Annotations)
 
 	return model.CodeChunk{
-		Content:     content,
-		LineStart:   startLine,
-		LineEnd:     endLine,
-		Type:        originalChunk.Type,
-		Identifier:  fmt.Sprintf("%s_part_%d", originalChunk.Identifier, chunkIndex+1),
-		Annotations: annotations,
+		Content:        content,
+		LineStart:      startLine,
+		LineEnd:        endLine,
+		Type:           originalChunk.Type,
+		Identifier:     fmt.Sprintf("%s_part_%d", originalChunk.Identifier, chunkIndex+1),
+		Annotations:    annotations,
+		ParentID:       originalChunk.ParentID,
+		FullParentText: originalChunk.FullParentText,
 	}
 }
