@@ -38,11 +38,18 @@ type Options struct {
 	ScoreThreshold float32
 	Filters        map[string]any
 	SparseQuery    *schema.SparseVector
+	SparseQueries  []*schema.SparseVector
 }
 
 func WithSparseQuery(sparse *schema.SparseVector) Option {
 	return func(opts *Options) {
 		opts.SparseQuery = sparse
+	}
+}
+
+func WithSparseQueries(sparse []*schema.SparseVector) Option {
+	return func(opts *Options) {
+		opts.SparseQueries = sparse
 	}
 }
 

@@ -1004,36 +1004,100 @@ func (s *Store) SimilaritySearchBatch(
 		return nil, fmt.Errorf("failed to embed queries: %w", err)
 	}
 
-	searchRequests := make([]*qdrant.SearchPoints, 0, len(queryVectors))
-	for _, vector := range queryVectors {
-		searchRequests = append(searchRequests, &qdrant.SearchPoints{
-			CollectionName: collectionName,
-			Vector:         vector,
-			Limit:          uint64(numDocuments),
-			WithPayload: &qdrant.WithPayloadSelector{
-				SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
-			},
-			ScoreThreshold: &opts.ScoreThreshold,
-		})
-	}
+	limit := uint64(numDocuments)
+	var batchResults [][]schema.Document
 
-	searchResp, err := s.client.GetPointsClient().SearchBatch(ctx, &qdrant.SearchBatchPoints{
-		SearchPoints:   searchRequests,
-		CollectionName: collectionName,
-	})
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Batch search failed", "error", err)
-		return nil, fmt.Errorf("qdrant batch search failed: %w", err)
-	}
-
-	// Convert results
-	batchResults := make([][]schema.Document, len(searchResp.GetResult()))
-	for i, result := range searchResp.GetResult() {
-		docs := make([]schema.Document, 0, len(result.GetResult()))
-		for _, point := range result.GetResult() {
-			docs = append(docs, s.payloadToDocument(point.GetPayload()))
+	if len(s.options.sparseVectors) > 0 && len(opts.SparseQueries) == len(queryVectors) {
+		sparseName := s.options.sparseVectors[0]
+		var denseNamePtr *string
+		if DefaultDenseVectorName != "" {
+			denseNamePtr = &[]string{DefaultDenseVectorName}[0]
 		}
-		batchResults[i] = docs
+
+		queryRequests := make([]*qdrant.QueryPoints, 0, len(queryVectors))
+		for i, vector := range queryVectors {
+			queryRequests = append(queryRequests, &qdrant.QueryPoints{
+				CollectionName: collectionName,
+				Query: &qdrant.Query{
+					Variant: &qdrant.Query_Fusion{
+						Fusion: qdrant.Fusion_RRF,
+					},
+				},
+				Prefetch: []*qdrant.PrefetchQuery{
+					{
+						Query: &qdrant.Query{
+							Variant: &qdrant.Query_Nearest{
+								Nearest: qdrant.NewVectorInputDense(vector),
+							},
+						},
+						Using: denseNamePtr,
+						Limit: &limit,
+					},
+					{
+						Query: &qdrant.Query{
+							Variant: &qdrant.Query_Nearest{
+								Nearest: qdrant.NewVectorInputSparse(opts.SparseQueries[i].Indices, opts.SparseQueries[i].Values),
+							},
+						},
+						Using: &sparseName,
+						Limit: &limit,
+					},
+				},
+				WithPayload: &qdrant.WithPayloadSelector{
+					SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
+				},
+				ScoreThreshold: &opts.ScoreThreshold,
+			})
+		}
+
+		batchQueryResp, err := s.client.GetPointsClient().QueryBatch(ctx, &qdrant.QueryBatchPoints{
+			CollectionName: collectionName,
+			QueryPoints:    queryRequests,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("qdrant hybrid batch query failed: %w", err)
+		}
+
+		batchResults = make([][]schema.Document, len(batchQueryResp.GetResult()))
+		for i, resp := range batchQueryResp.GetResult() {
+			results := resp.GetResult()
+			docs := make([]schema.Document, 0, len(results))
+			for _, point := range results {
+				docs = append(docs, s.payloadToDocument(point.GetPayload()))
+			}
+			batchResults[i] = docs
+		}
+	} else {
+		searchRequests := make([]*qdrant.SearchPoints, 0, len(queryVectors))
+		for _, vector := range queryVectors {
+			searchRequests = append(searchRequests, &qdrant.SearchPoints{
+				CollectionName: collectionName,
+				Vector:         vector,
+				Limit:          limit,
+				WithPayload: &qdrant.WithPayloadSelector{
+					SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
+				},
+				ScoreThreshold: &opts.ScoreThreshold,
+			})
+		}
+
+		searchResp, err := s.client.GetPointsClient().SearchBatch(ctx, &qdrant.SearchBatchPoints{
+			SearchPoints:   searchRequests,
+			CollectionName: collectionName,
+		})
+		if err != nil {
+			s.logger.ErrorContext(ctx, "Batch search failed", "error", err)
+			return nil, fmt.Errorf("qdrant batch search failed: %w", err)
+		}
+
+		batchResults = make([][]schema.Document, len(searchResp.GetResult()))
+		for i, result := range searchResp.GetResult() {
+			docs := make([]schema.Document, 0, len(result.GetResult()))
+			for _, point := range result.GetResult() {
+				docs = append(docs, s.payloadToDocument(point.GetPayload()))
+			}
+			batchResults[i] = docs
+		}
 	}
 
 	return batchResults, nil
