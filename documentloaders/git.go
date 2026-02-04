@@ -14,6 +14,7 @@ import (
 
 	"github.com/sevigo/goframe/parsers"
 	"github.com/sevigo/goframe/schema"
+	"github.com/sevigo/goframe/textsplitter"
 )
 
 const (
@@ -572,10 +573,5 @@ func shouldSkipFile(path string, info fs.FileInfo) bool {
 }
 
 func truncateParentText(text string) string {
-	if len(text) <= maxParentTextLength {
-		return text
-	}
-	// Keep beginning and end for context
-	half := (maxParentTextLength - 5) / 2
-	return text[:half] + "\n...\n" + text[len(text)-half:]
+	return textsplitter.TruncateParentText(text, maxParentTextLength)
 }

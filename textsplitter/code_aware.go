@@ -17,6 +17,11 @@ import (
 
 const MaxParentTextLength = 2000
 
+type ParentContextConfig struct {
+	Enabled       bool
+	MaxTextLength int
+}
+
 type CodeAwareTextSplitter struct {
 	tokenizer      Tokenizer
 	parserRegistry parsers.ParserRegistry
@@ -29,6 +34,7 @@ type CodeAwareTextSplitter struct {
 	modelName       string
 	estimationRatio float64
 
+	parentConfig  ParentContextConfig
 	parentIDCache sync.Map // map[string]string: key -> hash
 }
 
@@ -59,14 +65,16 @@ func NewCodeAware(
 	}
 
 	return &CodeAwareTextSplitter{
-		parserRegistry: registry,
-		tokenizer:      tokenizer,
-		logger:         logger.With("component", "code_aware_splitter"),
-		chunkSize:      splitterOpts.chunkSize,
-		chunkOverlap:   splitterOpts.chunkOverlap,
-		modelName:      splitterOpts.modelName,
-		minChunkSize:   splitterOpts.minChunkSize,
-		maxChunkSize:   splitterOpts.maxChunkSize,
+		parserRegistry:  registry,
+		tokenizer:       tokenizer,
+		logger:          logger.With("component", "code_aware_splitter"),
+		chunkSize:       splitterOpts.chunkSize,
+		chunkOverlap:    splitterOpts.chunkOverlap,
+		modelName:       splitterOpts.modelName,
+		minChunkSize:    splitterOpts.minChunkSize,
+		maxChunkSize:    splitterOpts.maxChunkSize,
+		estimationRatio: splitterOpts.estimationRatio,
+		parentConfig:    splitterOpts.parentConfig,
 	}, nil
 }
 
@@ -177,12 +185,28 @@ func (c *CodeAwareTextSplitter) generateParentID(filePath, identifier string, li
 }
 
 func (c *CodeAwareTextSplitter) truncateParentText(text string) string {
-	if len(text) <= MaxParentTextLength {
+	maxLen := MaxParentTextLength
+	if c.parentConfig.MaxTextLength > 0 {
+		maxLen = c.parentConfig.MaxTextLength
+	}
+	return TruncateParentText(text, maxLen)
+}
+
+// TruncateParentText reduces text length while preserving start and end context.
+// It is UTF-8 safe by using rune slicing.
+func TruncateParentText(text string, maxLen int) string {
+	if len(text) <= maxLen {
 		return text
 	}
+
+	runes := []rune(text)
+	if len(runes) <= maxLen {
+		return text
+	}
+
 	// Keep beginning and end for context
-	half := (MaxParentTextLength - 5) / 2
-	return text[:half] + "\n...\n" + text[len(text)-half:]
+	half := (maxLen - 5) / 2
+	return string(runes[:half]) + "\n...\n" + string(runes[len(runes)-half:])
 }
 
 func (c *CodeAwareTextSplitter) createPluginOptions(opts *schema.CodeChunkingOptions, params chunkingParameters) *schema.CodeChunkingOptions {
