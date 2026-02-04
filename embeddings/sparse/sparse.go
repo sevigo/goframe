@@ -6,10 +6,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/sevigo/goframe/schema"
 	"github.com/sugarme/tokenizer"
@@ -27,7 +29,14 @@ var (
 // which requires a C library that might not be present. We only need the tokenizer files.
 func EnsureModelDownloaded() (string, error) {
 	modelName := "fast-bge-small-en-v1.5"
-	cacheDir := filepath.Join(os.Getenv("HOME"), ".cache", "goframe", "models")
+	cacheDir := os.Getenv("GOFRAME_CACHE_DIR")
+	if cacheDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("failed to get user home dir: %w", err)
+		}
+		cacheDir = filepath.Join(home, ".cache", "goframe", "models")
+	}
 	modelPath := filepath.Join(cacheDir, modelName)
 
 	if _, err := os.Stat(modelPath); err == nil {
@@ -44,7 +53,11 @@ func EnsureModelDownloaded() (string, error) {
 }
 
 func downloadAndExtract(url, targetDir string) error {
-	resp, err := http.Get(url)
+	client := &http.Client{
+		Timeout: 5 * time.Minute,
+	}
+
+	resp, err := client.Get(url)
 	if err != nil {
 		return err
 	}
@@ -87,11 +100,13 @@ func downloadAndExtract(url, targetDir string) error {
 			if err != nil {
 				return err
 			}
-			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
-				return err
+
+			// Copy content to file
+			_, copyErr := io.Copy(f, tr)
+			f.Close() // Explicit close
+			if copyErr != nil {
+				return copyErr
 			}
-			f.Close()
 		}
 	}
 	return nil
@@ -120,6 +135,7 @@ func GetTokenizer() (*tokenizer.Tokenizer, error) {
 
 // GenerateSparseVector converts text into a SparseVector using a Bag-of-Tokens approach.
 // It tokenizes the text and counts the frequency of each token.
+// The resulting vector is L2 normalized.
 func GenerateSparseVector(ctx context.Context, text string) (*schema.SparseVector, error) {
 	tk, err := GetTokenizer()
 	if err != nil {
@@ -139,7 +155,8 @@ func GenerateSparseVector(ctx context.Context, text string) (*schema.SparseVecto
 	tokenCounts := make(map[uint32]float32)
 	for _, id := range encodings.Ids {
 		// Skip special tokens if possible (0 is padding).
-		if id == 0 {
+		// 101/102 are usually CLS/SEP in BERT models, which are noise for sparse vectors.
+		if id == 0 || id == 101 || id == 102 {
 			continue
 		}
 		tokenCounts[uint32(id)] += 1.0
@@ -149,13 +166,24 @@ func GenerateSparseVector(ctx context.Context, text string) (*schema.SparseVecto
 		return nil, fmt.Errorf("no tokens generated")
 	}
 
-	// Convert to SparseVector struct
+	// Calculate L2 norm for normalization
+	var norm float64
+	for _, count := range tokenCounts {
+		norm += float64(count * count)
+	}
+	norm = math.Sqrt(norm)
+
+	// Convert to SparseVector struct with normalized values
 	indices := make([]uint32, 0, len(tokenCounts))
 	values := make([]float32, 0, len(tokenCounts))
 
 	for id, count := range tokenCounts {
 		indices = append(indices, id)
-		values = append(values, count)
+		if norm > 0 {
+			values = append(values, float32(float64(count)/norm))
+		} else {
+			values = append(values, count)
+		}
 	}
 
 	return &schema.SparseVector{

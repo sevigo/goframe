@@ -35,6 +35,7 @@ var (
 	ErrBatchSizeTooLarge     = errors.New("qdrant: batch size exceeds maximum allowed")
 	ErrPartialBatchFailure   = errors.New("qdrant: some batches failed to process")
 	ErrEmbeddingTotalFailure = errors.New("qdrant: all embedding batches failed")
+	ErrMissingSparseName     = errors.New("qdrant: sparse vector name required for hybrid search configuration")
 )
 
 const (
@@ -45,6 +46,9 @@ const (
 	DefaultRetryDelay     = 2 * time.Second
 	DefaultMaxRetryDelay  = 30 * time.Second
 	DefaultRetryJitter    = 1 * time.Second
+
+	// DefaultDenseVectorName is the implicit name for the default dense vector in Qdrant.
+	DefaultDenseVectorName = ""
 )
 
 type BatchResult struct {
@@ -276,22 +280,21 @@ func (s *Store) createQdrantPoints(batchDocs []schema.Document, vectors [][]floa
 	for j, doc := range batchDocs {
 		docID := s.generateDocumentID(doc)
 		batchIDs[j] = docID
-		batchPoints[j] = &qdrant.PointStruct{
+
+		point := &qdrant.PointStruct{
 			Id:      &qdrant.PointId{PointIdOptions: &qdrant.PointId_Uuid{Uuid: docID}},
-			Vectors: &qdrant.Vectors{VectorsOptions: &qdrant.Vectors_Vector{Vector: &qdrant.Vector{Data: vectors[j]}}},
 			Payload: s.documentToPayload(doc),
 		}
 
-		if doc.Sparse != nil {
-			if len(s.options.sparseVectors) == 0 {
-				s.logger.Warn("Sparse vector provided but no sparse vector names configured")
-			} else {
-				// Use the first configured sparse vector name for now
-				sparseName := s.options.sparseVectors[0]
-				batchPoints[j].Vectors.VectorsOptions = &qdrant.Vectors_Vectors{
+		// Configure vectors (dense + optional sparse)
+		if doc.Sparse != nil && len(s.options.sparseVectors) > 0 {
+			// Sparse vector configuration (Hybrid)
+			sparseName := s.options.sparseVectors[0]
+			point.Vectors = &qdrant.Vectors{
+				VectorsOptions: &qdrant.Vectors_Vectors{
 					Vectors: &qdrant.NamedVectors{
 						Vectors: map[string]*qdrant.Vector{
-							"": {Data: vectors[j]},
+							DefaultDenseVectorName: {Data: vectors[j]},
 							sparseName: {
 								Data: doc.Sparse.Values,
 								Indices: &qdrant.SparseIndices{
@@ -300,11 +303,18 @@ func (s *Store) createQdrantPoints(batchDocs []schema.Document, vectors [][]floa
 							},
 						},
 					},
-				}
+				},
 			}
 		} else {
-			batchPoints[j].Vectors = &qdrant.Vectors{VectorsOptions: &qdrant.Vectors_Vector{Vector: &qdrant.Vector{Data: vectors[j]}}}
+			// Dense only configuration
+			point.Vectors = &qdrant.Vectors{
+				VectorsOptions: &qdrant.Vectors_Vector{
+					Vector: &qdrant.Vector{Data: vectors[j]},
+				},
+			}
 		}
+
+		batchPoints[j] = point
 	}
 
 	return batchPoints, batchIDs
@@ -547,8 +557,13 @@ func (s *Store) SimilaritySearch(
 	limit := uint64(numDocuments)
 
 	if len(s.options.sparseVectors) > 0 && opts.SparseQuery != nil {
-		denseName := ""
 		sparseName := s.options.sparseVectors[0]
+
+		// If dense vector is default (empty string), we should pass nil to Using
+		var denseNamePtr *string
+		if DefaultDenseVectorName != "" {
+			denseNamePtr = &[]string{DefaultDenseVectorName}[0] // Safe pointer
+		}
 
 		queryPoints := &qdrant.QueryPoints{
 			CollectionName: collectionName,
@@ -564,7 +579,7 @@ func (s *Store) SimilaritySearch(
 							Nearest: qdrant.NewVectorInputDense(queryVector),
 						},
 					},
-					Using: &denseName,
+					Using: denseNamePtr,
 					Limit: &limit,
 				},
 				{
