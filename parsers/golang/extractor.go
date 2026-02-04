@@ -31,6 +31,7 @@ func (p *GoPlugin) ExtractMetadata(content string, path string) (model.FileMetad
 	// Extract package name
 	if file.Name != nil {
 		metadata.PackageName = file.Name.Name
+		metadata.Properties["package"] = file.Name.Name
 	}
 
 	// Extract imports

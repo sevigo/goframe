@@ -39,3 +39,7 @@ func (p *TerraformPlugin) CanHandle(path string, info fs.FileInfo) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	return slices.Contains(p.Extensions(), ext)
 }
+
+func (p *TerraformPlugin) IsGenerated(content string, path string) bool {
+	return false
+}

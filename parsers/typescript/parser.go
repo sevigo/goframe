@@ -158,6 +158,11 @@ func (p *Parser) ExtractMetadata(content string, path string) (schema.FileMetada
 		return metadata, fmt.Errorf("failed to unmarshal metadata from JS runtime: %w", err)
 	}
 
-	metadata.Language = "typescript" // Set language in Go for consistency
+	// Set language in Go for consistency
+	metadata.Language = "typescript"
 	return metadata, nil
+}
+
+func (p *Parser) IsGenerated(content string, path string) bool {
+	return false
 }

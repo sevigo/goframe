@@ -10,6 +10,7 @@ type ParserPlugin interface {
 	CanHandle(path string, info fs.FileInfo) bool
 	Chunk(content string, path string, opts *CodeChunkingOptions) ([]CodeChunk, error)
 	ExtractMetadata(content string, path string) (FileMetadata, error)
+	IsGenerated(content string, path string) bool
 }
 
 type FileMetadata struct {

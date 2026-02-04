@@ -36,3 +36,7 @@ func (p *PDFPlugin) CanHandle(path string, info fs.FileInfo) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	return ext == ".pdf"
 }
+
+func (p *PDFPlugin) IsGenerated(content string, path string) bool {
+	return false
+}

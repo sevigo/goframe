@@ -32,6 +32,7 @@ func (p *fakeGoParser) Chunk(content string, path string, opts *schema.CodeChunk
 func (p *fakeGoParser) ExtractMetadata(content string, path string) (schema.FileMetadata, error) {
 	return schema.FileMetadata{}, nil
 }
+func (p *fakeGoParser) IsGenerated(content string, path string) bool { return false }
 
 type fakeTextParser struct{}
 
@@ -48,6 +49,7 @@ func (p *fakeTextParser) Chunk(content string, path string, opts *schema.CodeChu
 func (p *fakeTextParser) ExtractMetadata(content string, path string) (schema.FileMetadata, error) {
 	return schema.FileMetadata{}, nil
 }
+func (p *fakeTextParser) IsGenerated(content string, path string) bool { return false }
 
 type fakeParserRegistry struct {
 	goParser   schema.ParserPlugin
