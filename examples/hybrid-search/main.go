@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/sevigo/goframe/embeddings"
@@ -141,14 +142,22 @@ func main() {
 	}
 
 	for i, res := range resultsWithScore {
-		parentID, _ := res.Document.Metadata["parent_id"].(string)
-		fullParent, _ := res.Document.Metadata["full_parent_text"].(string)
 		fmt.Printf("%d. [Score: %.4f] %s\n", i+1, res.Score, res.Document.PageContent)
-		if parentID != "" {
-			fmt.Printf("   [ParentID: %s]\n", parentID[:8])
+
+		if parentID, ok := res.Document.Metadata["parent_id"].(string); ok && parentID != "" {
+			displayID := parentID
+			if len(displayID) > 8 {
+				displayID = displayID[:8]
+			}
+			fmt.Printf("   [ParentID: %s]\n", displayID)
 		}
-		if fullParent != "" {
-			fmt.Printf("   [FullParent: %s...]\n", fullParent[:20])
+
+		if fullParent, ok := res.Document.Metadata["full_parent_text"].(string); ok && fullParent != "" {
+			displayParent := strings.ReplaceAll(fullParent, "\n", " ")
+			if len(displayParent) > 50 {
+				displayParent = displayParent[:50] + "..."
+			}
+			fmt.Printf("   [FullParent: %s]\n", displayParent)
 		}
 	}
 

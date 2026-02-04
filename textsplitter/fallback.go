@@ -37,13 +37,18 @@ func (c *CodeAwareTextSplitter) intelligentFallbackChunk(
 	chunks := make([]schema.CodeChunk, len(splitContents))
 	totalLines := len(strings.Split(content, "\n"))
 
+	fileParentID := c.generateParentID(path, "file_fallback", 1)
+	truncatedParent := c.truncateParentText(content)
+
 	for i, text := range splitContents {
 		chunk := schema.CodeChunk{
-			Content:    text,
-			LineStart:  1,
-			LineEnd:    totalLines,
-			Type:       "text_fallback",
-			Identifier: fmt.Sprintf("%s_part_%d", path, i),
+			Content:        text,
+			LineStart:      1,
+			LineEnd:        totalLines,
+			Type:           "text_fallback",
+			Identifier:     fmt.Sprintf("%s_part_%d", path, i+1),
+			ParentID:       fileParentID,
+			FullParentText: truncatedParent,
 			Annotations: map[string]string{
 				"chunker":     "recursive_character_fallback",
 				"has_overlap": strconv.FormatBool(params.OverlapTokens > 0),

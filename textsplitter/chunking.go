@@ -66,10 +66,10 @@ func (c *CodeAwareTextSplitter) postProcessChunks(ctx context.Context, chunks []
 
 		// Assign parent info if missing (i.e., this chunk is considered a parent)
 		if chunk.ParentID == "" {
-			chunk.ParentID = c.generateParentID(filePath, chunk.Identifier)
+			chunk.ParentID = c.generateParentID(filePath, chunk.Identifier, chunk.LineStart)
 		}
 		if chunk.FullParentText == "" {
-			chunk.FullParentText = chunk.Content
+			chunk.FullParentText = c.truncateParentText(chunk.Content)
 		}
 
 		if chunk.TokenCount > params.ChunkSize*2 {

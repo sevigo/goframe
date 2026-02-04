@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	defaultBatchSize   = 256
-	maxFileSize        = 10 * 1024 * 1024  // 10MB
-	maxMemoryBuffer    = 100 * 1024 * 1024 // 100MB total buffer
-	defaultWorkerCount = 4
+	defaultBatchSize    = 256
+	maxFileSize         = 10 * 1024 * 1024  // 10MB
+	maxMemoryBuffer     = 100 * 1024 * 1024 // 100MB total buffer
+	defaultWorkerCount  = 4
+	maxParentTextLength = 2000
 )
 
 var (
@@ -524,7 +525,9 @@ func buildChunkMetadata(baseMetadata map[string]any, chunk schema.CodeChunk, chu
 	chunkMetadata["chunk_index"] = chunkIndex
 	chunkMetadata["total_chunks"] = totalChunks
 	chunkMetadata["parent_id"] = chunk.ParentID
-	chunkMetadata["full_parent_text"] = chunk.FullParentText
+	if chunk.FullParentText != "" {
+		chunkMetadata["full_parent_text"] = truncateParentText(chunk.FullParentText)
+	}
 
 	for k, v := range chunk.Annotations {
 		chunkMetadata[k] = v
@@ -566,4 +569,13 @@ func shouldSkipFile(path string, info fs.FileInfo) bool {
 	}
 
 	return binaryExts[ext]
+}
+
+func truncateParentText(text string) string {
+	if len(text) <= maxParentTextLength {
+		return text
+	}
+	// Keep beginning and end for context
+	half := (maxParentTextLength - 5) / 2
+	return text[:half] + "\n...\n" + text[len(text)-half:]
 }

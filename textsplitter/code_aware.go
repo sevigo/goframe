@@ -9,10 +9,13 @@ import (
 	"io/fs"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/sevigo/goframe/parsers"
 	"github.com/sevigo/goframe/schema"
 )
+
+const MaxParentTextLength = 2000
 
 type CodeAwareTextSplitter struct {
 	tokenizer      Tokenizer
@@ -25,6 +28,8 @@ type CodeAwareTextSplitter struct {
 	maxChunkSize    int
 	modelName       string
 	estimationRatio float64
+
+	parentIDCache sync.Map // map[string]string: key -> hash
 }
 
 var _ TextSplitter = (*CodeAwareTextSplitter)(nil)
@@ -158,10 +163,26 @@ func (c *CodeAwareTextSplitter) ChunkFileWithFileInfo(
 	return c.intelligentFallbackChunk(ctx, content, filePath, params, modelName)
 }
 
-func (c *CodeAwareTextSplitter) generateParentID(filePath, identifier string) string {
+func (c *CodeAwareTextSplitter) generateParentID(filePath, identifier string, lineStart int) string {
+	key := fmt.Sprintf("%s:%s:%d", filePath, identifier, lineStart)
+	if id, ok := c.parentIDCache.Load(key); ok {
+		return id.(string)
+	}
+
 	h := sha256.New()
-	h.Write([]byte(filePath + ":" + identifier))
-	return hex.EncodeToString(h.Sum(nil))
+	h.Write([]byte(key))
+	id := hex.EncodeToString(h.Sum(nil))[:16]
+	c.parentIDCache.Store(key, id)
+	return id
+}
+
+func (c *CodeAwareTextSplitter) truncateParentText(text string) string {
+	if len(text) <= MaxParentTextLength {
+		return text
+	}
+	// Keep beginning and end for context
+	half := (MaxParentTextLength - 5) / 2
+	return text[:half] + "\n...\n" + text[len(text)-half:]
 }
 
 func (c *CodeAwareTextSplitter) createPluginOptions(opts *schema.CodeChunkingOptions, params chunkingParameters) *schema.CodeChunkingOptions {
