@@ -556,6 +556,7 @@ func (s *Store) SimilaritySearch(
 	searchStart := time.Now()
 	limit := uint64(numDocuments)
 
+	var results []*qdrant.ScoredPoint
 	if len(s.options.sparseVectors) > 0 && opts.SparseQuery != nil {
 		sparseName := s.options.sparseVectors[0]
 
@@ -602,42 +603,34 @@ func (s *Store) SimilaritySearch(
 		if err != nil {
 			return nil, fmt.Errorf("qdrant hybrid query failed: %w", err)
 		}
-
-		results := queryResult.GetResult()
-		docs := make([]schema.Document, 0, len(results))
-		for _, point := range results {
-			docs = append(docs, s.payloadToDocument(point.GetPayload()))
+		results = queryResult.GetResult()
+	} else {
+		searchResult, err := s.client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
+			CollectionName: collectionName,
+			Vector:         queryVector,
+			Limit:          limit,
+			WithPayload: &qdrant.WithPayloadSelector{
+				SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
+			},
+			ScoreThreshold: &opts.ScoreThreshold,
+		})
+		if err != nil {
+			if stat, ok := status.FromError(err); ok && stat.Code() == codes.NotFound {
+				s.logger.WarnContext(ctx, "Collection not found during search", "collection", collectionName)
+				return nil, vectorstores.ErrCollectionNotFound
+			}
+			searchDuration := time.Since(searchStart)
+			s.logger.ErrorContext(ctx, "Search failed",
+				"error", err, "collection", collectionName, "duration", searchDuration)
+			return nil, fmt.Errorf("qdrant search failed: %w", err)
 		}
-		return docs, nil
+		results = searchResult.GetResult()
 	}
 
-	searchResult, err := s.client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
-		CollectionName: collectionName,
-		Vector:         queryVector,
-		Limit:          limit,
-		WithPayload: &qdrant.WithPayloadSelector{
-			SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
-		},
-		ScoreThreshold: &opts.ScoreThreshold,
-	})
-	searchDuration := time.Since(searchStart)
-
-	if err != nil {
-		if stat, ok := status.FromError(err); ok && stat.Code() == codes.NotFound {
-			s.logger.WarnContext(ctx, "Collection not found during search", "collection", collectionName)
-			return nil, vectorstores.ErrCollectionNotFound
-		}
-		s.logger.ErrorContext(ctx, "Search failed",
-			"error", err, "collection", collectionName, "duration", searchDuration)
-		return nil, fmt.Errorf("qdrant search failed: %w", err)
-	}
-
-	results := searchResult.GetResult()
 	docs := make([]schema.Document, 0, len(results))
 	for _, point := range results {
 		docs = append(docs, s.payloadToDocument(point.GetPayload()))
 	}
-
 	return docs, nil
 }
 
@@ -674,27 +667,79 @@ func (s *Store) SimilaritySearchWithScores(
 	}
 
 	filter := buildQdrantFilter(opts.Filters)
+	limit := uint64(numDocuments)
 
-	searchResult, err := s.client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
-		CollectionName: collectionName,
-		Vector:         queryVector,
-		Limit:          uint64(numDocuments),
-		WithPayload: &qdrant.WithPayloadSelector{
-			SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
-		},
-		ScoreThreshold: &opts.ScoreThreshold,
-		Filter:         filter,
-	})
-	if err != nil {
-		if stat, ok := status.FromError(err); ok && stat.Code() == codes.NotFound {
-			s.logger.WarnContext(ctx, "Collection not found during scored search", "collection", collectionName)
-			return nil, vectorstores.ErrCollectionNotFound
+	var results []*qdrant.ScoredPoint
+	if len(s.options.sparseVectors) > 0 && opts.SparseQuery != nil {
+		sparseName := s.options.sparseVectors[0]
+
+		var denseNamePtr *string
+		if DefaultDenseVectorName != "" {
+			denseNamePtr = &[]string{DefaultDenseVectorName}[0]
 		}
-		s.logger.ErrorContext(ctx, "Scored search failed", "error", err, "collection", collectionName)
-		return nil, fmt.Errorf("qdrant search failed: %w", err)
+
+		queryPoints := &qdrant.QueryPoints{
+			CollectionName: collectionName,
+			Query: &qdrant.Query{
+				Variant: &qdrant.Query_Fusion{
+					Fusion: qdrant.Fusion_RRF,
+				},
+			},
+			Prefetch: []*qdrant.PrefetchQuery{
+				{
+					Query: &qdrant.Query{
+						Variant: &qdrant.Query_Nearest{
+							Nearest: qdrant.NewVectorInputDense(queryVector),
+						},
+					},
+					Using:  denseNamePtr,
+					Limit:  &limit,
+					Filter: filter,
+				},
+				{
+					Query: &qdrant.Query{
+						Variant: &qdrant.Query_Nearest{
+							Nearest: qdrant.NewVectorInputSparse(opts.SparseQuery.Indices, opts.SparseQuery.Values),
+						},
+					},
+					Using:  &sparseName,
+					Limit:  &limit,
+					Filter: filter,
+				},
+			},
+			WithPayload: &qdrant.WithPayloadSelector{
+				SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
+			},
+			ScoreThreshold: &opts.ScoreThreshold,
+		}
+
+		queryResult, err := s.client.GetPointsClient().Query(ctx, queryPoints)
+		if err != nil {
+			return nil, fmt.Errorf("qdrant hybrid query failed: %w", err)
+		}
+		results = queryResult.GetResult()
+	} else {
+		searchResult, err := s.client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
+			CollectionName: collectionName,
+			Vector:         queryVector,
+			Limit:          limit,
+			WithPayload: &qdrant.WithPayloadSelector{
+				SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
+			},
+			ScoreThreshold: &opts.ScoreThreshold,
+			Filter:         filter,
+		})
+		if err != nil {
+			if stat, ok := status.FromError(err); ok && stat.Code() == codes.NotFound {
+				s.logger.WarnContext(ctx, "Collection not found during scored search", "collection", collectionName)
+				return nil, vectorstores.ErrCollectionNotFound
+			}
+			s.logger.ErrorContext(ctx, "Scored search failed", "error", err, "collection", collectionName)
+			return nil, fmt.Errorf("qdrant search failed: %w", err)
+		}
+		results = searchResult.GetResult()
 	}
 
-	results := searchResult.GetResult()
 	docsWithScore := make([]vectorstores.DocumentWithScore, len(results))
 
 	var minScore, maxScore float32 = 1.0, 0.0

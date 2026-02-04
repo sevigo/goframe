@@ -65,6 +65,10 @@ func main() {
 	// Let's verify connection first by trying to index something.
 
 	// 3. Prepare Documents
+	// Clean up previous runs
+	fmt.Printf("Cleaning up collection %s...\n", collectionName)
+	_ = store.DeleteCollection(ctx, collectionName)
+
 	// We'll create documents where dense search might be ambiguous but sparse (keyword) is precise.
 	texts := []string{
 		"func CalculateTax(income float64) float64 { return income * 0.2 }",
@@ -123,6 +127,19 @@ func main() {
 	fmt.Println("Results:")
 	for i, res := range results {
 		fmt.Printf("%d. %s\n", i+1, res.PageContent)
+	}
+
+	// Demonstrate SimilaritySearchWithScores
+	fmt.Printf("\nPerforming Hybrid Search with Scores for query: '%s'\n", query)
+	resultsWithScore, err := store.SimilaritySearchWithScores(ctx, query, 3,
+		vectorstores.WithSparseQuery(querySparseVec),
+	)
+	if err != nil {
+		log.Fatalf("Scored search failed: %v", err)
+	}
+
+	for i, res := range resultsWithScore {
+		fmt.Printf("%d. [Score: %.4f] %s\n", i+1, res.Score, res.Document.PageContent)
 	}
 
 	// Basic assertion
