@@ -31,14 +31,12 @@ jobs:
           fi
 
       - name: Run Linter
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9.2
         with:
-          version: v1.63
+          version: v2.5.0
           args: --timeout=5m
 
       - name: Run Tests
-        # Run generic tests. We don't filter by -short as it's not implemented,
-        # but we rely on setup-go caching to speed up builds.
         run: go test -v ./...
 
       - name: Build Examples
