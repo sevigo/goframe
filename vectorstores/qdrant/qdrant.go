@@ -561,6 +561,9 @@ func (s *Store) SimilaritySearch(
 
 	var results []*qdrant.ScoredPoint
 	if len(s.options.sparseVectors) > 0 && opts.SparseQuery != nil {
+		if len(s.options.sparseVectors) == 0 {
+			return nil, ErrMissingSparseName
+		}
 		sparseName := s.options.sparseVectors[0]
 
 		var denseNamePtr *string
@@ -692,6 +695,9 @@ func (s *Store) SimilaritySearchWithScores(
 
 	var results []*qdrant.ScoredPoint
 	if len(s.options.sparseVectors) > 0 && opts.SparseQuery != nil {
+		if len(s.options.sparseVectors) == 0 {
+			return nil, ErrMissingSparseName
+		}
 		sparseName := s.options.sparseVectors[0]
 
 		var denseNamePtr *string
@@ -1026,6 +1032,9 @@ func (s *Store) SimilaritySearchBatch(
 		if len(opts.SparseQueries) != len(queryVectors) {
 			return nil, fmt.Errorf("sparse query count (%d) must match query count (%d)",
 				len(opts.SparseQueries), len(queryVectors))
+		}
+		if len(s.options.sparseVectors) == 0 {
+			return nil, ErrMissingSparseName
 		}
 		sparseName := s.options.sparseVectors[0]
 		var denseNamePtr *string

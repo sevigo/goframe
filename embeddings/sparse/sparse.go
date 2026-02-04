@@ -153,7 +153,14 @@ func GetTokenizer() (*tokenizer.Tokenizer, error) {
 		}
 		tokenizerInstance = tk
 	})
-	return tokenizerInstance, vocabErr
+
+	if vocabErr != nil {
+		return nil, vocabErr
+	}
+	if tokenizerInstance == nil {
+		return nil, errors.New("tokenizer initialization failed")
+	}
+	return tokenizerInstance, nil
 }
 
 // GenerateSparseVector converts text into a normalized SparseVector using Bag-of-Tokens.
