@@ -51,13 +51,14 @@ type GitLoader struct {
 }
 
 type gitLoaderOptions struct {
-	IncludeExts  map[string]bool
-	ExcludeExts  map[string]bool
-	ExcludeDirs  map[string]bool
-	Logger       *slog.Logger
-	BatchSize    int
-	WorkerCount  int
-	MaxMemBuffer int64
+	IncludeExts         map[string]bool
+	ExcludeExts         map[string]bool
+	ExcludeDirs         map[string]bool
+	Logger              *slog.Logger
+	BatchSize           int
+	WorkerCount         int
+	MaxMemBuffer        int64
+	DetectGeneratedCode bool
 }
 
 type GitLoaderOption func(*gitLoaderOptions)
@@ -130,6 +131,12 @@ func WithIncludeExts(exts []string) GitLoaderOption {
 			}
 			opts.IncludeExts[strings.ToLower(ext)] = true
 		}
+	}
+}
+
+func WithGeneratedCodeDetection(enable bool) GitLoaderOption {
+	return func(opts *gitLoaderOptions) {
+		opts.DetectGeneratedCode = enable
 	}
 }
 
@@ -424,7 +431,6 @@ func (g *GitLoader) Load(ctx context.Context) ([]schema.Document, error) {
 	return documents, nil
 }
 
-// processFile now accepts content as an argument to avoid reading from disk
 func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser schema.ParserPlugin, content string) []schema.Document {
 	validContent := strings.ToValidUTF8(content, "\uFFFD")
 
@@ -435,12 +441,6 @@ func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser sc
 	}
 	relPath = filepath.ToSlash(relPath)
 
-	baseMetadata := map[string]any{
-		"source":    relPath,
-		"file_size": fileInfo.Size(),
-		"mod_time":  fileInfo.ModTime(),
-	}
-
 	parser, err := g.parserRegistry.GetParserForFile(path, fileInfo)
 	if err != nil {
 		g.logger.Debug("No specific parser found, using text fallback", "path", relPath)
@@ -449,7 +449,23 @@ func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser sc
 
 	if parser == nil {
 		g.logger.Warn("No parser available, treating as single document", "path", relPath)
-		return []schema.Document{schema.NewDocument(validContent, baseMetadata)}
+		return []schema.Document{schema.NewDocument(validContent, map[string]any{
+			"source":    relPath,
+			"file_size": fileInfo.Size(),
+			"mod_time":  fileInfo.ModTime(),
+		})}
+	}
+
+	// Check for generated code if enabled (using parser logic)
+	if g.options.DetectGeneratedCode && parser.IsGenerated(validContent, path) {
+		g.logger.Debug("Skipping generated file", "path", relPath, "parser", parser.Name())
+		return nil
+	}
+
+	baseMetadata := map[string]any{
+		"source":    relPath,
+		"file_size": fileInfo.Size(),
+		"mod_time":  fileInfo.ModTime(),
 	}
 
 	// Try to extract language-specific metadata (e.g. imports, package name)

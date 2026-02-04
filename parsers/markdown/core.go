@@ -68,3 +68,7 @@ func (p *MarkdownPlugin) CanHandle(path string, info fs.FileInfo) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	return ext == ".md" || ext == ".markdown"
 }
+
+func (p *MarkdownPlugin) IsGenerated(content string, path string) bool {
+	return false
+}

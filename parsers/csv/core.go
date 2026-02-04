@@ -40,3 +40,7 @@ func (p *CSVPlugin) CanHandle(path string, info fs.FileInfo) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	return ext == ".csv" || ext == ".tsv"
 }
+
+func (p *CSVPlugin) IsGenerated(content string, path string) bool {
+	return false
+}

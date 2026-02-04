@@ -39,3 +39,7 @@ func (p *JSONPlugin) CanHandle(path string, info fs.FileInfo) bool {
 	ext := filepath.Ext(path)
 	return ext == ".json"
 }
+
+func (p *JSONPlugin) IsGenerated(content string, path string) bool {
+	return false
+}

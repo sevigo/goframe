@@ -40,3 +40,7 @@ func (p *YamlPlugin) CanHandle(path string, info fs.FileInfo) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	return ext == ".yaml" || ext == ".yml"
 }
+
+func (p *YamlPlugin) IsGenerated(content string, path string) bool {
+	return false
+}
