@@ -32,6 +32,7 @@ type options struct {
 	batchConfig        *BatchConfig
 	binaryQuantization bool
 	payloadIndexes     []string
+	sparseVectors      []string
 }
 
 // Option defines a function type for configuring Qdrant store options.
@@ -162,6 +163,13 @@ func WithPayloadIndex(keys ...string) Option {
 	}
 }
 
+// WithSparseVector adds a named sparse vector configuration.
+func WithSparseVector(name string) Option {
+	return func(opts *options) {
+		opts.sparseVectors = append(opts.sparseVectors, name)
+	}
+}
+
 func applyDefaults(opts *options) {
 	if opts.logger == nil {
 		opts.logger = slog.Default()
@@ -269,7 +277,9 @@ func (opts *options) Clone() options {
 		timeout:            opts.timeout,
 		retryAttempts:      opts.retryAttempts,
 		batchSize:          opts.batchSize,
+		batchConfig:        opts.batchConfig,
 		binaryQuantization: opts.binaryQuantization,
-		payloadIndexes:     opts.payloadIndexes,
+		payloadIndexes:     append([]string{}, opts.payloadIndexes...),
+		sparseVectors:      append([]string{}, opts.sparseVectors...),
 	}
 }

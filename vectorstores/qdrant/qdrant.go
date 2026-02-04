@@ -35,6 +35,7 @@ var (
 	ErrBatchSizeTooLarge     = errors.New("qdrant: batch size exceeds maximum allowed")
 	ErrPartialBatchFailure   = errors.New("qdrant: some batches failed to process")
 	ErrEmbeddingTotalFailure = errors.New("qdrant: all embedding batches failed")
+	ErrMissingSparseName     = errors.New("qdrant: sparse vector name required for hybrid search configuration")
 )
 
 const (
@@ -45,6 +46,9 @@ const (
 	DefaultRetryDelay     = 2 * time.Second
 	DefaultMaxRetryDelay  = 30 * time.Second
 	DefaultRetryJitter    = 1 * time.Second
+
+	// DefaultDenseVectorName is the implicit name for the default dense vector in Qdrant.
+	DefaultDenseVectorName = ""
 )
 
 type BatchResult struct {
@@ -276,11 +280,41 @@ func (s *Store) createQdrantPoints(batchDocs []schema.Document, vectors [][]floa
 	for j, doc := range batchDocs {
 		docID := s.generateDocumentID(doc)
 		batchIDs[j] = docID
-		batchPoints[j] = &qdrant.PointStruct{
+
+		point := &qdrant.PointStruct{
 			Id:      &qdrant.PointId{PointIdOptions: &qdrant.PointId_Uuid{Uuid: docID}},
-			Vectors: &qdrant.Vectors{VectorsOptions: &qdrant.Vectors_Vector{Vector: &qdrant.Vector{Data: vectors[j]}}},
 			Payload: s.documentToPayload(doc),
 		}
+
+		// Configure vectors (dense + optional sparse)
+		if doc.Sparse != nil && len(s.options.sparseVectors) > 0 {
+			// Sparse vector configuration (Hybrid)
+			sparseName := s.options.sparseVectors[0]
+			point.Vectors = &qdrant.Vectors{
+				VectorsOptions: &qdrant.Vectors_Vectors{
+					Vectors: &qdrant.NamedVectors{
+						Vectors: map[string]*qdrant.Vector{
+							DefaultDenseVectorName: {Data: vectors[j]},
+							sparseName: {
+								Data: doc.Sparse.Values,
+								Indices: &qdrant.SparseIndices{
+									Data: doc.Sparse.Indices,
+								},
+							},
+						},
+					},
+				},
+			}
+		} else {
+			// Dense only configuration
+			point.Vectors = &qdrant.Vectors{
+				VectorsOptions: &qdrant.Vectors_Vector{
+					Vector: &qdrant.Vector{Data: vectors[j]},
+				},
+			}
+		}
+
+		batchPoints[j] = point
 	}
 
 	return batchPoints, batchIDs
@@ -507,6 +541,9 @@ func (s *Store) SimilaritySearch(
 	}
 
 	opts := vectorstores.ParseOptions(options...)
+	if err := s.validateHybridSearchOptions(opts); err != nil {
+		return nil, err
+	}
 	collectionName := s.getCollectionName(opts)
 
 	embedStart := time.Now()
@@ -520,33 +557,100 @@ func (s *Store) SimilaritySearch(
 	}
 
 	searchStart := time.Now()
-	searchResult, err := s.client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
-		CollectionName: collectionName,
-		Vector:         queryVector,
-		Limit:          uint64(numDocuments),
-		WithPayload: &qdrant.WithPayloadSelector{
-			SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
-		},
-		ScoreThreshold: &opts.ScoreThreshold,
-	})
-	searchDuration := time.Since(searchStart)
+	limit := uint64(numDocuments)
 
-	if err != nil {
-		if stat, ok := status.FromError(err); ok && stat.Code() == codes.NotFound {
-			s.logger.WarnContext(ctx, "Collection not found during search", "collection", collectionName)
-			return nil, vectorstores.ErrCollectionNotFound
+	var results []*qdrant.ScoredPoint
+	if len(s.options.sparseVectors) > 0 && opts.SparseQuery != nil {
+		if len(s.options.sparseVectors) == 0 {
+			return nil, ErrMissingSparseName
 		}
-		s.logger.ErrorContext(ctx, "Search failed",
-			"error", err, "collection", collectionName, "duration", searchDuration)
-		return nil, fmt.Errorf("qdrant search failed: %w", err)
+		sparseName := s.options.sparseVectors[0]
+
+		var denseNamePtr *string
+		if DefaultDenseVectorName != "" {
+			name := DefaultDenseVectorName
+			denseNamePtr = &name
+		}
+
+		queryPoints := &qdrant.QueryPoints{
+			CollectionName: collectionName,
+			Query: &qdrant.Query{
+				Variant: &qdrant.Query_Fusion{
+					Fusion: qdrant.Fusion_RRF,
+				},
+			},
+			Prefetch: []*qdrant.PrefetchQuery{
+				{
+					Query: &qdrant.Query{
+						Variant: &qdrant.Query_Nearest{
+							Nearest: qdrant.NewVectorInputDense(queryVector),
+						},
+					},
+					Using: denseNamePtr,
+					Limit: &limit,
+				},
+				{
+					Query: &qdrant.Query{
+						Variant: &qdrant.Query_Nearest{
+							Nearest: qdrant.NewVectorInputSparse(opts.SparseQuery.Indices, opts.SparseQuery.Values),
+						},
+					},
+					Using: &sparseName,
+					Limit: &limit,
+				},
+			},
+			WithPayload: &qdrant.WithPayloadSelector{
+				SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
+			},
+			ScoreThreshold: &opts.ScoreThreshold,
+		}
+
+		queryResult, err := s.client.GetPointsClient().Query(ctx, queryPoints)
+		if err != nil {
+			return nil, fmt.Errorf("qdrant hybrid query failed: %w", err)
+		}
+		results = queryResult.GetResult()
+
+		s.logger.DebugContext(ctx, "Hybrid similarity search executed",
+			"fusion", "RRF",
+			"dense_limit", limit,
+			"sparse_limit", limit,
+			"results", len(results),
+			"duration", time.Since(searchStart),
+		)
+	} else {
+		searchResult, err := s.client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
+			CollectionName: collectionName,
+			Vector:         queryVector,
+			Limit:          limit,
+			WithPayload: &qdrant.WithPayloadSelector{
+				SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
+			},
+			ScoreThreshold: &opts.ScoreThreshold,
+		})
+		if err != nil {
+			if stat, ok := status.FromError(err); ok && stat.Code() == codes.NotFound {
+				s.logger.WarnContext(ctx, "Collection not found during search", "collection", collectionName)
+				return nil, vectorstores.ErrCollectionNotFound
+			}
+			searchDuration := time.Since(searchStart)
+			s.logger.ErrorContext(ctx, "Search failed",
+				"error", err, "collection", collectionName, "duration", searchDuration)
+			return nil, fmt.Errorf("qdrant search failed: %w", err)
+		}
+		results = searchResult.GetResult()
+
+		s.logger.DebugContext(ctx, "Dense similarity search executed",
+			"limit", limit,
+			"results", len(results),
+			"duration", time.Since(searchStart),
+		)
 	}
 
-	results := searchResult.GetResult()
 	docs := make([]schema.Document, 0, len(results))
 	for _, point := range results {
 		docs = append(docs, s.payloadToDocument(point.GetPayload()))
 	}
-
 	return docs, nil
 }
 
@@ -574,6 +678,9 @@ func (s *Store) SimilaritySearchWithScores(
 	}
 
 	opts := vectorstores.ParseOptions(options...)
+	if err := s.validateHybridSearchOptions(opts); err != nil {
+		return nil, err
+	}
 	collectionName := s.getCollectionName(opts)
 
 	queryVector, err := s.embedder.EmbedQuery(ctx, query)
@@ -583,27 +690,90 @@ func (s *Store) SimilaritySearchWithScores(
 	}
 
 	filter := buildQdrantFilter(opts.Filters)
+	limit := uint64(numDocuments)
+	searchStart := time.Now()
 
-	searchResult, err := s.client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
-		CollectionName: collectionName,
-		Vector:         queryVector,
-		Limit:          uint64(numDocuments),
-		WithPayload: &qdrant.WithPayloadSelector{
-			SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
-		},
-		ScoreThreshold: &opts.ScoreThreshold,
-		Filter:         filter,
-	})
-	if err != nil {
-		if stat, ok := status.FromError(err); ok && stat.Code() == codes.NotFound {
-			s.logger.WarnContext(ctx, "Collection not found during scored search", "collection", collectionName)
-			return nil, vectorstores.ErrCollectionNotFound
+	var results []*qdrant.ScoredPoint
+	if len(s.options.sparseVectors) > 0 && opts.SparseQuery != nil {
+		if len(s.options.sparseVectors) == 0 {
+			return nil, ErrMissingSparseName
 		}
-		s.logger.ErrorContext(ctx, "Scored search failed", "error", err, "collection", collectionName)
-		return nil, fmt.Errorf("qdrant search failed: %w", err)
+		sparseName := s.options.sparseVectors[0]
+
+		var denseNamePtr *string
+		if DefaultDenseVectorName != "" {
+			name := DefaultDenseVectorName
+			denseNamePtr = &name
+		}
+
+		queryPoints := &qdrant.QueryPoints{
+			CollectionName: collectionName,
+			Query: &qdrant.Query{
+				Variant: &qdrant.Query_Fusion{
+					Fusion: qdrant.Fusion_RRF,
+				},
+			},
+			Prefetch: []*qdrant.PrefetchQuery{
+				{
+					Query: &qdrant.Query{
+						Variant: &qdrant.Query_Nearest{
+							Nearest: qdrant.NewVectorInputDense(queryVector),
+						},
+					},
+					Using:  denseNamePtr,
+					Limit:  &limit,
+					Filter: filter,
+				},
+				{
+					Query: &qdrant.Query{
+						Variant: &qdrant.Query_Nearest{
+							Nearest: qdrant.NewVectorInputSparse(opts.SparseQuery.Indices, opts.SparseQuery.Values),
+						},
+					},
+					Using:  &sparseName,
+					Limit:  &limit,
+					Filter: filter,
+				},
+			},
+			WithPayload: &qdrant.WithPayloadSelector{
+				SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
+			},
+			ScoreThreshold: &opts.ScoreThreshold,
+		}
+
+		queryResult, err := s.client.GetPointsClient().Query(ctx, queryPoints)
+		if err != nil {
+			return nil, fmt.Errorf("qdrant hybrid query failed: %w", err)
+		}
+		results = queryResult.GetResult()
+
+		s.logger.DebugContext(ctx, "Hybrid similarity search with scores executed",
+			"fusion", "RRF",
+			"results", len(results),
+			"duration", time.Since(searchStart),
+		)
+	} else {
+		searchResult, err := s.client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
+			CollectionName: collectionName,
+			Vector:         queryVector,
+			Limit:          limit,
+			WithPayload: &qdrant.WithPayloadSelector{
+				SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
+			},
+			ScoreThreshold: &opts.ScoreThreshold,
+			Filter:         filter,
+		})
+		if err != nil {
+			if stat, ok := status.FromError(err); ok && stat.Code() == codes.NotFound {
+				s.logger.WarnContext(ctx, "Collection not found during scored search", "collection", collectionName)
+				return nil, vectorstores.ErrCollectionNotFound
+			}
+			s.logger.ErrorContext(ctx, "Scored search failed", "error", err, "collection", collectionName)
+			return nil, fmt.Errorf("qdrant search failed: %w", err)
+		}
+		results = searchResult.GetResult()
 	}
 
-	results := searchResult.GetResult()
 	docsWithScore := make([]vectorstores.DocumentWithScore, len(results))
 
 	var minScore, maxScore float32 = 1.0, 0.0
@@ -727,6 +897,8 @@ func (s *Store) CreateCollection(ctx context.Context, name string, dimension int
 			},
 		},
 	}
+
+	req.SparseVectorsConfig = s.buildSparseVectorConfig()
 
 	// Apply Binary Quantization if configured in store options
 	if s.options.binaryQuantization {
@@ -853,36 +1025,111 @@ func (s *Store) SimilaritySearchBatch(
 		return nil, fmt.Errorf("failed to embed queries: %w", err)
 	}
 
-	searchRequests := make([]*qdrant.SearchPoints, 0, len(queryVectors))
-	for _, vector := range queryVectors {
-		searchRequests = append(searchRequests, &qdrant.SearchPoints{
-			CollectionName: collectionName,
-			Vector:         vector,
-			Limit:          uint64(numDocuments),
-			WithPayload: &qdrant.WithPayloadSelector{
-				SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
-			},
-			ScoreThreshold: &opts.ScoreThreshold,
-		})
-	}
+	limit := uint64(numDocuments)
+	var batchResults [][]schema.Document
 
-	searchResp, err := s.client.GetPointsClient().SearchBatch(ctx, &qdrant.SearchBatchPoints{
-		SearchPoints:   searchRequests,
-		CollectionName: collectionName,
-	})
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Batch search failed", "error", err)
-		return nil, fmt.Errorf("qdrant batch search failed: %w", err)
-	}
-
-	// Convert results
-	batchResults := make([][]schema.Document, len(searchResp.GetResult()))
-	for i, result := range searchResp.GetResult() {
-		docs := make([]schema.Document, 0, len(result.GetResult()))
-		for _, point := range result.GetResult() {
-			docs = append(docs, s.payloadToDocument(point.GetPayload()))
+	if len(s.options.sparseVectors) > 0 {
+		if len(opts.SparseQueries) != len(queryVectors) {
+			return nil, fmt.Errorf("sparse query count (%d) must match query count (%d)",
+				len(opts.SparseQueries), len(queryVectors))
 		}
-		batchResults[i] = docs
+		if len(s.options.sparseVectors) == 0 {
+			return nil, ErrMissingSparseName
+		}
+		sparseName := s.options.sparseVectors[0]
+		var denseNamePtr *string
+		if DefaultDenseVectorName != "" {
+			name := DefaultDenseVectorName
+			denseNamePtr = &name
+		}
+
+		queryRequests := make([]*qdrant.QueryPoints, 0, len(queryVectors))
+		for i, vector := range queryVectors {
+			queryRequests = append(queryRequests, &qdrant.QueryPoints{
+				CollectionName: collectionName,
+				Query: &qdrant.Query{
+					Variant: &qdrant.Query_Fusion{
+						Fusion: qdrant.Fusion_RRF,
+					},
+				},
+				Prefetch: []*qdrant.PrefetchQuery{
+					{
+						Query: &qdrant.Query{
+							Variant: &qdrant.Query_Nearest{
+								Nearest: qdrant.NewVectorInputDense(vector),
+							},
+						},
+						Using: denseNamePtr,
+						Limit: &limit,
+					},
+					{
+						Query: &qdrant.Query{
+							Variant: &qdrant.Query_Nearest{
+								Nearest: qdrant.NewVectorInputSparse(opts.SparseQueries[i].Indices, opts.SparseQueries[i].Values),
+							},
+						},
+						Using: &sparseName,
+						Limit: &limit,
+					},
+				},
+				WithPayload: &qdrant.WithPayloadSelector{
+					SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
+				},
+				ScoreThreshold: &opts.ScoreThreshold,
+			})
+		}
+
+		batchQueryResp, err := s.client.GetPointsClient().QueryBatch(ctx, &qdrant.QueryBatchPoints{
+			CollectionName: collectionName,
+			QueryPoints:    queryRequests,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("qdrant hybrid batch query failed: %w", err)
+		}
+
+		batchResults = make([][]schema.Document, len(batchQueryResp.GetResult()))
+		for i, resp := range batchQueryResp.GetResult() {
+			results := resp.GetResult()
+			docs := make([]schema.Document, 0, len(results))
+			for _, point := range results {
+				docs = append(docs, s.payloadToDocument(point.GetPayload()))
+			}
+			batchResults[i] = docs
+		}
+	} else {
+		if len(opts.SparseQueries) > 0 {
+			s.logger.WarnContext(ctx, "Sparse queries provided but no sparse vectors configured")
+		}
+		searchRequests := make([]*qdrant.SearchPoints, 0, len(queryVectors))
+		for _, vector := range queryVectors {
+			searchRequests = append(searchRequests, &qdrant.SearchPoints{
+				CollectionName: collectionName,
+				Vector:         vector,
+				Limit:          limit,
+				WithPayload: &qdrant.WithPayloadSelector{
+					SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
+				},
+				ScoreThreshold: &opts.ScoreThreshold,
+			})
+		}
+
+		searchResp, err := s.client.GetPointsClient().SearchBatch(ctx, &qdrant.SearchBatchPoints{
+			SearchPoints:   searchRequests,
+			CollectionName: collectionName,
+		})
+		if err != nil {
+			s.logger.ErrorContext(ctx, "Batch search failed", "error", err)
+			return nil, fmt.Errorf("qdrant batch search failed: %w", err)
+		}
+
+		batchResults = make([][]schema.Document, len(searchResp.GetResult()))
+		for i, result := range searchResp.GetResult() {
+			docs := make([]schema.Document, 0, len(result.GetResult()))
+			for _, point := range result.GetResult() {
+				docs = append(docs, s.payloadToDocument(point.GetPayload()))
+			}
+			batchResults[i] = docs
+		}
 	}
 
 	return batchResults, nil
@@ -968,6 +1215,8 @@ func (s *Store) ensureCollection(ctx context.Context, collectionName string) err
 			},
 		}
 	}
+
+	req.SparseVectorsConfig = s.buildSparseVectorConfig()
 
 	_, err = s.client.GetCollectionsClient().Create(ctx, req)
 	if err != nil {
@@ -1174,5 +1423,36 @@ func buildQdrantFilter(filters map[string]any) *qdrant.Filter {
 
 	return &qdrant.Filter{
 		Must: conditions,
+	}
+}
+
+func (s *Store) validateHybridSearchOptions(opts vectorstores.Options) error {
+	if opts.SparseQuery != nil && len(s.options.sparseVectors) == 0 {
+		return ErrMissingSparseName
+	}
+	if opts.SparseQuery != nil {
+		if len(opts.SparseQuery.Indices) != len(opts.SparseQuery.Values) {
+			return fmt.Errorf("sparse vector indices and values length mismatch")
+		}
+	}
+	return nil
+}
+
+func (s *Store) buildSparseVectorConfig() *qdrant.SparseVectorConfig {
+	if len(s.options.sparseVectors) == 0 {
+		return nil
+	}
+
+	sparseConfig := make(map[string]*qdrant.SparseVectorParams)
+	onDisk := true
+	for _, sparseName := range s.options.sparseVectors {
+		sparseConfig[sparseName] = &qdrant.SparseVectorParams{
+			Index: &qdrant.SparseIndexConfig{
+				OnDisk: &onDisk,
+			},
+		}
+	}
+	return &qdrant.SparseVectorConfig{
+		Map: sparseConfig,
 	}
 }
