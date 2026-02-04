@@ -95,6 +95,37 @@ for _, dep := range network.Dependencies {
     fmt.Printf("Verified dependency: %s\n", dep.Metadata["source"])
 }
 ```
+### 3. Hybrid Search (Dense + Sparse)
+Combine semantic understanding with exact keyword matching using sparse vectors.
+
+```go
+import (
+    "github.com/sevigo/goframe/embeddings/sparse"
+    "github.com/sevigo/goframe/vectorstores/qdrant"
+    "github.com/sevigo/goframe/vectorstores"
+)
+
+// 1. Configure Store with Named Sparse Vector
+store, _ := qdrant.New(
+    qdrant.WithCollectionName("hybrid-docs"),
+    qdrant.WithSparseVector("bow_sparse"), // Enable sparse vector support
+)
+
+// 2. Add Document with Sparse Vector
+docContent := "func CalculateTax(income float64) float64 { ... }"
+sparseVec, _ := sparse.GenerateSparseVector(ctx, docContent)
+doc := schema.NewDocument(docContent, nil)
+doc.Sparse = sparseVec
+store.AddDocuments(ctx, []schema.Document{doc})
+
+// 3. Perform Hybrid Search
+query := "CalculateTax"
+sparseQuery, _ := sparse.GenerateSparseVector(ctx, query)
+
+results, _ := store.SimilaritySearch(ctx, query, 5,
+    vectorstores.WithSparseQuery(sparseQuery), // Pass sparse query for hybrid retrieval
+)
+```
 
 ## Running the Ultimate RAG Demo
 

@@ -5,9 +5,15 @@ import (
 	"fmt"
 )
 
+type SparseVector struct {
+	Indices []uint32  `json:"indices"`
+	Values  []float32 `json:"values"`
+}
+
 type Document struct {
 	PageContent string
 	Metadata    map[string]any
+	Sparse      *SparseVector
 }
 
 type ScoredDocument struct {

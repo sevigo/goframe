@@ -52,6 +52,7 @@ type CodeChunk struct {
 	EnrichedContent string            `json:"enrichedContent"`
 	ParentContext   string            `json:"parentContext"`
 	ContextLevel    int               `json:"contextLevel"`
+	Sparse          *SparseVector     `json:"sparse,omitempty"`
 }
 
 type CodeChunkingOptions struct {
