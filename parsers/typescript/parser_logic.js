@@ -15,7 +15,7 @@ function getVisibility(node, parentNode = null) {
 
     // FIX: Check parent for export keyword on grouped variables.
     if (parentNode && parentNode.kind === ts.SyntaxKind.VariableStatement) {
-         if (parentNode.modifiers && parentNode.modifiers.some(m => m.kind === ts.SyntaxKind.ExportKeyword)) {
+        if (parentNode.modifiers && parentNode.modifiers.some(m => m.kind === ts.SyntaxKind.ExportKeyword)) {
             return 'public';
         }
     }
@@ -27,7 +27,7 @@ function getVisibility(node, parentNode = null) {
             if (modifier.kind === ts.SyntaxKind.ProtectedKeyword) return 'protected';
         }
     }
-    const isExported = node.modifiers ? 
+    const isExported = node.modifiers ?
         node.modifiers.some(m => m.kind === ts.SyntaxKind.ExportKeyword) : false;
     return isExported ? 'public' : 'private';
 }
@@ -36,7 +36,7 @@ function getDocumentation(node, sourceFile) {
     const fullText = sourceFile.getFullText();
     const commentRanges = ts.getLeadingCommentRanges(fullText, node.pos) || [];
     if (commentRanges.length === 0) return '';
-    
+
     const commentText = commentRanges.map(range => fullText.slice(range.pos, range.end)).join('\n');
     return commentText.replace(/^\/\*\*?/, '').replace(/\*\/$/, '').replace(/^\s*\*\s?/gm, '').trim();
 }
@@ -74,16 +74,20 @@ function processNode(node, sourceFile, parentIdentifier = '', parentNode = null)
     const signature = getSignature(node, sourceFile);
 
     let chunkType = '', defType = '', identifier = '', structureType = '', nodeName = node.name ? node.name.getText(sourceFile) : '(anonymous)';
+    let isDefinition = false;
 
     switch (node.kind) {
         case ts.SyntaxKind.FunctionDeclaration:
             chunkType = 'function'; defType = 'function'; identifier = nodeName = node.name.getText(sourceFile);
+            isDefinition = true;
             break;
         case ts.SyntaxKind.ClassDeclaration:
             chunkType = 'type_declaration'; defType = 'class'; structureType = 'class'; identifier = nodeName = node.name.getText(sourceFile);
+            isDefinition = true;
             break;
         case ts.SyntaxKind.InterfaceDeclaration:
             chunkType = 'type_declaration'; defType = 'interface'; structureType = 'interface'; identifier = nodeName = node.name.getText(sourceFile);
+            isDefinition = true;
             break;
         case ts.SyntaxKind.EnumDeclaration:
             chunkType = 'type_declaration'; defType = 'enum'; structureType = 'enum'; identifier = nodeName = node.name.getText(sourceFile);
@@ -99,12 +103,19 @@ function processNode(node, sourceFile, parentIdentifier = '', parentNode = null)
             }
             return { chunks, definitions, symbols };
         case ts.SyntaxKind.VariableDeclaration:
-            chunkType = (node.parent.flags & ts.NodeFlags.Const) ? 'constant' : 'variable';
-            defType = chunkType; identifier = nodeName = node.name.getText(sourceFile);
+            if (node.parent.kind === ts.SyntaxKind.VariableStatement && node.name.kind === ts.SyntaxKind.Identifier) {
+                chunkType = (node.parent.flags & ts.NodeFlags.Const) ? 'constant' : 'variable';
+                defType = chunkType; identifier = nodeName = node.name.getText(sourceFile);
+                isDefinition = true;
+            } else {
+                chunkType = 'variable'; defType = 'variable'; identifier = nodeName = node.name.getText(sourceFile);
+                isDefinition = false;
+            }
             break;
         case ts.SyntaxKind.MethodDeclaration:
-        case ts.SyntaxKind.MethodSignature: // FIX: Handle methods in interfaces
+        case ts.SyntaxKind.MethodSignature:
             chunkType = 'function'; defType = 'method'; nodeName = node.name.getText(sourceFile); identifier = `${parentIdentifier}.${nodeName}`;
+            isDefinition = node.body !== undefined;
             break;
         case ts.SyntaxKind.PropertyDeclaration:
         case ts.SyntaxKind.PropertySignature: // FIX: Handle properties in interfaces
@@ -118,6 +129,8 @@ function processNode(node, sourceFile, parentIdentifier = '', parentNode = null)
     if (chunkType) {
         chunks.push({
             content, lineStart, lineEnd, type: chunkType, identifier,
+            is_definition: isDefinition,
+            symbol_type: isDefinition ? defType : '',
             annotations: {
                 type: defType, name: nodeName, visibility, has_doc: (documentation.length > 0).toString(),
                 ...(structureType && { structure_type: structureType }),
@@ -159,7 +172,7 @@ function createParser(funcName, sourceCode, sourcePath) {
 
         if (funcName === 'extractMetadata') {
             let imports = [], properties = { total_functions: 0, total_classes: 0, total_methods: 0 };
-            
+
             // FIX: Use a recursive walker to find all nodes for accurate counts.
             function nodeWalker(node) {
                 if (ts.isImportDeclaration(node)) imports.push(node.moduleSpecifier.getText(sourceFile).replace(/['"]/g, ''));
@@ -169,7 +182,7 @@ function createParser(funcName, sourceCode, sourcePath) {
                 ts.forEachChild(node, nodeWalker);
             }
             nodeWalker(sourceFile);
-            
+
             const { definitions, symbols } = processNode(sourceFile, sourceFile);
             return JSON.stringify({
                 language: "typescript", imports, definitions, symbols,

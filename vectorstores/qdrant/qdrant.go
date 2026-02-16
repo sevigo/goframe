@@ -232,7 +232,7 @@ func (s *Store) embedBatchWithRetry(ctx context.Context, batchDocs []schema.Docu
 }
 
 func (s *Store) waitForRetryDelay(ctx context.Context, delay time.Duration, attempt int, err error) error {
-	jitter := time.Duration(rand.IntN(int(s.batchConfig.RetryJitter.Milliseconds()))) * time.Millisecond //nolint:gosec
+	jitter := time.Duration(rand.IntN(int(s.batchConfig.RetryJitter.Milliseconds()))) * time.Millisecond //nolint:gosec // rand.IntN is sufficient for retry jitter
 	totalDelay := delay + jitter
 
 	s.logger.WarnContext(ctx, "Retrying embedding for batch",
@@ -925,15 +925,8 @@ func (s *Store) CreateCollection(ctx context.Context, name string, dimension int
 	s.logger.InfoContext(ctx, "Collection created successfully",
 		"name", name, "dimension", dimension, "duration", duration)
 
-	// Apply Payload Indexes if configured in store options
-	if len(s.options.payloadIndexes) > 0 {
-		s.logger.InfoContext(ctx, "CreateCollection: Creating payload indexes", "keys", s.options.payloadIndexes)
-		for _, key := range s.options.payloadIndexes {
-			if err := s.createPayloadIndex(ctx, name, key); err != nil {
-				s.logger.WarnContext(ctx, "Failed to create payload index", "key", key, "error", err)
-			}
-		}
-	}
+	// Apply Payload Indexes if configured
+	s.applyPayloadIndexes(ctx, name)
 
 	return nil
 }
@@ -1229,14 +1222,8 @@ func (s *Store) ensureCollection(ctx context.Context, collectionName string) err
 		return fmt.Errorf("failed to create qdrant collection: %w", err)
 	}
 
-	if len(s.options.payloadIndexes) > 0 {
-		s.logger.InfoContext(ctx, "EnsureCollection: Creating payload indexes", "keys", s.options.payloadIndexes)
-		for _, key := range s.options.payloadIndexes {
-			if err := s.createPayloadIndex(ctx, collectionName, key); err != nil {
-				s.logger.WarnContext(ctx, "Failed to create payload index", "key", key, "error", err)
-			}
-		}
-	}
+	// Apply Payload Indexes if configured
+	s.applyPayloadIndexes(ctx, collectionName)
 
 	select {
 	case <-time.After(500 * time.Millisecond):
@@ -1257,6 +1244,24 @@ func (s *Store) createPayloadIndex(ctx context.Context, collectionName, key stri
 		Wait:           &wait,
 	})
 	return err
+}
+
+func (s *Store) applyPayloadIndexes(ctx context.Context, collectionName string) {
+	s.logger.InfoContext(ctx, "Creating mandatory symbol mapping indexes", "collection", collectionName)
+	for _, key := range []string{"identifier", "is_definition"} {
+		if err := s.createPayloadIndex(ctx, collectionName, key); err != nil {
+			s.logger.WarnContext(ctx, "Failed to create mandatory payload index", "key", key, "collection", collectionName, "error", err)
+		}
+	}
+
+	if len(s.options.payloadIndexes) > 0 {
+		s.logger.InfoContext(ctx, "Creating additional payload indexes", "collection", collectionName, "keys", s.options.payloadIndexes)
+		for _, key := range s.options.payloadIndexes {
+			if err := s.createPayloadIndex(ctx, collectionName, key); err != nil {
+				s.logger.WarnContext(ctx, "Failed to create payload index", "key", key, "collection", collectionName, "error", err)
+			}
+		}
+	}
 }
 
 func (s *Store) collectionExists(ctx context.Context, name string) (bool, error) {
@@ -1388,21 +1393,13 @@ func buildQdrantFilter(filters map[string]any) *qdrant.Filter {
 			}
 			match = &qdrant.Match{MatchValue: &qdrant.Match_Integers{Integers: &qdrant.RepeatedIntegers{Integers: int64Slice}}}
 		case []any:
-			// Attempt to determine the type of elements in the slice
-			if len(v) > 0 {
-				switch v[0].(type) {
-				case string:
-					strSlice := make([]string, len(v))
-					for i, elem := range v {
-						if str, ok := elem.(string); ok {
-							strSlice[i] = str
-						}
-					}
-					match = &qdrant.Match{MatchValue: &qdrant.Match_Keywords{Keywords: &qdrant.RepeatedStrings{Strings: strSlice}}}
-				}
-			}
+			match = buildMatchFromSlice(key, v)
 		default:
 			slog.Warn("Unsupported filter type for key", "key", key, "type", fmt.Sprintf("%T", v))
+			continue
+		}
+
+		if match == nil {
 			continue
 		}
 
@@ -1423,6 +1420,50 @@ func buildQdrantFilter(filters map[string]any) *qdrant.Filter {
 
 	return &qdrant.Filter{
 		Must: conditions,
+	}
+}
+
+func buildMatchFromSlice(key string, v []any) *qdrant.Match {
+	if len(v) == 0 {
+		return nil
+	}
+	// Determine the type of the first non-nil element
+	var firstValid any
+	for _, elem := range v {
+		if elem != nil {
+			firstValid = elem
+			break
+		}
+	}
+	if firstValid == nil {
+		return nil
+	}
+
+	switch firstValid.(type) {
+	case string:
+		strSlice := make([]string, 0, len(v))
+		for _, elem := range v {
+			if s, ok := elem.(string); ok {
+				strSlice = append(strSlice, s)
+			}
+		}
+		return &qdrant.Match{MatchValue: &qdrant.Match_Keywords{Keywords: &qdrant.RepeatedStrings{Strings: strSlice}}}
+	case int, int32, int64:
+		intSlice := make([]int64, 0, len(v))
+		for _, elem := range v {
+			switch val := elem.(type) {
+			case int:
+				intSlice = append(intSlice, int64(val))
+			case int32:
+				intSlice = append(intSlice, int64(val))
+			case int64:
+				intSlice = append(intSlice, val)
+			}
+		}
+		return &qdrant.Match{MatchValue: &qdrant.Match_Integers{Integers: &qdrant.RepeatedIntegers{Integers: intSlice}}}
+	default:
+		slog.Warn("Unsupported slice element type in filter", "key", key, "type", fmt.Sprintf("%T", firstValid))
+		return nil
 	}
 }
 
