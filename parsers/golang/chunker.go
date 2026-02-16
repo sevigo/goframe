@@ -77,7 +77,7 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
 
 		// If this is a definition and we have one already, flush it first
 		if isDef && chunkIdentifier != "" && currentChunkContent.Len() > 0 {
-			chunks = p.flushChunk(chunks, packageAndImports, &currentChunkContent, &currentChunkStartLine, &chunkIsDefinition, &chunkSymbolType, &chunkIdentifier, lastDeclEndLine)
+			chunks = p.flushChunk(chunks, path, packageAndImports, &currentChunkContent, &currentChunkStartLine, &chunkIsDefinition, &chunkSymbolType, &chunkIdentifier, lastDeclEndLine)
 		}
 
 		if isDef {
@@ -88,14 +88,14 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
 
 		// 1. Check if the new declaration ITSELF is too large
 		if totalAddSize > targetChunkSize {
-			chunks = p.handleLargeDeclaration(chunks, path, decl, fullNewContent, packageAndImports, &currentChunkContent, &currentChunkStartLine, &chunkIsDefinition, &chunkSymbolType, &chunkIdentifier, lastDeclEndLine)
+			chunks = p.handleLargeDeclaration(chunks, path, decl, fullNewContent, packageAndImports, &currentChunkContent, &currentChunkStartLine, &chunkIsDefinition, &chunkSymbolType, &chunkIdentifier, lastDeclEndLine, targetChunkSize)
 			lastDeclEndLine = endPos.Line
 			continue
 		}
 
 		// 2. Normal flow: Check if adding to current chunk exceeds limit
 		if currentChunkContent.Len() > 0 && (currentChunkContent.Len()+totalAddSize > targetChunkSize) {
-			chunks = p.flushChunk(chunks, packageAndImports, &currentChunkContent, &currentChunkStartLine, &chunkIsDefinition, &chunkSymbolType, &chunkIdentifier, lastDeclEndLine)
+			chunks = p.flushChunk(chunks, path, packageAndImports, &currentChunkContent, &currentChunkStartLine, &chunkIsDefinition, &chunkSymbolType, &chunkIdentifier, lastDeclEndLine)
 
 			if isDef {
 				chunkIsDefinition = true
@@ -117,7 +117,7 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
 	}
 
 	if currentChunkContent.Len() > 0 {
-		chunks = p.flushChunk(chunks, packageAndImports, &currentChunkContent, &currentChunkStartLine, &chunkIsDefinition, &chunkSymbolType, &chunkIdentifier, lastDeclEndLine)
+		chunks = p.flushChunk(chunks, path, packageAndImports, &currentChunkContent, &currentChunkStartLine, &chunkIsDefinition, &chunkSymbolType, &chunkIdentifier, lastDeclEndLine)
 	}
 
 	p.logger.Debug("Created grouped chunks for Go file", "count", len(chunks), "path", path)
@@ -301,13 +301,14 @@ func (p *GoPlugin) handleLargeDeclaration(
 	chunkSymbolType *string,
 	chunkIdentifier *string,
 	lastDeclEndLine int,
+	targetSize int,
 ) []schema.CodeChunk {
 	if currentChunkContent.Len() > 0 {
-		chunks = p.flushChunk(chunks, packageAndImports, currentChunkContent, currentChunkStartLine, chunkIsDefinition, chunkSymbolType, chunkIdentifier, lastDeclEndLine)
+		chunks = p.flushChunk(chunks, path, packageAndImports, currentChunkContent, currentChunkStartLine, chunkIsDefinition, chunkSymbolType, chunkIdentifier, lastDeclEndLine)
 	}
 
 	isDef, symType, id := p.findDefinitionInfo(decl)
-	subSplits := p.recursiveSplit(fullNewContent, targetChunkSize, 0)
+	subSplits := p.recursiveSplit(fullNewContent, targetSize, 200)
 	for i, sub := range subSplits {
 		finalID := id
 		if finalID == "" {
@@ -340,6 +341,7 @@ func (p *GoPlugin) extractGapContent(lines []string, lastEndLine, currentStartLi
 
 func (p *GoPlugin) flushChunk(
 	chunks []schema.CodeChunk,
+	path string,
 	packageHeader string,
 	content *strings.Builder,
 	startLine *int,
@@ -350,8 +352,7 @@ func (p *GoPlugin) flushChunk(
 ) []schema.CodeChunk {
 	finalID := *id
 	if finalID == "" {
-		// Since we don't have the path here, we rely on the caller or use a generic ID
-		finalID = fmt.Sprintf("chunk:%d-%d", *startLine, endLine)
+		finalID = fmt.Sprintf("%s:chunk:%d-%d", path, *startLine, endLine)
 	}
 	chunks = append(chunks, p.createChunk(
 		finalID,

@@ -103,14 +103,19 @@ function processNode(node, sourceFile, parentIdentifier = '', parentNode = null)
             }
             return { chunks, definitions, symbols };
         case ts.SyntaxKind.VariableDeclaration:
-            chunkType = (node.parent.flags & ts.NodeFlags.Const) ? 'constant' : 'variable';
-            defType = chunkType; identifier = nodeName = node.name.getText(sourceFile);
-            isDefinition = true;
+            if (node.parent.kind === ts.SyntaxKind.VariableStatement && node.name.kind === ts.SyntaxKind.Identifier) {
+                chunkType = (node.parent.flags & ts.NodeFlags.Const) ? 'constant' : 'variable';
+                defType = chunkType; identifier = nodeName = node.name.getText(sourceFile);
+                isDefinition = true;
+            } else {
+                chunkType = 'variable'; defType = 'variable'; identifier = nodeName = node.name.getText(sourceFile);
+                isDefinition = false;
+            }
             break;
         case ts.SyntaxKind.MethodDeclaration:
-        case ts.SyntaxKind.MethodSignature: // FIX: Handle methods in interfaces
+        case ts.SyntaxKind.MethodSignature:
             chunkType = 'function'; defType = 'method'; nodeName = node.name.getText(sourceFile); identifier = `${parentIdentifier}.${nodeName}`;
-            isDefinition = true;
+            isDefinition = node.body !== undefined;
             break;
         case ts.SyntaxKind.PropertyDeclaration:
         case ts.SyntaxKind.PropertySignature: // FIX: Handle properties in interfaces

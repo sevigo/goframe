@@ -471,7 +471,7 @@ func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser sc
 	}
 
 	// Try to extract language-specific metadata (e.g. imports, package name)
-	if meta, metaErr := parser.ExtractMetadata(validContent, path); metaErr == nil {
+	if meta, metadataErr := parser.ExtractMetadata(validContent, path); metadataErr == nil {
 		if meta.PackageName != "" {
 			baseMetadata["package_name"] = meta.PackageName
 		}
@@ -480,7 +480,7 @@ func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser sc
 		}
 	} else {
 		// Just debug log, not critical
-		g.logger.Debug("Metadata extraction skipped or failed", "path", relPath, "error", metaErr)
+		g.logger.Debug("Metadata extraction skipped or failed", "path", relPath, "error", metadataErr)
 	}
 
 	chunks, err := parser.Chunk(validContent, path, nil)
@@ -516,7 +516,7 @@ func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser sc
 }
 
 func buildChunkMetadata(baseMetadata map[string]any, chunk schema.CodeChunk, chunkIndex, totalChunks int) map[string]any {
-	chunkMetadata := make(map[string]any, len(baseMetadata)+len(chunk.Annotations)+8)
+	chunkMetadata := make(map[string]any, len(baseMetadata)+len(chunk.Annotations)+9)
 	maps.Copy(chunkMetadata, baseMetadata)
 
 	chunkMetadata["identifier"] = chunk.Identifier

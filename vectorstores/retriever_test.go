@@ -1,4 +1,4 @@
-package vectorstores
+package vectorstores_test
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/sevigo/goframe/schema"
+	"github.com/sevigo/goframe/vectorstores"
 )
 
 type fakeReranker struct {
@@ -50,7 +51,7 @@ func TestRerankingRetriever(t *testing.T) {
 	baseRetriever := &fakeRetriever{docs: docs}
 	reranker := &fakeReranker{scores: []float64{0.1, 0.9, 0.5}} // doc 2 has highest score
 
-	rr := RerankingRetriever{
+	rr := vectorstores.RerankingRetriever{
 		Retriever: baseRetriever,
 		Reranker:  reranker,
 		TopK:      1,

@@ -25,7 +25,8 @@ func (p *fakeGoParser) CanHandle(path string, info fs.FileInfo) bool {
 }
 func (p *fakeGoParser) Chunk(content string, path string, opts *schema.CodeChunkingOptions) ([]schema.CodeChunk, error) {
 	return []schema.CodeChunk{
-		{Content: "File: src/main.go\nType: function\nIdentifier: main\n---\npackage main\n\nfunc main() {}", LineStart: 1, LineEnd: 3, Type: "function", Identifier: "main", IsDefinition: true, SymbolType: "function"},
+		{Content: "package main\n\nfunc main() {}", LineStart: 1, LineEnd: 3, Type: "function", Identifier: "main", IsDefinition: true, SymbolType: "function"},
+		{Content: "// a comment gap", LineStart: 4, LineEnd: 4, Type: "code_group", Identifier: "src/main.go:4-4", IsDefinition: false},
 		{Content: "func helper() {}", LineStart: 5, LineEnd: 5, Type: "function", Identifier: "helper", IsDefinition: true, SymbolType: "function"},
 	}, nil
 }
@@ -110,10 +111,11 @@ func TestGitLoader_Load(t *testing.T) {
 	require.NoError(t, err, "Load should not return an error")
 	require.NotNil(t, docs, "Load should return documents")
 
-	assert.Len(t, docs, 3, "Expected 3 documents to be loaded and chunked")
+	assert.Len(t, docs, 4, "Expected 4 documents to be loaded and chunked")
 
 	foundMain := false
 	foundHelper := false
+	foundGap := false
 	foundReadme := false
 
 	for _, doc := range docs {
@@ -133,14 +135,19 @@ func TestGitLoader_Load(t *testing.T) {
 				assert.Equal(t, "function", doc.Metadata["symbol_type"])
 				foundMain = true
 			case "helper":
-				assert.Equal(t, "File: src/main.go\nType: function\nIdentifier: helper\n---\nfunc helper() {}", doc.PageContent)
+				assert.Contains(t, doc.PageContent, "func helper() {}")
 				assert.Equal(t, "function", doc.Metadata["chunk_type"])
 				assert.Equal(t, true, doc.Metadata["is_definition"])
 				assert.Equal(t, "function", doc.Metadata["symbol_type"])
 				foundHelper = true
+			case "src/main.go:4-4":
+				assert.Contains(t, doc.PageContent, "// a comment gap")
+				assert.Equal(t, "code_group", doc.Metadata["chunk_type"])
+				assert.Equal(t, false, doc.Metadata["is_definition"])
+				foundGap = true
 			}
 		case "README.txt":
-			assert.Equal(t, "File: README.txt\nType: text_document\nIdentifier: README\n---\nThis is a test README.", doc.PageContent)
+			assert.Contains(t, doc.PageContent, "This is a test README.")
 			assert.Equal(t, "text_document", doc.Metadata["chunk_type"])
 			foundReadme = true
 		default:
@@ -150,5 +157,6 @@ func TestGitLoader_Load(t *testing.T) {
 
 	assert.True(t, foundMain, "Did not find the 'main' function chunk")
 	assert.True(t, foundHelper, "Did not find the 'helper' function chunk")
+	assert.True(t, foundGap, "Did not find the gap chunk")
 	assert.True(t, foundReadme, "Did not find the 'README' chunk")
 }

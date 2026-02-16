@@ -1393,20 +1393,13 @@ func buildQdrantFilter(filters map[string]any) *qdrant.Filter {
 			}
 			match = &qdrant.Match{MatchValue: &qdrant.Match_Integers{Integers: &qdrant.RepeatedIntegers{Integers: int64Slice}}}
 		case []any:
-			// Attempt to determine the type of elements in the slice
-			if len(v) > 0 {
-				if _, ok := v[0].(string); ok {
-					strSlice := make([]string, len(v))
-					for i, elem := range v {
-						if s, ok := elem.(string); ok {
-							strSlice[i] = s
-						}
-					}
-					match = &qdrant.Match{MatchValue: &qdrant.Match_Keywords{Keywords: &qdrant.RepeatedStrings{Strings: strSlice}}}
-				}
-			}
+			match = buildMatchFromSlice(key, v)
 		default:
 			slog.Warn("Unsupported filter type for key", "key", key, "type", fmt.Sprintf("%T", v))
+			continue
+		}
+
+		if match == nil {
 			continue
 		}
 
@@ -1427,6 +1420,50 @@ func buildQdrantFilter(filters map[string]any) *qdrant.Filter {
 
 	return &qdrant.Filter{
 		Must: conditions,
+	}
+}
+
+func buildMatchFromSlice(key string, v []any) *qdrant.Match {
+	if len(v) == 0 {
+		return nil
+	}
+	// Determine the type of the first non-nil element
+	var firstValid any
+	for _, elem := range v {
+		if elem != nil {
+			firstValid = elem
+			break
+		}
+	}
+	if firstValid == nil {
+		return nil
+	}
+
+	switch firstValid.(type) {
+	case string:
+		strSlice := make([]string, 0, len(v))
+		for _, elem := range v {
+			if s, ok := elem.(string); ok {
+				strSlice = append(strSlice, s)
+			}
+		}
+		return &qdrant.Match{MatchValue: &qdrant.Match_Keywords{Keywords: &qdrant.RepeatedStrings{Strings: strSlice}}}
+	case int, int32, int64:
+		intSlice := make([]int64, 0, len(v))
+		for _, elem := range v {
+			switch val := elem.(type) {
+			case int:
+				intSlice = append(intSlice, int64(val))
+			case int32:
+				intSlice = append(intSlice, int64(val))
+			case int64:
+				intSlice = append(intSlice, val)
+			}
+		}
+		return &qdrant.Match{MatchValue: &qdrant.Match_Integers{Integers: &qdrant.RepeatedIntegers{Integers: intSlice}}}
+	default:
+		slog.Warn("Unsupported slice element type in filter", "key", key, "type", fmt.Sprintf("%T", firstValid))
+		return nil
 	}
 }
 
