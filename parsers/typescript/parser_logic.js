@@ -109,8 +109,10 @@ function processNode(node, sourceFile, parentIdentifier = '', parentNode = null)
                     chunkType = (declarationList.flags & ts.NodeFlags.Const) ? 'constant' : 'variable';
                     defType = chunkType;
                     identifier = nodeName = node.name.getText(sourceFile);
-                    // Flag as definition if it's a top-level declaration or has significant content (like an arrow function)
-                    isDefinition = true;
+                    // Flag as definition if it's a top-level declaration (has parent VariableStatement) or has significant content (like an arrow function)
+                    const isTopLevel = declarationList.parent && ts.isVariableStatement(declarationList.parent);
+                    const hasFunctionInitializer = node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer));
+                    isDefinition = isTopLevel || hasFunctionInitializer;
                 } else {
                     chunkType = 'variable';
                     defType = 'variable';
@@ -157,6 +159,38 @@ function processNode(node, sourceFile, parentIdentifier = '', parentNode = null)
         });
     }
     return { chunks, definitions, symbols };
+}
+
+function extractUsedSymbols(sourceCode, sourcePath) {
+    try {
+        if (!sourceCode || sourceCode.trim() === '') return JSON.stringify([]);
+        const sourceFile = ts.createSourceFile(sourcePath, sourceCode, ts.ScriptTarget.Latest, true);
+        const symbols = new Set();
+
+        function walk(node) {
+            if (ts.isIdentifier(node)) {
+                const name = node.getText(sourceFile);
+                if (name && /^[A-Z]/.test(name)) {
+                    const parent = node.parent;
+                    if (parent && ts.isPropertyAccessExpression(parent) && parent.name === node) {
+                        const expression = parent.expression.getText(sourceFile);
+                        if (/^[A-Z]/.test(expression)) {
+                            symbols.add(`${expression}.${name}`);
+                        } else {
+                            symbols.add(name);
+                        }
+                    } else if (parent && (ts.isTypeReferenceNode(parent) || ts.isNewExpression(parent) || ts.isCallExpression(parent))) {
+                        symbols.add(name);
+                    }
+                }
+            }
+            ts.forEachChild(node, walk);
+        }
+        walk(sourceFile);
+        return JSON.stringify(Array.from(symbols));
+    } catch (e) {
+        return JSON.stringify({ error: e.message });
+    }
 }
 
 function createParser(funcName, sourceCode, sourcePath) {

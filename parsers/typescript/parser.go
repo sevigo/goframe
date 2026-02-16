@@ -210,17 +210,24 @@ func (p *Parser) ExtractUsedSymbols(content string) []string {
 
 	resultStr := result.String()
 
-	var errResp errorResponse
-	if json.Unmarshal([]byte(resultStr), &errResp) == nil && errResp.Error != "" {
-		p.logger.Error("javascript parser error", "error", errResp.Error)
+	var response struct {
+		Error   string   `json:"error"`
+		Symbols []string `json:"symbols"`
+	}
+
+	// Try to unmarshal as direct array first (original behavior)
+	if err := json.Unmarshal([]byte(resultStr), &response.Symbols); err != nil {
+		// If failure, try to unmarshal as error object
+		if err := json.Unmarshal([]byte(resultStr), &response); err != nil {
+			p.logger.Error("failed to unmarshal symbols from JS runtime", "error", err)
+			return nil
+		}
+	}
+
+	if response.Error != "" {
+		p.logger.Error("javascript parser error", "error", response.Error)
 		return nil
 	}
 
-	var symbols []string
-	if err := json.Unmarshal([]byte(resultStr), &symbols); err != nil {
-		p.logger.Error("failed to unmarshal symbols from JS runtime", "error", err)
-		return nil
-	}
-
-	return symbols
+	return response.Symbols
 }

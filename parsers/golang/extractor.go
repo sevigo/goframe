@@ -297,9 +297,7 @@ func (p *GoPlugin) ExtractUsedSymbols(content string) []string {
 				symbols[x.Name] = struct{}{}
 			}
 		case *ast.SelectorExpr:
-			if ident, ok := x.X.(*ast.Ident); ok {
-				symbols[ident.Name+"."+x.Sel.Name] = struct{}{}
-			}
+			symbols[flattenSelector(x)] = struct{}{}
 		}
 		return true
 	})
@@ -311,6 +309,29 @@ func (p *GoPlugin) ExtractUsedSymbols(content string) []string {
 	return result
 }
 
+var goBuiltins = map[string]struct{}{
+	"append": {}, "cap": {}, "close": {}, "complex": {}, "copy": {}, "delete": {}, "imag": {}, "len": {},
+	"make": {}, "new": {}, "panic": {}, "print": {}, "println": {}, "real": {}, "recover": {},
+	"bool": {}, "byte": {}, "complex64": {}, "complex128": {}, "error": {}, "float32": {}, "float64": {},
+	"int": {}, "int8": {}, "int16": {}, "int32": {}, "int64": {}, "rune": {}, "string": {},
+	"uint": {}, "uint8": {}, "uint16": {}, "uint32": {}, "uint64": {}, "uintptr": {},
+	"nil": {}, "true": {}, "false": {}, "iota": {}, "any": {}, "comparable": {},
+}
+
+func flattenSelector(x *ast.SelectorExpr) string {
+	left := ""
+	switch t := x.X.(type) {
+	case *ast.Ident:
+		left = t.Name
+	case *ast.SelectorExpr:
+		left = flattenSelector(t)
+	}
+	if left == "" {
+		return x.Sel.Name
+	}
+	return left + "." + x.Sel.Name
+}
+
 func shouldKeepIdentifier(id *ast.Ident) bool {
 	if id.Obj != nil {
 		// If it's defined in the same file, it's not an "external" symbol we're looking for
@@ -320,16 +341,7 @@ func shouldKeepIdentifier(id *ast.Ident) bool {
 	if len(name) == 0 {
 		return false
 	}
-	// Basic Go built-ins and keywords to ignore
-	builtins := map[string]struct{}{
-		"append": {}, "cap": {}, "close": {}, "complex": {}, "copy": {}, "delete": {}, "imag": {}, "len": {},
-		"make": {}, "new": {}, "panic": {}, "print": {}, "println": {}, "real": {}, "recover": {},
-		"bool": {}, "byte": {}, "complex64": {}, "complex128": {}, "error": {}, "float32": {}, "float64": {},
-		"int": {}, "int8": {}, "int16": {}, "int32": {}, "int64": {}, "rune": {}, "string": {},
-		"uint": {}, "uint8": {}, "uint16": {}, "uint32": {}, "uint64": {}, "uintptr": {},
-		"nil": {}, "true": {}, "false": {}, "iota": {}, "any": {}, "comparable": {},
-	}
-	if _, ok := builtins[name]; ok {
+	if _, ok := goBuiltins[name]; ok {
 		return false
 	}
 	// Most Go symbols we care about (types, functions) are capitalized

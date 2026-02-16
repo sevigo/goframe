@@ -128,14 +128,18 @@ func downloadAndExtract(ctx context.Context, url, destination string) error {
 			if err != nil {
 				return fmt.Errorf("failed to open file: %w", err)
 			}
-			// G110: Potential DoS vulnerability via decompression bomb.
-			// Limit extraction to 100MB per file for this model.
-			_, copyErr := io.CopyN(f, tr, 100*1024*1024)
-			closeErr := f.Close()
-			if copyErr != nil && !errors.Is(copyErr, io.EOF) {
-				return fmt.Errorf("failed to extract file: %w", copyErr)
+			limit := int64(100 * 1024 * 1024)
+			if _, copyErr := io.CopyN(f, tr, limit); copyErr == nil {
+				var buf [1]byte
+				if n, err := tr.Read(buf[:]); err != io.EOF && n > 0 {
+					_ = f.Close()
+					return fmt.Errorf("file %s exceeds decompression limit of %d bytes", header.Name, limit)
+				}
+			} else if !errors.Is(copyErr, io.EOF) {
+				_ = f.Close()
+				return fmt.Errorf("failed to extract file %s: %w", header.Name, copyErr)
 			}
-			if closeErr != nil {
+			if closeErr := f.Close(); closeErr != nil {
 				return fmt.Errorf("failed to close file: %w", closeErr)
 			}
 		}
