@@ -105,10 +105,12 @@ function processNode(node, sourceFile, parentIdentifier = '', parentNode = null)
         case ts.SyntaxKind.VariableDeclaration:
             chunkType = (node.parent.flags & ts.NodeFlags.Const) ? 'constant' : 'variable';
             defType = chunkType; identifier = nodeName = node.name.getText(sourceFile);
+            isDefinition = true;
             break;
         case ts.SyntaxKind.MethodDeclaration:
         case ts.SyntaxKind.MethodSignature: // FIX: Handle methods in interfaces
             chunkType = 'function'; defType = 'method'; nodeName = node.name.getText(sourceFile); identifier = `${parentIdentifier}.${nodeName}`;
+            isDefinition = true;
             break;
         case ts.SyntaxKind.PropertyDeclaration:
         case ts.SyntaxKind.PropertySignature: // FIX: Handle properties in interfaces

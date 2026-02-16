@@ -1,0 +1,559 @@
+diff --git a/documentloaders/git.go b/documentloaders/git.go
+index 163d16b..c4ffcb5 100644
+--- a/documentloaders/git.go
++++ b/documentloaders/git.go
+@@ -471,7 +471,7 @@ func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser sc
+ 	}
+ 
+ 	// Try to extract language-specific metadata (e.g. imports, package name)
+-	if meta, err := parser.ExtractMetadata(validContent, path); err == nil {
++	if meta, metaErr := parser.ExtractMetadata(validContent, path); metaErr == nil {
+ 		if meta.PackageName != "" {
+ 			baseMetadata["package_name"] = meta.PackageName
+ 		}
+@@ -480,7 +480,7 @@ func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser sc
+ 		}
+ 	} else {
+ 		// Just debug log, not critical
+-		g.logger.Debug("Metadata extraction skipped or failed", "path", relPath, "error", err)
++		g.logger.Debug("Metadata extraction skipped or failed", "path", relPath, "error", metaErr)
+ 	}
+ 
+ 	chunks, err := parser.Chunk(validContent, path, nil)
+@@ -516,7 +516,7 @@ func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser sc
+ }
+ 
+ func buildChunkMetadata(baseMetadata map[string]any, chunk schema.CodeChunk, chunkIndex, totalChunks int) map[string]any {
+-	chunkMetadata := make(map[string]any, len(baseMetadata)+len(chunk.Annotations)+6)
++	chunkMetadata := make(map[string]any, len(baseMetadata)+len(chunk.Annotations)+8)
+ 	maps.Copy(chunkMetadata, baseMetadata)
+ 
+ 	chunkMetadata["identifier"] = chunk.Identifier
+@@ -526,6 +526,8 @@ func buildChunkMetadata(baseMetadata map[string]any, chunk schema.CodeChunk, chu
+ 	chunkMetadata["chunk_index"] = chunkIndex
+ 	chunkMetadata["total_chunks"] = totalChunks
+ 	chunkMetadata["parent_id"] = chunk.ParentID
++	chunkMetadata["is_definition"] = chunk.IsDefinition
++	chunkMetadata["symbol_type"] = chunk.SymbolType
+ 	if chunk.FullParentText != "" {
+ 		chunkMetadata["full_parent_text"] = truncateParentText(chunk.FullParentText)
+ 	}
+diff --git a/documentloaders/git_test.go b/documentloaders/git_test.go
+index 324e876..98a7a06 100644
+--- a/documentloaders/git_test.go
++++ b/documentloaders/git_test.go
+@@ -25,8 +25,8 @@ func (p *fakeGoParser) CanHandle(path string, info fs.FileInfo) bool {
+ }
+ func (p *fakeGoParser) Chunk(content string, path string, opts *schema.CodeChunkingOptions) ([]schema.CodeChunk, error) {
+ 	return []schema.CodeChunk{
+-		{Content: "File: src/main.go\nType: function\nIdentifier: main\n---\npackage main\n\nfunc main() {}", LineStart: 1, LineEnd: 3, Type: "function", Identifier: "main"},
+-		{Content: "func helper() {}", LineStart: 5, LineEnd: 5, Type: "function", Identifier: "helper"},
++		{Content: "File: src/main.go\nType: function\nIdentifier: main\n---\npackage main\n\nfunc main() {}", LineStart: 1, LineEnd: 3, Type: "function", Identifier: "main", IsDefinition: true, SymbolType: "function"},
++		{Content: "func helper() {}", LineStart: 5, LineEnd: 5, Type: "function", Identifier: "helper", IsDefinition: true, SymbolType: "function"},
+ 	}, nil
+ }
+ func (p *fakeGoParser) ExtractMetadata(content string, path string) (schema.FileMetadata, error) {
+@@ -129,10 +129,14 @@ func TestGitLoader_Load(t *testing.T) {
+ 			case "main":
+ 				assert.Contains(t, doc.PageContent, "package main\n\nfunc main() {}")
+ 				assert.Equal(t, "function", doc.Metadata["chunk_type"])
++				assert.Equal(t, true, doc.Metadata["is_definition"])
++				assert.Equal(t, "function", doc.Metadata["symbol_type"])
+ 				foundMain = true
+ 			case "helper":
+ 				assert.Equal(t, "File: src/main.go\nType: function\nIdentifier: helper\n---\nfunc helper() {}", doc.PageContent)
+ 				assert.Equal(t, "function", doc.Metadata["chunk_type"])
++				assert.Equal(t, true, doc.Metadata["is_definition"])
++				assert.Equal(t, "function", doc.Metadata["symbol_type"])
+ 				foundHelper = true
+ 			}
+ 		case "README.txt":
+diff --git a/parsers/golang/chunker.go b/parsers/golang/chunker.go
+index 653595d..9102463 100644
+--- a/parsers/golang/chunker.go
++++ b/parsers/golang/chunker.go
+@@ -37,6 +37,11 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
+ 	var currentChunkStartLine = -1
+ 	var lastDeclEndLine int
+ 
++	// Track definition info for the current chunk
++	var chunkIsDefinition bool
++	var chunkSymbolType string
++	var chunkIdentifier string
++
+ 	// Pre-calculate the package and import block to prepend to every chunk.
+ 	packageAndImports := p.extractPackageAndImports(file, lines, fset)
+ 
+@@ -61,6 +66,36 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
+ 			continue
+ 		}
+ 
++		// Identify if this is a definition
++		isDef := false
++		symType := ""
++		id := ""
++
++		switch d := decl.(type) {
++		case *ast.FuncDecl:
++			isDef = true
++			symType = "function"
++			id = d.Name.Name
++		case *ast.GenDecl:
++			if d.Tok == token.TYPE {
++				for _, spec := range d.Specs {
++					if typeSpec, ok := spec.(*ast.TypeSpec); ok {
++						isDef = true
++						id = typeSpec.Name.Name
++						switch typeSpec.Type.(type) {
++						case *ast.StructType:
++							symType = "struct"
++						case *ast.InterfaceType:
++							symType = "interface"
++						default:
++							symType = "type"
++						}
++						break // Take the first type in a block
++					}
++				}
++			}
++		}
++
+ 		// Capture any gap content (comments, whitespace) between the last declaration and this one
+ 		gapContent := ""
+ 		if lastDeclEndLine > 0 && startPos.Line > lastDeclEndLine+1 {
+@@ -79,17 +114,29 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
+ 		fullNewContent := gapContent + declContent
+ 		totalAddSize := len(fullNewContent)
+ 
++		// If this is a definition and we don't have one for the current chunk, capture it
++		if isDef && chunkIdentifier == "" {
++			chunkIsDefinition = true
++			chunkSymbolType = symType
++			chunkIdentifier = id
++		}
++
+ 		// 1. Check if the new declaration ITSELF is too large to fit in a standard chunk
+ 		if totalAddSize > targetChunkSize {
+ 			// Flush current chunk if any
+ 			if currentChunkContent.Len() > 0 {
+-				chunkIdentifier := fmt.Sprintf("%s:%d-%d", path, currentChunkStartLine, lastDeclEndLine)
++				finalID := chunkIdentifier
++				if finalID == "" {
++					finalID = fmt.Sprintf("%s:%d-%d", path, currentChunkStartLine, lastDeclEndLine)
++				}
+ 				chunk := schema.CodeChunk{
+-					Content:    packageAndImports + currentChunkContent.String(),
+-					LineStart:  currentChunkStartLine,
+-					LineEnd:    lastDeclEndLine,
+-					Type:       "code_group",
+-					Identifier: chunkIdentifier,
++					Content:      packageAndImports + currentChunkContent.String(),
++					LineStart:    currentChunkStartLine,
++					LineEnd:      lastDeclEndLine,
++					Type:         "code_group",
++					Identifier:   finalID,
++					IsDefinition: chunkIsDefinition,
++					SymbolType:   chunkSymbolType,
+ 					Annotations: map[string]string{
+ 						"type": "code_group",
+ 					},
+@@ -97,19 +144,30 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
+ 				chunks = append(chunks, chunk)
+ 				currentChunkContent.Reset()
+ 				currentChunkStartLine = -1
++				chunkIsDefinition = false
++				chunkSymbolType = ""
++				chunkIdentifier = ""
+ 			}
+ 
+ 			// Sub-chunk the large declaration using internal recursive splitter
+ 			subSplits := p.recursiveSplit(fullNewContent, targetChunkSize, 200)
+ 
+ 			for i, sub := range subSplits {
+-				chunkIdentifier := fmt.Sprintf("%s:%d-%d:part%d", path, startPos.Line, endPos.Line, i)
++				finalID := id
++				if finalID == "" {
++					finalID = fmt.Sprintf("%s:%d-%d:part%d", path, startPos.Line, endPos.Line, i)
++				} else if i > 0 {
++					finalID = fmt.Sprintf("%s:part%d", id, i)
++				}
++
+ 				chunks = append(chunks, schema.CodeChunk{
+-					Content:    packageAndImports + sub,
+-					LineStart:  startPos.Line, // Approximate line tracking for sub-chunks
+-					LineEnd:    endPos.Line,
+-					Type:       "code_group_split",
+-					Identifier: chunkIdentifier,
++					Content:      packageAndImports + sub,
++					LineStart:    startPos.Line,
++					LineEnd:      endPos.Line,
++					Type:         "code_group_split",
++					Identifier:   finalID,
++					IsDefinition: isDef && i == 0, // Only flag the first part as definition
++					SymbolType:   symType,
+ 				})
+ 			}
+ 
+@@ -119,13 +177,18 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
+ 
+ 		// 2. Normal flow: Check if adding to current chunk exceeds limit
+ 		if currentChunkContent.Len() > 0 && (currentChunkContent.Len()+totalAddSize > targetChunkSize) {
+-			chunkIdentifier := fmt.Sprintf("%s:%d-%d", path, currentChunkStartLine, lastDeclEndLine)
++			finalID := chunkIdentifier
++			if finalID == "" {
++				finalID = fmt.Sprintf("%s:%d-%d", path, currentChunkStartLine, lastDeclEndLine)
++			}
+ 			chunk := schema.CodeChunk{
+-				Content:    packageAndImports + currentChunkContent.String(),
+-				LineStart:  currentChunkStartLine,
+-				LineEnd:    lastDeclEndLine,
+-				Type:       "code_group",
+-				Identifier: chunkIdentifier,
++				Content:      packageAndImports + currentChunkContent.String(),
++				LineStart:    currentChunkStartLine,
++				LineEnd:      lastDeclEndLine,
++				Type:         "code_group",
++				Identifier:   finalID,
++				IsDefinition: chunkIsDefinition,
++				SymbolType:   chunkSymbolType,
+ 				Annotations: map[string]string{
+ 					"type": "code_group",
+ 				},
+@@ -135,11 +198,20 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
+ 			// Reset for the next chunk.
+ 			currentChunkContent.Reset()
+ 			currentChunkStartLine = -1
++			chunkIsDefinition = false
++			chunkSymbolType = ""
++			chunkIdentifier = ""
++
++			// If the current decl is a definition, it becomes the first definition of the NEXT chunk
++			if isDef {
++				chunkIsDefinition = true
++				chunkSymbolType = symType
++				chunkIdentifier = id
++			}
+ 		}
+ 
+ 		// If this is the start of a new chunk, record its starting line number.
+ 		if currentChunkStartLine == -1 {
+-			// If we have gap content, strictly speaking the chunk starts at the gap.
+ 			currentChunkStartLine = startPos.Line
+ 			if gapContent != "" && lastDeclEndLine > 0 {
+ 				currentChunkStartLine = lastDeclEndLine + 1
+@@ -147,19 +219,24 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
+ 		}
+ 
+ 		currentChunkContent.WriteString(fullNewContent)
+-		currentChunkContent.WriteString("\n\n") // Add vertical space between declarations for clarity.
++		currentChunkContent.WriteString("\n\n")
+ 		lastDeclEndLine = endPos.Line
+ 	}
+ 
+ 	// After the loop, add the final remaining chunk if it has any content.
+ 	if currentChunkContent.Len() > 0 {
+-		chunkIdentifier := fmt.Sprintf("%s:%d-%d", path, currentChunkStartLine, lastDeclEndLine)
++		finalID := chunkIdentifier
++		if finalID == "" {
++			finalID = fmt.Sprintf("%s:%d-%d", path, currentChunkStartLine, lastDeclEndLine)
++		}
+ 		chunk := schema.CodeChunk{
+-			Content:    packageAndImports + currentChunkContent.String(),
+-			LineStart:  currentChunkStartLine,
+-			LineEnd:    lastDeclEndLine,
+-			Type:       "code_group",
+-			Identifier: chunkIdentifier,
++			Content:      packageAndImports + currentChunkContent.String(),
++			LineStart:    currentChunkStartLine,
++			LineEnd:      lastDeclEndLine,
++			Type:         "code_group",
++			Identifier:   finalID,
++			IsDefinition: chunkIsDefinition,
++			SymbolType:   chunkSymbolType,
+ 			Annotations: map[string]string{
+ 				"type": "code_group",
+ 			},
+diff --git a/parsers/typescript/parser_logic.js b/parsers/typescript/parser_logic.js
+index a74906c..2b22b50 100644
+--- a/parsers/typescript/parser_logic.js
++++ b/parsers/typescript/parser_logic.js
+@@ -15,7 +15,7 @@ function getVisibility(node, parentNode = null) {
+ 
+     // FIX: Check parent for export keyword on grouped variables.
+     if (parentNode && parentNode.kind === ts.SyntaxKind.VariableStatement) {
+-         if (parentNode.modifiers && parentNode.modifiers.some(m => m.kind === ts.SyntaxKind.ExportKeyword)) {
++        if (parentNode.modifiers && parentNode.modifiers.some(m => m.kind === ts.SyntaxKind.ExportKeyword)) {
+             return 'public';
+         }
+     }
+@@ -27,7 +27,7 @@ function getVisibility(node, parentNode = null) {
+             if (modifier.kind === ts.SyntaxKind.ProtectedKeyword) return 'protected';
+         }
+     }
+-    const isExported = node.modifiers ? 
++    const isExported = node.modifiers ?
+         node.modifiers.some(m => m.kind === ts.SyntaxKind.ExportKeyword) : false;
+     return isExported ? 'public' : 'private';
+ }
+@@ -36,7 +36,7 @@ function getDocumentation(node, sourceFile) {
+     const fullText = sourceFile.getFullText();
+     const commentRanges = ts.getLeadingCommentRanges(fullText, node.pos) || [];
+     if (commentRanges.length === 0) return '';
+-    
++
+     const commentText = commentRanges.map(range => fullText.slice(range.pos, range.end)).join('\n');
+     return commentText.replace(/^\/\*\*?/, '').replace(/\*\/$/, '').replace(/^\s*\*\s?/gm, '').trim();
+ }
+@@ -74,16 +74,20 @@ function processNode(node, sourceFile, parentIdentifier = '', parentNode = null)
+     const signature = getSignature(node, sourceFile);
+ 
+     let chunkType = '', defType = '', identifier = '', structureType = '', nodeName = node.name ? node.name.getText(sourceFile) : '(anonymous)';
++    let isDefinition = false;
+ 
+     switch (node.kind) {
+         case ts.SyntaxKind.FunctionDeclaration:
+             chunkType = 'function'; defType = 'function'; identifier = nodeName = node.name.getText(sourceFile);
++            isDefinition = true;
+             break;
+         case ts.SyntaxKind.ClassDeclaration:
+             chunkType = 'type_declaration'; defType = 'class'; structureType = 'class'; identifier = nodeName = node.name.getText(sourceFile);
++            isDefinition = true;
+             break;
+         case ts.SyntaxKind.InterfaceDeclaration:
+             chunkType = 'type_declaration'; defType = 'interface'; structureType = 'interface'; identifier = nodeName = node.name.getText(sourceFile);
++            isDefinition = true;
+             break;
+         case ts.SyntaxKind.EnumDeclaration:
+             chunkType = 'type_declaration'; defType = 'enum'; structureType = 'enum'; identifier = nodeName = node.name.getText(sourceFile);
+@@ -118,6 +122,8 @@ function processNode(node, sourceFile, parentIdentifier = '', parentNode = null)
+     if (chunkType) {
+         chunks.push({
+             content, lineStart, lineEnd, type: chunkType, identifier,
++            is_definition: isDefinition,
++            symbol_type: isDefinition ? defType : '',
+             annotations: {
+                 type: defType, name: nodeName, visibility, has_doc: (documentation.length > 0).toString(),
+                 ...(structureType && { structure_type: structureType }),
+@@ -159,7 +165,7 @@ function createParser(funcName, sourceCode, sourcePath) {
+ 
+         if (funcName === 'extractMetadata') {
+             let imports = [], properties = { total_functions: 0, total_classes: 0, total_methods: 0 };
+-            
++
+             // FIX: Use a recursive walker to find all nodes for accurate counts.
+             function nodeWalker(node) {
+                 if (ts.isImportDeclaration(node)) imports.push(node.moduleSpecifier.getText(sourceFile).replace(/['"]/g, ''));
+@@ -169,7 +175,7 @@ function createParser(funcName, sourceCode, sourcePath) {
+                 ts.forEachChild(node, nodeWalker);
+             }
+             nodeWalker(sourceFile);
+-            
++
+             const { definitions, symbols } = processNode(sourceFile, sourceFile);
+             return JSON.stringify({
+                 language: "typescript", imports, definitions, symbols,
+diff --git a/schema/parser.go b/schema/parser.go
+index 22605c8..c27ad2a 100644
+--- a/schema/parser.go
++++ b/schema/parser.go
+@@ -60,6 +60,12 @@ type CodeChunk struct {
+ 	// FullParentText contains the complete text of the parent structure.
+ 	// WARNING: This can be large. Logic should truncate this before storage.
+ 	FullParentText string `json:"fullParentText,omitempty"`
++
++	// IsDefinition is true if this chunk represents the primary source-of-truth definition of a symbol.
++	IsDefinition bool `json:"is_definition"`
++
++	// SymbolType is the category of the symbol (e.g., struct, interface, function).
++	SymbolType string `json:"symbol_type"`
+ }
+ 
+ type CodeChunkingOptions struct {
+diff --git a/vectorstores/definition_retriever.go b/vectorstores/definition_retriever.go
+new file mode 100644
+index 0000000..9fb680a
+--- /dev/null
++++ b/vectorstores/definition_retriever.go
+@@ -0,0 +1,26 @@
++package vectorstores
++
++import (
++	"context"
++
++	"github.com/sevigo/goframe/schema"
++)
++
++type DefinitionRetriever struct {
++	store VectorStore
++}
++
++func NewDefinitionRetriever(store VectorStore) *DefinitionRetriever {
++	return &DefinitionRetriever{store: store}
++}
++
++// GetDefinition performs an exact match lookup for a symbol name
++func (r *DefinitionRetriever) GetDefinition(ctx context.Context, symbolName string) ([]schema.Document, error) {
++	// dummy query "*" since we rely on the filter for precision
++	return r.store.SimilaritySearch(ctx, "*", 1,
++		WithFilters(map[string]any{
++			"identifier":    symbolName,
++			"is_definition": true,
++		}),
++	)
++}
+diff --git a/vectorstores/definition_retriever_test.go b/vectorstores/definition_retriever_test.go
+new file mode 100644
+index 0000000..5472a93
+--- /dev/null
++++ b/vectorstores/definition_retriever_test.go
+@@ -0,0 +1,114 @@
++package vectorstores_test
++
++import (
++	"context"
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++
++	"github.com/sevigo/goframe/schema"
++	"github.com/sevigo/goframe/vectorstores"
++)
++
++type mockFilterStore struct {
++	docs []schema.Document
++}
++
++func (m *mockFilterStore) AddDocuments(ctx context.Context, docs []schema.Document, opts ...vectorstores.Option) ([]string, error) {
++	return nil, nil
++}
++func (m *mockFilterStore) SimilaritySearch(ctx context.Context, query string, numDocuments int, opts ...vectorstores.Option) ([]schema.Document, error) {
++	options := vectorstores.ParseOptions(opts...)
++	var results []schema.Document
++	for _, doc := range m.docs {
++		match := true
++		for k, v := range options.Filters {
++			if docV, ok := doc.Metadata[k]; !ok || docV != v {
++				match = false
++				break
++			}
++		}
++		if match {
++			results = append(results, doc)
++			if len(results) >= numDocuments {
++				break
++			}
++		}
++	}
++	return results, nil
++}
++func (m *mockFilterStore) SimilaritySearchBatch(ctx context.Context, queries []string, numDocs int, opts ...vectorstores.Option) ([][]schema.Document, error) {
++	return nil, nil
++}
++func (m *mockFilterStore) SimilaritySearchWithScores(ctx context.Context, query string, numDocs int, opts ...vectorstores.Option) ([]vectorstores.DocumentWithScore, error) {
++	return nil, nil
++}
++func (m *mockFilterStore) ListCollections(ctx context.Context) ([]string, error) {
++	return nil, nil
++}
++func (m *mockFilterStore) DeleteCollection(ctx context.Context, name string) error {
++	return nil
++}
++func (m *mockFilterStore) DeleteDocumentsByFilter(ctx context.Context, filters map[string]any, opts ...vectorstores.Option) error {
++	return nil
++}
++
++func TestDefinitionRetriever_GetDefinition(t *testing.T) {
++	// Setup mock store with filtering
++	mockStore := &mockFilterStore{
++		docs: []schema.Document{
++			{
++				PageContent: "type User struct { Name string }",
++				Metadata: map[string]any{
++					"identifier":    "User",
++					"is_definition": true,
++					"symbol_type":   "struct",
++					"source":        "models/user.go",
++				},
++			},
++			{
++				PageContent: "func (u *User) Save() error { return nil }",
++				Metadata: map[string]any{
++					"identifier":    "User.Save",
++					"is_definition": true,
++					"symbol_type":   "method",
++					"source":        "models/user.go",
++				},
++			},
++			{
++				PageContent: "func main() { fmt.Println(\"hello\") }",
++				Metadata: map[string]any{
++					"identifier":    "main",
++					"is_definition": true,
++					"symbol_type":   "function",
++					"source":        "main.go",
++				},
++			},
++		},
++	}
++
++	retriever := vectorstores.NewDefinitionRetriever(mockStore)
++
++	t.Run("LookupExistingStruct", func(t *testing.T) {
++		docs, err := retriever.GetDefinition(context.Background(), "User")
++		require.NoError(t, err)
++		assert.Len(t, docs, 1)
++		assert.Equal(t, "User", docs[0].Metadata["identifier"])
++		assert.Equal(t, "struct", docs[0].Metadata["symbol_type"])
++	})
++
++	t.Run("LookupExistingFunction", func(t *testing.T) {
++		docs, err := retriever.GetDefinition(context.Background(), "main")
++		require.NoError(t, err)
++		assert.Len(t, docs, 1)
++		assert.Equal(t, "main", docs[0].Metadata["identifier"])
++		assert.Equal(t, "function", docs[0].Metadata["symbol_type"])
++	})
++
++	t.Run("LookupNonExistentSymbol", func(t *testing.T) {
++		docs, err := retriever.GetDefinition(context.Background(), "NonExistent")
++		require.NoError(t, err)
++		assert.Len(t, docs, 0)
++	})
++}
+diff --git a/vectorstores/qdrant/qdrant.go b/vectorstores/qdrant/qdrant.go
+index c9c2bfa..a590832 100644
+--- a/vectorstores/qdrant/qdrant.go
++++ b/vectorstores/qdrant/qdrant.go
+@@ -926,8 +926,15 @@ func (s *Store) CreateCollection(ctx context.Context, name string, dimension int
+ 		"name", name, "dimension", dimension, "duration", duration)
+ 
+ 	// Apply Payload Indexes if configured in store options
++	s.logger.InfoContext(ctx, "CreateCollection: Creating mandatory symbol mapping indexes")
++	for _, key := range []string{"identifier", "is_definition"} {
++		if err := s.createPayloadIndex(ctx, name, key); err != nil {
++			s.logger.WarnContext(ctx, "Failed to create mandatory payload index", "key", key, "error", err)
++		}
++	}
++
+ 	if len(s.options.payloadIndexes) > 0 {
+-		s.logger.InfoContext(ctx, "CreateCollection: Creating payload indexes", "keys", s.options.payloadIndexes)
++		s.logger.InfoContext(ctx, "CreateCollection: Creating additional payload indexes", "keys", s.options.payloadIndexes)
+ 		for _, key := range s.options.payloadIndexes {
+ 			if err := s.createPayloadIndex(ctx, name, key); err != nil {
+ 				s.logger.WarnContext(ctx, "Failed to create payload index", "key", key, "error", err)
+@@ -1229,6 +1236,14 @@ func (s *Store) ensureCollection(ctx context.Context, collectionName string) err
+ 		return fmt.Errorf("failed to create qdrant collection: %w", err)
+ 	}
+ 
++	// Apply Payload Indexes if configured in store options
++	s.logger.InfoContext(ctx, "EnsureCollection: Creating mandatory symbol mapping indexes", "collection", collectionName)
++	for _, key := range []string{"identifier", "is_definition"} {
++		if err := s.createPayloadIndex(ctx, collectionName, key); err != nil {
++			s.logger.WarnContext(ctx, "Failed to create mandatory payload index", "key", key, "error", err)
++		}
++	}
++
+ 	if len(s.options.payloadIndexes) > 0 {
+ 		s.logger.InfoContext(ctx, "EnsureCollection: Creating payload indexes", "keys", s.options.payloadIndexes)
+ 		for _, key := range s.options.payloadIndexes {

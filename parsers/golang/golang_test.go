@@ -62,19 +62,16 @@ func TestGoPlugin_Chunking_WithGrouping(t *testing.T) {
 		chunks, err := plugin.Chunk(testGoFileContent, "test.go", nil)
 		require.NoError(t, err)
 
-		// VERIFY NEW BEHAVIOR: Only one chunk is created.
-		require.Len(t, chunks, 1, "Expected a single chunk because the content is smaller than targetChunkSize")
+		// VERIFY NEW BEHAVIOR: Multiple chunks are created (one per definition).
+		require.Len(t, chunks, 6, "Expected 6 chunks because each definition should have its own chunk")
 
-		chunk := chunks[0]
-		assert.Equal(t, "code_group", chunk.Type)
-		assert.Contains(t, chunk.Content, "package main", "Chunk should start with package declaration")
-		assert.Contains(t, chunk.Content, `import (
-	"fmt"
-)`, "Chunk should contain the import block")
-		assert.Contains(t, chunk.Content, "const AppVersion = \"1.0.0\"", "Chunk should contain const declarations")
-		assert.Contains(t, chunk.Content, "type Person struct", "Chunk should contain type declarations")
-		assert.Contains(t, chunk.Content, "func (p *Person) SayHello()", "Chunk should contain method declarations")
-		assert.Contains(t, chunk.Content, "func main()", "Chunk should contain function declarations")
+		assert.Equal(t, "code_group", chunks[0].Type)
+		assert.Contains(t, chunks[0].Content, "package main")
+		assert.Contains(t, chunks[0].Content, "UserService interface")
+
+		assert.Contains(t, chunks[1].Content, "type Person struct")
+		assert.Contains(t, chunks[2].Content, "func (p *Person) SayHello()")
+		assert.Contains(t, chunks[5].Content, "func main()")
 	})
 
 	t.Run("should create multiple chunks for a large file", func(t *testing.T) {

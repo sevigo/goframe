@@ -232,7 +232,7 @@ func (s *Store) embedBatchWithRetry(ctx context.Context, batchDocs []schema.Docu
 }
 
 func (s *Store) waitForRetryDelay(ctx context.Context, delay time.Duration, attempt int, err error) error {
-	jitter := time.Duration(rand.IntN(int(s.batchConfig.RetryJitter.Milliseconds()))) * time.Millisecond //nolint:gosec
+	jitter := time.Duration(rand.IntN(int(s.batchConfig.RetryJitter.Milliseconds()))) * time.Millisecond //nolint:gosec // rand.IntN is sufficient for retry jitter
 	totalDelay := delay + jitter
 
 	s.logger.WarnContext(ctx, "Retrying embedding for batch",
@@ -925,22 +925,8 @@ func (s *Store) CreateCollection(ctx context.Context, name string, dimension int
 	s.logger.InfoContext(ctx, "Collection created successfully",
 		"name", name, "dimension", dimension, "duration", duration)
 
-	// Apply Payload Indexes if configured in store options
-	s.logger.InfoContext(ctx, "CreateCollection: Creating mandatory symbol mapping indexes")
-	for _, key := range []string{"identifier", "is_definition"} {
-		if err := s.createPayloadIndex(ctx, name, key); err != nil {
-			s.logger.WarnContext(ctx, "Failed to create mandatory payload index", "key", key, "error", err)
-		}
-	}
-
-	if len(s.options.payloadIndexes) > 0 {
-		s.logger.InfoContext(ctx, "CreateCollection: Creating additional payload indexes", "keys", s.options.payloadIndexes)
-		for _, key := range s.options.payloadIndexes {
-			if err := s.createPayloadIndex(ctx, name, key); err != nil {
-				s.logger.WarnContext(ctx, "Failed to create payload index", "key", key, "error", err)
-			}
-		}
-	}
+	// Apply Payload Indexes if configured
+	s.applyPayloadIndexes(ctx, name)
 
 	return nil
 }
@@ -1236,22 +1222,8 @@ func (s *Store) ensureCollection(ctx context.Context, collectionName string) err
 		return fmt.Errorf("failed to create qdrant collection: %w", err)
 	}
 
-	// Apply Payload Indexes if configured in store options
-	s.logger.InfoContext(ctx, "EnsureCollection: Creating mandatory symbol mapping indexes", "collection", collectionName)
-	for _, key := range []string{"identifier", "is_definition"} {
-		if err := s.createPayloadIndex(ctx, collectionName, key); err != nil {
-			s.logger.WarnContext(ctx, "Failed to create mandatory payload index", "key", key, "error", err)
-		}
-	}
-
-	if len(s.options.payloadIndexes) > 0 {
-		s.logger.InfoContext(ctx, "EnsureCollection: Creating payload indexes", "keys", s.options.payloadIndexes)
-		for _, key := range s.options.payloadIndexes {
-			if err := s.createPayloadIndex(ctx, collectionName, key); err != nil {
-				s.logger.WarnContext(ctx, "Failed to create payload index", "key", key, "error", err)
-			}
-		}
-	}
+	// Apply Payload Indexes if configured
+	s.applyPayloadIndexes(ctx, collectionName)
 
 	select {
 	case <-time.After(500 * time.Millisecond):
@@ -1272,6 +1244,24 @@ func (s *Store) createPayloadIndex(ctx context.Context, collectionName, key stri
 		Wait:           &wait,
 	})
 	return err
+}
+
+func (s *Store) applyPayloadIndexes(ctx context.Context, collectionName string) {
+	s.logger.InfoContext(ctx, "Creating mandatory symbol mapping indexes", "collection", collectionName)
+	for _, key := range []string{"identifier", "is_definition"} {
+		if err := s.createPayloadIndex(ctx, collectionName, key); err != nil {
+			s.logger.WarnContext(ctx, "Failed to create mandatory payload index", "key", key, "collection", collectionName, "error", err)
+		}
+	}
+
+	if len(s.options.payloadIndexes) > 0 {
+		s.logger.InfoContext(ctx, "Creating additional payload indexes", "collection", collectionName, "keys", s.options.payloadIndexes)
+		for _, key := range s.options.payloadIndexes {
+			if err := s.createPayloadIndex(ctx, collectionName, key); err != nil {
+				s.logger.WarnContext(ctx, "Failed to create payload index", "key", key, "collection", collectionName, "error", err)
+			}
+		}
+	}
 }
 
 func (s *Store) collectionExists(ctx context.Context, name string) (bool, error) {
@@ -1405,12 +1395,11 @@ func buildQdrantFilter(filters map[string]any) *qdrant.Filter {
 		case []any:
 			// Attempt to determine the type of elements in the slice
 			if len(v) > 0 {
-				switch v[0].(type) {
-				case string:
+				if _, ok := v[0].(string); ok {
 					strSlice := make([]string, len(v))
 					for i, elem := range v {
-						if str, ok := elem.(string); ok {
-							strSlice[i] = str
+						if s, ok := elem.(string); ok {
+							strSlice[i] = s
 						}
 					}
 					match = &qdrant.Match{MatchValue: &qdrant.Match_Keywords{Keywords: &qdrant.RepeatedStrings{Strings: strSlice}}}
