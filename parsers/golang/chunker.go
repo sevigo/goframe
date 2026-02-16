@@ -37,6 +37,11 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
 	var currentChunkStartLine = -1
 	var lastDeclEndLine int
 
+	// Track definition info for the current chunk
+	var chunkIsDefinition bool
+	var chunkSymbolType string
+	var chunkIdentifier string
+
 	// Pre-calculate the package and import block to prepend to every chunk.
 	packageAndImports := p.extractPackageAndImports(file, lines, fset)
 
@@ -61,6 +66,36 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
 			continue
 		}
 
+		// Identify if this is a definition
+		isDef := false
+		symType := ""
+		id := ""
+
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			isDef = true
+			symType = "function"
+			id = d.Name.Name
+		case *ast.GenDecl:
+			if d.Tok == token.TYPE {
+				for _, spec := range d.Specs {
+					if typeSpec, ok := spec.(*ast.TypeSpec); ok {
+						isDef = true
+						id = typeSpec.Name.Name
+						switch typeSpec.Type.(type) {
+						case *ast.StructType:
+							symType = "struct"
+						case *ast.InterfaceType:
+							symType = "interface"
+						default:
+							symType = "type"
+						}
+						break // Take the first type in a block
+					}
+				}
+			}
+		}
+
 		// Capture any gap content (comments, whitespace) between the last declaration and this one
 		gapContent := ""
 		if lastDeclEndLine > 0 && startPos.Line > lastDeclEndLine+1 {
@@ -79,17 +114,29 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
 		fullNewContent := gapContent + declContent
 		totalAddSize := len(fullNewContent)
 
+		// If this is a definition and we don't have one for the current chunk, capture it
+		if isDef && chunkIdentifier == "" {
+			chunkIsDefinition = true
+			chunkSymbolType = symType
+			chunkIdentifier = id
+		}
+
 		// 1. Check if the new declaration ITSELF is too large to fit in a standard chunk
 		if totalAddSize > targetChunkSize {
 			// Flush current chunk if any
 			if currentChunkContent.Len() > 0 {
-				chunkIdentifier := fmt.Sprintf("%s:%d-%d", path, currentChunkStartLine, lastDeclEndLine)
+				finalID := chunkIdentifier
+				if finalID == "" {
+					finalID = fmt.Sprintf("%s:%d-%d", path, currentChunkStartLine, lastDeclEndLine)
+				}
 				chunk := schema.CodeChunk{
-					Content:    packageAndImports + currentChunkContent.String(),
-					LineStart:  currentChunkStartLine,
-					LineEnd:    lastDeclEndLine,
-					Type:       "code_group",
-					Identifier: chunkIdentifier,
+					Content:      packageAndImports + currentChunkContent.String(),
+					LineStart:    currentChunkStartLine,
+					LineEnd:      lastDeclEndLine,
+					Type:         "code_group",
+					Identifier:   finalID,
+					IsDefinition: chunkIsDefinition,
+					SymbolType:   chunkSymbolType,
 					Annotations: map[string]string{
 						"type": "code_group",
 					},
@@ -97,19 +144,30 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
 				chunks = append(chunks, chunk)
 				currentChunkContent.Reset()
 				currentChunkStartLine = -1
+				chunkIsDefinition = false
+				chunkSymbolType = ""
+				chunkIdentifier = ""
 			}
 
 			// Sub-chunk the large declaration using internal recursive splitter
 			subSplits := p.recursiveSplit(fullNewContent, targetChunkSize, 200)
 
 			for i, sub := range subSplits {
-				chunkIdentifier := fmt.Sprintf("%s:%d-%d:part%d", path, startPos.Line, endPos.Line, i)
+				finalID := id
+				if finalID == "" {
+					finalID = fmt.Sprintf("%s:%d-%d:part%d", path, startPos.Line, endPos.Line, i)
+				} else if i > 0 {
+					finalID = fmt.Sprintf("%s:part%d", id, i)
+				}
+
 				chunks = append(chunks, schema.CodeChunk{
-					Content:    packageAndImports + sub,
-					LineStart:  startPos.Line, // Approximate line tracking for sub-chunks
-					LineEnd:    endPos.Line,
-					Type:       "code_group_split",
-					Identifier: chunkIdentifier,
+					Content:      packageAndImports + sub,
+					LineStart:    startPos.Line,
+					LineEnd:      endPos.Line,
+					Type:         "code_group_split",
+					Identifier:   finalID,
+					IsDefinition: isDef && i == 0, // Only flag the first part as definition
+					SymbolType:   symType,
 				})
 			}
 
@@ -119,13 +177,18 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
 
 		// 2. Normal flow: Check if adding to current chunk exceeds limit
 		if currentChunkContent.Len() > 0 && (currentChunkContent.Len()+totalAddSize > targetChunkSize) {
-			chunkIdentifier := fmt.Sprintf("%s:%d-%d", path, currentChunkStartLine, lastDeclEndLine)
+			finalID := chunkIdentifier
+			if finalID == "" {
+				finalID = fmt.Sprintf("%s:%d-%d", path, currentChunkStartLine, lastDeclEndLine)
+			}
 			chunk := schema.CodeChunk{
-				Content:    packageAndImports + currentChunkContent.String(),
-				LineStart:  currentChunkStartLine,
-				LineEnd:    lastDeclEndLine,
-				Type:       "code_group",
-				Identifier: chunkIdentifier,
+				Content:      packageAndImports + currentChunkContent.String(),
+				LineStart:    currentChunkStartLine,
+				LineEnd:      lastDeclEndLine,
+				Type:         "code_group",
+				Identifier:   finalID,
+				IsDefinition: chunkIsDefinition,
+				SymbolType:   chunkSymbolType,
 				Annotations: map[string]string{
 					"type": "code_group",
 				},
@@ -135,11 +198,20 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
 			// Reset for the next chunk.
 			currentChunkContent.Reset()
 			currentChunkStartLine = -1
+			chunkIsDefinition = false
+			chunkSymbolType = ""
+			chunkIdentifier = ""
+
+			// If the current decl is a definition, it becomes the first definition of the NEXT chunk
+			if isDef {
+				chunkIsDefinition = true
+				chunkSymbolType = symType
+				chunkIdentifier = id
+			}
 		}
 
 		// If this is the start of a new chunk, record its starting line number.
 		if currentChunkStartLine == -1 {
-			// If we have gap content, strictly speaking the chunk starts at the gap.
 			currentChunkStartLine = startPos.Line
 			if gapContent != "" && lastDeclEndLine > 0 {
 				currentChunkStartLine = lastDeclEndLine + 1
@@ -147,19 +219,24 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
 		}
 
 		currentChunkContent.WriteString(fullNewContent)
-		currentChunkContent.WriteString("\n\n") // Add vertical space between declarations for clarity.
+		currentChunkContent.WriteString("\n\n")
 		lastDeclEndLine = endPos.Line
 	}
 
 	// After the loop, add the final remaining chunk if it has any content.
 	if currentChunkContent.Len() > 0 {
-		chunkIdentifier := fmt.Sprintf("%s:%d-%d", path, currentChunkStartLine, lastDeclEndLine)
+		finalID := chunkIdentifier
+		if finalID == "" {
+			finalID = fmt.Sprintf("%s:%d-%d", path, currentChunkStartLine, lastDeclEndLine)
+		}
 		chunk := schema.CodeChunk{
-			Content:    packageAndImports + currentChunkContent.String(),
-			LineStart:  currentChunkStartLine,
-			LineEnd:    lastDeclEndLine,
-			Type:       "code_group",
-			Identifier: chunkIdentifier,
+			Content:      packageAndImports + currentChunkContent.String(),
+			LineStart:    currentChunkStartLine,
+			LineEnd:      lastDeclEndLine,
+			Type:         "code_group",
+			Identifier:   finalID,
+			IsDefinition: chunkIsDefinition,
+			SymbolType:   chunkSymbolType,
 			Annotations: map[string]string{
 				"type": "code_group",
 			},

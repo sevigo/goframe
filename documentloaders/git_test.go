@@ -25,8 +25,8 @@ func (p *fakeGoParser) CanHandle(path string, info fs.FileInfo) bool {
 }
 func (p *fakeGoParser) Chunk(content string, path string, opts *schema.CodeChunkingOptions) ([]schema.CodeChunk, error) {
 	return []schema.CodeChunk{
-		{Content: "File: src/main.go\nType: function\nIdentifier: main\n---\npackage main\n\nfunc main() {}", LineStart: 1, LineEnd: 3, Type: "function", Identifier: "main"},
-		{Content: "func helper() {}", LineStart: 5, LineEnd: 5, Type: "function", Identifier: "helper"},
+		{Content: "File: src/main.go\nType: function\nIdentifier: main\n---\npackage main\n\nfunc main() {}", LineStart: 1, LineEnd: 3, Type: "function", Identifier: "main", IsDefinition: true, SymbolType: "function"},
+		{Content: "func helper() {}", LineStart: 5, LineEnd: 5, Type: "function", Identifier: "helper", IsDefinition: true, SymbolType: "function"},
 	}, nil
 }
 func (p *fakeGoParser) ExtractMetadata(content string, path string) (schema.FileMetadata, error) {
@@ -129,10 +129,14 @@ func TestGitLoader_Load(t *testing.T) {
 			case "main":
 				assert.Contains(t, doc.PageContent, "package main\n\nfunc main() {}")
 				assert.Equal(t, "function", doc.Metadata["chunk_type"])
+				assert.Equal(t, true, doc.Metadata["is_definition"])
+				assert.Equal(t, "function", doc.Metadata["symbol_type"])
 				foundMain = true
 			case "helper":
 				assert.Equal(t, "File: src/main.go\nType: function\nIdentifier: helper\n---\nfunc helper() {}", doc.PageContent)
 				assert.Equal(t, "function", doc.Metadata["chunk_type"])
+				assert.Equal(t, true, doc.Metadata["is_definition"])
+				assert.Equal(t, "function", doc.Metadata["symbol_type"])
 				foundHelper = true
 			}
 		case "README.txt":

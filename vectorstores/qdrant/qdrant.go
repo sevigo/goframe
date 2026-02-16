@@ -926,8 +926,15 @@ func (s *Store) CreateCollection(ctx context.Context, name string, dimension int
 		"name", name, "dimension", dimension, "duration", duration)
 
 	// Apply Payload Indexes if configured in store options
+	s.logger.InfoContext(ctx, "CreateCollection: Creating mandatory symbol mapping indexes")
+	for _, key := range []string{"identifier", "is_definition"} {
+		if err := s.createPayloadIndex(ctx, name, key); err != nil {
+			s.logger.WarnContext(ctx, "Failed to create mandatory payload index", "key", key, "error", err)
+		}
+	}
+
 	if len(s.options.payloadIndexes) > 0 {
-		s.logger.InfoContext(ctx, "CreateCollection: Creating payload indexes", "keys", s.options.payloadIndexes)
+		s.logger.InfoContext(ctx, "CreateCollection: Creating additional payload indexes", "keys", s.options.payloadIndexes)
 		for _, key := range s.options.payloadIndexes {
 			if err := s.createPayloadIndex(ctx, name, key); err != nil {
 				s.logger.WarnContext(ctx, "Failed to create payload index", "key", key, "error", err)
@@ -1227,6 +1234,14 @@ func (s *Store) ensureCollection(ctx context.Context, collectionName string) err
 		}
 		s.logger.ErrorContext(ctx, "EnsureCollection: gRPC call to create collection failed", "error", err)
 		return fmt.Errorf("failed to create qdrant collection: %w", err)
+	}
+
+	// Apply Payload Indexes if configured in store options
+	s.logger.InfoContext(ctx, "EnsureCollection: Creating mandatory symbol mapping indexes", "collection", collectionName)
+	for _, key := range []string{"identifier", "is_definition"} {
+		if err := s.createPayloadIndex(ctx, collectionName, key); err != nil {
+			s.logger.WarnContext(ctx, "Failed to create mandatory payload index", "key", key, "error", err)
+		}
 	}
 
 	if len(s.options.payloadIndexes) > 0 {

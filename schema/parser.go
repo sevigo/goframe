@@ -60,6 +60,12 @@ type CodeChunk struct {
 	// FullParentText contains the complete text of the parent structure.
 	// WARNING: This can be large. Logic should truncate this before storage.
 	FullParentText string `json:"fullParentText,omitempty"`
+
+	// IsDefinition is true if this chunk represents the primary source-of-truth definition of a symbol.
+	IsDefinition bool `json:"is_definition"`
+
+	// SymbolType is the category of the symbol (e.g., struct, interface, function).
+	SymbolType string `json:"symbol_type"`
 }
 
 type CodeChunkingOptions struct {
