@@ -13,7 +13,7 @@ function getVisibility(node, parentNode = null) {
         return 'public';
     }
 
-    // FIX: Check parent for export keyword on grouped variables.
+    // Check for export on parent VariableStatement.
     if (parentNode && parentNode.kind === ts.SyntaxKind.VariableStatement) {
         if (parentNode.modifiers && parentNode.modifiers.some(m => m.kind === ts.SyntaxKind.ExportKeyword)) {
             return 'public';
@@ -60,7 +60,7 @@ function processNode(node, sourceFile, parentIdentifier = '', parentNode = null)
         return { chunks, definitions, symbols };
     }
 
-    // FIX: Get start of node *without* JSDoc to get correct line number.
+    // Skip JSDoc when calculating start line.
     const startPos = node.getStart(sourceFile, false);
     const start = sourceFile.getLineAndCharacterOfPosition(startPos);
     const end = sourceFile.getLineAndCharacterOfPosition(node.getEnd(sourceFile));
@@ -109,7 +109,7 @@ function processNode(node, sourceFile, parentIdentifier = '', parentNode = null)
                     chunkType = (declarationList.flags & ts.NodeFlags.Const) ? 'constant' : 'variable';
                     defType = chunkType;
                     identifier = nodeName = node.name.getText(sourceFile);
-                    // Flag as definition if it's a top-level declaration (has parent VariableStatement) or has significant content (like an arrow function)
+                    // Treat as definition if it's top-level or looks like a function.
                     const isTopLevel = declarationList.parent && ts.isVariableStatement(declarationList.parent);
                     const hasFunctionInitializer = node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer));
                     isDefinition = isTopLevel || hasFunctionInitializer;
@@ -127,7 +127,7 @@ function processNode(node, sourceFile, parentIdentifier = '', parentNode = null)
             isDefinition = node.body !== undefined;
             break;
         case ts.SyntaxKind.PropertyDeclaration:
-        case ts.SyntaxKind.PropertySignature: // FIX: Handle properties in interfaces
+        case ts.SyntaxKind.PropertySignature: // Interface properties
             chunkType = 'variable'; defType = 'property'; nodeName = node.name.getText(sourceFile); identifier = `${parentIdentifier}.${nodeName}`;
             break;
         case ts.SyntaxKind.Constructor:
@@ -214,7 +214,7 @@ function createParser(funcName, sourceCode, sourcePath) {
         if (funcName === 'extractMetadata') {
             let imports = [], properties = { total_functions: 0, total_classes: 0, total_methods: 0 };
 
-            // FIX: Use a recursive walker to find all nodes for accurate counts.
+            // Recursive walker for stats
             function nodeWalker(node) {
                 if (ts.isImportDeclaration(node)) imports.push(node.moduleSpecifier.getText(sourceFile).replace(/['"]/g, ''));
                 if (ts.isFunctionDeclaration(node)) properties.total_functions++;

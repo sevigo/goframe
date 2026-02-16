@@ -36,8 +36,8 @@ const (
 	expectedSHA256 = ""
 )
 
-// EnsureModelDownloaded downloads the model artifacts directly.
-// We only need the tokenizer files for sparse vector generation.
+// EnsureModelDownloaded pulls the model files into the local cache if missing.
+// We only need the tokenizers for sparse vector generation.
 func EnsureModelDownloaded(ctx context.Context) (string, error) {
 	modelName := "fast-bge-small-en-v1.5"
 	cacheDir := os.Getenv("GOFRAME_CACHE_DIR")
@@ -107,7 +107,7 @@ func downloadAndExtract(ctx context.Context, url, destination string) error {
 			return fmt.Errorf("failed to read tar: %w", err)
 		}
 
-		// Zip-Slip protection
+		// Guard against Zip-Slip
 		//nolint:gosec // Protection implemented below
 		target := filepath.Join(destination, header.Name)
 		if !strings.HasPrefix(target, filepath.Clean(destination)+string(os.PathSeparator)) {
@@ -123,7 +123,7 @@ func downloadAndExtract(ctx context.Context, url, destination string) error {
 			if err := os.MkdirAll(filepath.Dir(target), 0750); err != nil {
 				return fmt.Errorf("failed to create parent dir: %w", err)
 			}
-			// Hardcode secure permissions (0640) vs trusting tar header
+			// Use restricted permissions (0600) for cached model files
 			f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, 0600)
 			if err != nil {
 				return fmt.Errorf("failed to open file: %w", err)
@@ -160,7 +160,7 @@ func verifyChecksum(data []byte, expected string) error {
 	return nil
 }
 
-// GetTokenizer returns a singleton instance of the tokenizer.
+// GetTokenizer returns the shared tokenizer instance, initializing it if needed.
 func GetTokenizer(ctx context.Context) (*tokenizer.Tokenizer, error) {
 	vocabMu.RLock()
 	if tokenizerInstance != nil {
@@ -191,9 +191,8 @@ func GetTokenizer(ctx context.Context) (*tokenizer.Tokenizer, error) {
 	return tokenizerInstance, nil
 }
 
-// GenerateSparseVector converts text into a normalized SparseVector using Bag-of-Tokens.
-// The resulting vector is L2-normalized to unit length for consistent similarity scoring.
-// Special tokens (PAD, CLS, SEP) are filtered out to reduce noise and index size.
+// GenerateSparseVector builds a normalized BOW sparse vector from text.
+// Special tokens (PAD, CLS, SEP) are filtered to reduce noise.
 //
 // Returns error if:
 //   - Text cannot be tokenized

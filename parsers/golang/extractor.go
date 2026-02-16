@@ -281,7 +281,7 @@ func (p *GoPlugin) countMethods(file *ast.File) int {
 	return count
 }
 
-// ExtractUsedSymbols identifies potential external types/functions being used in the code.
+// ExtractUsedSymbols finds external types and functions referenced in the code.
 func (p *GoPlugin) ExtractUsedSymbols(content string) []string {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "", content, 0)
