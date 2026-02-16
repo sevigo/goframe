@@ -113,7 +113,7 @@ func (c *CodeAwareTextSplitter) splitSingleDocument(ctx context.Context, doc sch
 	// 2. Extract specific metadata (Package, Imports, and Test status)
 	extraMetadata := make(map[string]any)
 	if parser != nil {
-		if meta, err := parser.ExtractMetadata(doc.PageContent, source); err == nil {
+		if meta, metaErr := parser.ExtractMetadata(doc.PageContent, source); metaErr == nil {
 			if meta.PackageName != "" {
 				extraMetadata["package_name"] = meta.PackageName
 			}
@@ -198,7 +198,9 @@ func (c *CodeAwareTextSplitter) ChunkFileWithFileInfo(
 func (c *CodeAwareTextSplitter) generateParentID(filePath, identifier string, lineStart int) string {
 	key := fmt.Sprintf("%s:%s:%d", filePath, identifier, lineStart)
 	if id, ok := c.parentIDCache.Load(key); ok {
-		return id.(string)
+		if s, ok := id.(string); ok {
+			return s
+		}
 	}
 
 	h := sha256.New()

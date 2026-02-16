@@ -11,6 +11,9 @@ type ParserPlugin interface {
 	Chunk(content string, path string, opts *CodeChunkingOptions) ([]CodeChunk, error)
 	ExtractMetadata(content string, path string) (FileMetadata, error)
 	IsGenerated(content string, path string) bool
+	// ExtractUsedSymbols identifies potential external types/functions
+	// being used in the code that might need a definition lookup.
+	ExtractUsedSymbols(content string) []string
 }
 
 type FileMetadata struct {

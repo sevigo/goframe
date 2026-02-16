@@ -45,7 +45,8 @@ Provide only the queries, one per line, without numbers or bullets.`
 		docs, _ := r.Retriever.GetRelevantDocuments(ctx, trimmed)
 		for _, doc := range docs {
 			// Use the source/line as a unique key to deduplicate
-			key := doc.Metadata["source"].(string) + doc.PageContent
+			source, _ := doc.Metadata["source"].(string)
+			key := source + doc.PageContent
 			uniqueDocs[key] = doc
 		}
 	}

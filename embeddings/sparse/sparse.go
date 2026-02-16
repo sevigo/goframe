@@ -25,7 +25,7 @@ import (
 
 var (
 	vocabOnce         sync.Once
-	vocabErr          error
+	errVocab          error
 	tokenizerInstance *tokenizer.Tokenizer
 )
 
@@ -39,7 +39,7 @@ const (
 
 // EnsureModelDownloaded downloads the model artifacts directly.
 // We only need the tokenizer files for sparse vector generation.
-func EnsureModelDownloaded() (string, error) {
+func EnsureModelDownloaded(ctx context.Context) (string, error) {
 	modelName := "fast-bge-small-en-v1.5"
 	cacheDir := os.Getenv("GOFRAME_CACHE_DIR")
 	if cacheDir == "" {
@@ -55,18 +55,24 @@ func EnsureModelDownloaded() (string, error) {
 		return modelPath, nil
 	}
 
-	if err := downloadAndExtract(modelURL, cacheDir); err != nil {
+	if err := downloadAndExtract(ctx, modelURL, cacheDir); err != nil {
 		return "", fmt.Errorf("failed to download and extract model: %w", err)
 	}
 
 	return modelPath, nil
 }
 
-func downloadAndExtract(url, destination string) error {
+func downloadAndExtract(ctx context.Context, url, destination string) error {
 	client := &http.Client{
 		Timeout: 5 * time.Minute,
 	}
-	resp, err := client.Get(url)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to download model: %w", err)
 	}
@@ -81,8 +87,8 @@ func downloadAndExtract(url, destination string) error {
 		return fmt.Errorf("failed to read model body: %w", err)
 	}
 
-	if err := verifyChecksum(body, expectedSHA256); err != nil {
-		return err
+	if bodyErr := verifyChecksum(body, expectedSHA256); bodyErr != nil {
+		return bodyErr
 	}
 
 	gzr, err := gzip.NewReader(bytes.NewReader(body))
@@ -102,25 +108,35 @@ func downloadAndExtract(url, destination string) error {
 			return fmt.Errorf("failed to read tar: %w", err)
 		}
 
+		// Zip-Slip protection
+		//nolint:gosec // Protection implemented below
 		target := filepath.Join(destination, header.Name)
+		if !strings.HasPrefix(target, filepath.Clean(destination)+string(os.PathSeparator)) {
+			return fmt.Errorf("invalid file path in tar: %s", header.Name)
+		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0755); err != nil {
+			if err := os.MkdirAll(target, 0750); err != nil {
 				return fmt.Errorf("failed to create dir: %w", err)
 			}
 		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(target), 0750); err != nil {
 				return fmt.Errorf("failed to create parent dir: %w", err)
 			}
 			f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, os.FileMode(header.Mode))
 			if err != nil {
 				return fmt.Errorf("failed to open file: %w", err)
 			}
-			_, copyErr := io.Copy(f, tr)
-			f.Close()
-			if copyErr != nil {
+			// G110: Potential DoS vulnerability via decompression bomb.
+			// Limit extraction to 100MB per file for this model.
+			_, copyErr := io.CopyN(f, tr, 100*1024*1024)
+			closeErr := f.Close()
+			if copyErr != nil && !errors.Is(copyErr, io.EOF) {
 				return fmt.Errorf("failed to extract file: %w", copyErr)
+			}
+			if closeErr != nil {
+				return fmt.Errorf("failed to close file: %w", closeErr)
 			}
 		}
 	}
@@ -141,25 +157,25 @@ func verifyChecksum(data []byte, expected string) error {
 }
 
 // GetTokenizer returns a singleton instance of the tokenizer.
-func GetTokenizer() (*tokenizer.Tokenizer, error) {
+func GetTokenizer(ctx context.Context) (*tokenizer.Tokenizer, error) {
 	vocabOnce.Do(func() {
-		modelPath, err := EnsureModelDownloaded()
+		modelPath, err := EnsureModelDownloaded(ctx)
 		if err != nil {
-			vocabErr = err
+			errVocab = err
 			return
 		}
 
 		tokenizerPath := filepath.Join(modelPath, "tokenizer.json")
 		tk, err := pretrained.FromFile(tokenizerPath)
 		if err != nil {
-			vocabErr = fmt.Errorf("failed to load tokenizer from %s: %w", tokenizerPath, err)
+			errVocab = fmt.Errorf("failed to load tokenizer from %s: %w", tokenizerPath, err)
 			return
 		}
 		tokenizerInstance = tk
 	})
 
-	if vocabErr != nil {
-		return nil, vocabErr
+	if errVocab != nil {
+		return nil, errVocab
 	}
 	if tokenizerInstance == nil {
 		return nil, errors.New("tokenizer initialization failed")
@@ -180,7 +196,7 @@ func GenerateSparseVector(ctx context.Context, text string) (*schema.SparseVecto
 		return nil, errors.New("text cannot be empty")
 	}
 
-	tk, err := GetTokenizer()
+	tk, err := GetTokenizer(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tokenizer: %w", err)
 	}

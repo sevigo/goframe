@@ -326,6 +326,11 @@ func (s *Store) GetBatchConfig() BatchConfig {
 	return s.batchConfig
 }
 
+// GetEmbedder returns the embedder used by the store.
+func (s *Store) GetEmbedder() embeddings.Embedder {
+	return s.embedder
+}
+
 func (s *Store) AddDocuments(ctx context.Context, docs []schema.Document, options ...vectorstores.Option) ([]string, error) {
 	return s.AddDocumentsBatch(ctx, docs, nil, options...)
 }

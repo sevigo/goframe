@@ -103,13 +103,20 @@ function processNode(node, sourceFile, parentIdentifier = '', parentNode = null)
             }
             return { chunks, definitions, symbols };
         case ts.SyntaxKind.VariableDeclaration:
-            if (node.parent.kind === ts.SyntaxKind.VariableStatement && node.name.kind === ts.SyntaxKind.Identifier) {
-                chunkType = (node.parent.flags & ts.NodeFlags.Const) ? 'constant' : 'variable';
-                defType = chunkType; identifier = nodeName = node.name.getText(sourceFile);
-                isDefinition = true;
-            } else {
-                chunkType = 'variable'; defType = 'variable'; identifier = nodeName = node.name.getText(sourceFile);
-                isDefinition = false;
+            {
+                const declarationList = node.parent;
+                if (declarationList && declarationList.kind === ts.SyntaxKind.VariableDeclarationList) {
+                    chunkType = (declarationList.flags & ts.NodeFlags.Const) ? 'constant' : 'variable';
+                    defType = chunkType;
+                    identifier = nodeName = node.name.getText(sourceFile);
+                    // Flag as definition if it's a top-level declaration or has significant content (like an arrow function)
+                    isDefinition = true;
+                } else {
+                    chunkType = 'variable';
+                    defType = 'variable';
+                    identifier = nodeName = node.name.getText(sourceFile);
+                    isDefinition = false;
+                }
             }
             break;
         case ts.SyntaxKind.MethodDeclaration:

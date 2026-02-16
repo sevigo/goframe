@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/url"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/sevigo/goframe/embeddings"
@@ -20,59 +19,68 @@ import (
 func main() {
 	ctx := context.Background()
 
-	// 1. Initialize Ollama for Dense Embeddings
-	// Ensure you have ollama running locally or set OLLAMA_HOST
+	// 1. Initialize Embedder
+	embedder, err := initEmbedder()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// 2. Initialize Qdrant Store
+	collectionName := "test-hybrid-search"
+	store, err := initStore(embedder, collectionName)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// 3. Prepare and Index Documents
+	if err := indexDocuments(ctx, store, collectionName); err != nil {
+		log.Fatal(err)
+	}
+
+	// 4. Perform Hybrid Search
+	if err := performSearch(ctx, store, "CalculateTax"); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func initEmbedder() (embeddings.Embedder, error) {
 	ollamaHost := os.Getenv("OLLAMA_HOST")
 	if ollamaHost == "" {
 		ollamaHost = "http://localhost:11434"
 	}
-	modelName := "nomic-embed-text" // A good default for embeddings
+	modelName := "nomic-embed-text"
 
 	client, err := ollama.New(
 		ollama.WithServerURL(ollamaHost),
 		ollama.WithModel(modelName),
 	)
 	if err != nil {
-		log.Fatalf("Failed to create ollama client: %v", err)
+		return nil, fmt.Errorf("failed to create ollama client: %w", err)
 	}
 
-	embedder, err := embeddings.NewEmbedder(client)
-	if err != nil {
-		log.Fatalf("Failed to create embedder: %v", err)
-	}
+	return embeddings.NewEmbedder(client)
+}
 
-	// 2. Initialize Qdrant with Hybrid Support
-	collectionName := "test-hybrid-search"
-
+func initStore(embedder embeddings.Embedder, collectionName string) (vectorstores.VectorStore, error) {
 	qdrantURL, err := url.Parse("http://localhost:6334")
 	if err != nil {
-		log.Fatalf("Failed to parse Qdrant URL: %v", err)
+		return nil, fmt.Errorf("failed to parse Qdrant URL: %w", err)
 	}
 
-	store, err := qdrant.New(
+	return qdrant.New(
 		qdrant.WithCollectionName(collectionName),
-		qdrant.WithURL(*qdrantURL), // Pass dereferenced URL struct
+		qdrant.WithURL(*qdrantURL),
 		qdrant.WithEmbedder(embedder),
 		qdrant.WithSparseVector("bow_sparse"),
 	)
-	if err != nil {
-		log.Fatalf("Failed to create Qdrant store: %v", err)
-	}
+}
 
-	// Clean up previous runs
-	// In a real app you might not want to check this way, but for a test it's fine.
-	// We'll just define a unique collection name or assume we can recreate.
-	// The qdrant.New call typically ensures the collection exists.
-	// Let's verify connection first by trying to index something.
-
-	// 3. Prepare Documents
-	// Clean up previous runs
+func indexDocuments(ctx context.Context, store vectorstores.VectorStore, collectionName string) error {
 	fmt.Printf("Cleaning up collection %s...\n", collectionName)
 	if err := store.DeleteCollection(ctx, collectionName); err != nil {
-		log.Printf("Warning: could not delete existing collection (this is normal if it doesn't exist): %v", err)
+		log.Printf("Warning: could not delete existing collection: %v", err)
 	}
 
-	// We'll create documents where dense search might be ambiguous but sparse (keyword) is precise.
 	texts := []string{
 		"func CalculateTax(income float64) float64 { return income * 0.2 }",
 		"func CalculateRebate(income float64) float64 { return income * 0.05 }",
@@ -82,7 +90,6 @@ func main() {
 
 	var docs []schema.Document
 	for _, text := range texts {
-		// Generate Sparse Vector
 		sparseVec, err := sparse.GenerateSparseVector(ctx, text)
 		if err != nil {
 			log.Printf("Warning: failed to generate sparse vector for '%s': %v", text, err)
@@ -96,75 +103,34 @@ func main() {
 		docs = append(docs, doc)
 	}
 
-	// 4. Index Documents
 	fmt.Println("Indexing documents...")
-	ids, err := store.AddDocuments(ctx, docs)
-	if err != nil {
-		log.Fatalf("Failed to add documents: %v", err)
+	if _, err := store.AddDocuments(ctx, docs); err != nil {
+		return fmt.Errorf("failed to add documents: %w", err)
 	}
-	fmt.Printf("Successfully indexed %d documents\n", len(ids))
 
-	// Allow some time for Qdrant to index (usually near-instant for small batches but good practice)
 	time.Sleep(1 * time.Second)
+	return nil
+}
 
-	// 5. Perform Hybrid Search
-	// Query: "CalculateTax" - should strongly match the first document via sparse vector (exact keyword)
-	query := "CalculateTax"
+func performSearch(ctx context.Context, store vectorstores.VectorStore, query string) error {
 	fmt.Printf("\nPerforming Hybrid Search for query: '%s'\n", query)
 
-	// Generate sparse vector for the query
 	querySparseVec, err := sparse.GenerateSparseVector(ctx, query)
 	if err != nil {
-		log.Fatalf("Failed to generate sparse query: %v", err)
+		return fmt.Errorf("failed to generate sparse query: %w", err)
 	}
 
-	// Search
 	results, err := store.SimilaritySearch(ctx, query, 3,
 		vectorstores.WithSparseQuery(querySparseVec),
 	)
 	if err != nil {
-		log.Fatalf("Search failed: %v", err)
+		return fmt.Errorf("search failed: %w", err)
 	}
 
-	// 6. Verify Results
 	fmt.Println("Results:")
 	for i, res := range results {
 		fmt.Printf("%d. %s\n", i+1, res.PageContent)
 	}
 
-	// Demonstrate SimilaritySearchWithScores
-	fmt.Printf("\nPerforming Hybrid Search with Scores for query: '%s'\n", query)
-	resultsWithScore, err := store.SimilaritySearchWithScores(ctx, query, 3,
-		vectorstores.WithSparseQuery(querySparseVec),
-	)
-	if err != nil {
-		log.Fatalf("Scored search failed: %v", err)
-	}
-
-	for i, res := range resultsWithScore {
-		fmt.Printf("%d. [Score: %.4f] %s\n", i+1, res.Score, res.Document.PageContent)
-
-		if parentID, ok := res.Document.Metadata["parent_id"].(string); ok && parentID != "" {
-			displayID := parentID
-			if len(displayID) > 8 {
-				displayID = displayID[:8]
-			}
-			fmt.Printf("   [ParentID: %s]\n", displayID)
-		}
-
-		if fullParent, ok := res.Document.Metadata["full_parent_text"].(string); ok && fullParent != "" {
-			displayParent := strings.ReplaceAll(fullParent, "\n", " ")
-			if len(displayParent) > 50 {
-				displayParent = displayParent[:50] + "..."
-			}
-			fmt.Printf("   [FullParent: %s]\n", displayParent)
-		}
-	}
-
-	// Basic assertion
-	if len(results) > 0 && results[0].PageContent == texts[0] {
-		fmt.Println("\n✅ SUCCESS: Top result matches expected document.")
-	} else {
-		fmt.Println("\n❌ FAILURE: Top result did not match expected document.")
-	}
+	return nil
 }

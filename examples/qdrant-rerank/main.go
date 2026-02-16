@@ -73,8 +73,13 @@ func main() {
 	}
 
 	logger.Info("Ingesting documents...")
-	vStore.DeleteCollection(ctx, collectionName)
-	vStore.AddDocuments(ctx, docs)
+	if delErr := vStore.DeleteCollection(ctx, collectionName); delErr != nil {
+		logger.Warn("Could not delete collection", "error", delErr)
+	}
+	if _, addErr := vStore.AddDocuments(ctx, docs); addErr != nil {
+		logger.Error("Failed to add documents", "error", addErr)
+		return
+	}
 
 	// 4. Setup Reranking Retriever
 	logger.Info("Setting up RerankingRetriever")

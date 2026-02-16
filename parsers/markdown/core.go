@@ -72,3 +72,7 @@ func (p *MarkdownPlugin) CanHandle(path string, info fs.FileInfo) bool {
 func (p *MarkdownPlugin) IsGenerated(content string, path string) bool {
 	return false
 }
+
+func (p *MarkdownPlugin) ExtractUsedSymbols(content string) []string {
+	return nil
+}

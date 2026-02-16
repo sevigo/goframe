@@ -43,3 +43,7 @@ func (p *JSONPlugin) CanHandle(path string, info fs.FileInfo) bool {
 func (p *JSONPlugin) IsGenerated(content string, path string) bool {
 	return false
 }
+
+func (p *JSONPlugin) ExtractUsedSymbols(content string) []string {
+	return nil
+}

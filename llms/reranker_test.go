@@ -18,11 +18,12 @@ type scorerLLM struct {
 func (s *scorerLLM) GenerateContent(ctx context.Context, messages []schema.MessageContent, options ...llms.CallOption) (*schema.ContentResponse, error) {
 	prompt := messages[0].GetTextContent()
 	score := 0
-	if strings.Contains(prompt, "doc 1") {
+	switch {
+	case strings.Contains(prompt, "doc 1"):
 		score = 8
-	} else if strings.Contains(prompt, "doc 2") {
+	case strings.Contains(prompt, "doc 2"):
 		score = 2
-	} else if strings.Contains(prompt, "doc 3") {
+	case strings.Contains(prompt, "doc 3"):
 		score = 9
 	}
 

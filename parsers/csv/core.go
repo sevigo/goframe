@@ -44,3 +44,7 @@ func (p *CSVPlugin) CanHandle(path string, info fs.FileInfo) bool {
 func (p *CSVPlugin) IsGenerated(content string, path string) bool {
 	return false
 }
+
+func (p *CSVPlugin) ExtractUsedSymbols(content string) []string {
+	return nil
+}
