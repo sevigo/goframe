@@ -44,3 +44,7 @@ func (p *YamlPlugin) CanHandle(path string, info fs.FileInfo) bool {
 func (p *YamlPlugin) IsGenerated(content string, path string) bool {
 	return false
 }
+
+func (p *YamlPlugin) ExtractUsedSymbols(content string) []string {
+	return nil
+}

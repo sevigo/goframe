@@ -565,3 +565,7 @@ func (p *ProtobufParser) IsGenerated(content string, path string) bool {
 	}
 	return false
 }
+
+func (p *ProtobufParser) ExtractUsedSymbols(content string) []string {
+	return nil
+}

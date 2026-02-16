@@ -13,7 +13,7 @@ function getVisibility(node, parentNode = null) {
         return 'public';
     }
 
-    // FIX: Check parent for export keyword on grouped variables.
+    // Check for export on parent VariableStatement.
     if (parentNode && parentNode.kind === ts.SyntaxKind.VariableStatement) {
         if (parentNode.modifiers && parentNode.modifiers.some(m => m.kind === ts.SyntaxKind.ExportKeyword)) {
             return 'public';
@@ -60,7 +60,7 @@ function processNode(node, sourceFile, parentIdentifier = '', parentNode = null)
         return { chunks, definitions, symbols };
     }
 
-    // FIX: Get start of node *without* JSDoc to get correct line number.
+    // Skip JSDoc when calculating start line.
     const startPos = node.getStart(sourceFile, false);
     const start = sourceFile.getLineAndCharacterOfPosition(startPos);
     const end = sourceFile.getLineAndCharacterOfPosition(node.getEnd(sourceFile));
@@ -103,13 +103,22 @@ function processNode(node, sourceFile, parentIdentifier = '', parentNode = null)
             }
             return { chunks, definitions, symbols };
         case ts.SyntaxKind.VariableDeclaration:
-            if (node.parent.kind === ts.SyntaxKind.VariableStatement && node.name.kind === ts.SyntaxKind.Identifier) {
-                chunkType = (node.parent.flags & ts.NodeFlags.Const) ? 'constant' : 'variable';
-                defType = chunkType; identifier = nodeName = node.name.getText(sourceFile);
-                isDefinition = true;
-            } else {
-                chunkType = 'variable'; defType = 'variable'; identifier = nodeName = node.name.getText(sourceFile);
-                isDefinition = false;
+            {
+                const declarationList = node.parent;
+                if (declarationList && declarationList.kind === ts.SyntaxKind.VariableDeclarationList) {
+                    chunkType = (declarationList.flags & ts.NodeFlags.Const) ? 'constant' : 'variable';
+                    defType = chunkType;
+                    identifier = nodeName = node.name.getText(sourceFile);
+                    // Treat as definition if it's top-level or looks like a function.
+                    const isTopLevel = declarationList.parent && ts.isVariableStatement(declarationList.parent);
+                    const hasFunctionInitializer = node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer));
+                    isDefinition = isTopLevel || hasFunctionInitializer;
+                } else {
+                    chunkType = 'variable';
+                    defType = 'variable';
+                    identifier = nodeName = node.name.getText(sourceFile);
+                    isDefinition = false;
+                }
             }
             break;
         case ts.SyntaxKind.MethodDeclaration:
@@ -118,7 +127,7 @@ function processNode(node, sourceFile, parentIdentifier = '', parentNode = null)
             isDefinition = node.body !== undefined;
             break;
         case ts.SyntaxKind.PropertyDeclaration:
-        case ts.SyntaxKind.PropertySignature: // FIX: Handle properties in interfaces
+        case ts.SyntaxKind.PropertySignature: // Interface properties
             chunkType = 'variable'; defType = 'property'; nodeName = node.name.getText(sourceFile); identifier = `${parentIdentifier}.${nodeName}`;
             break;
         case ts.SyntaxKind.Constructor:
@@ -152,6 +161,38 @@ function processNode(node, sourceFile, parentIdentifier = '', parentNode = null)
     return { chunks, definitions, symbols };
 }
 
+function extractUsedSymbols(sourceCode, sourcePath) {
+    try {
+        if (!sourceCode || sourceCode.trim() === '') return JSON.stringify([]);
+        const sourceFile = ts.createSourceFile(sourcePath, sourceCode, ts.ScriptTarget.Latest, true);
+        const symbols = new Set();
+
+        function walk(node) {
+            if (ts.isIdentifier(node)) {
+                const name = node.getText(sourceFile);
+                if (name && name.length >= 2) {
+                    const parent = node.parent;
+                    if (parent && ts.isPropertyAccessExpression(parent) && parent.name === node) {
+                        const expression = parent.expression.getText(sourceFile);
+                        if (/^[A-Z]/.test(expression)) {
+                            symbols.add(`${expression}.${name}`);
+                        } else {
+                            symbols.add(name);
+                        }
+                    } else if (parent && (ts.isTypeReferenceNode(parent) || ts.isNewExpression(parent) || ts.isCallExpression(parent))) {
+                        symbols.add(name);
+                    }
+                }
+            }
+            ts.forEachChild(node, walk);
+        }
+        walk(sourceFile);
+        return JSON.stringify(Array.from(symbols));
+    } catch (e) {
+        return JSON.stringify({ error: e.message });
+    }
+}
+
 function createParser(funcName, sourceCode, sourcePath) {
     try {
         if (!sourceCode || sourceCode.trim() === '') {
@@ -173,7 +214,7 @@ function createParser(funcName, sourceCode, sourcePath) {
         if (funcName === 'extractMetadata') {
             let imports = [], properties = { total_functions: 0, total_classes: 0, total_methods: 0 };
 
-            // FIX: Use a recursive walker to find all nodes for accurate counts.
+            // Recursive walker for stats
             function nodeWalker(node) {
                 if (ts.isImportDeclaration(node)) imports.push(node.moduleSpecifier.getText(sourceFile).replace(/['"]/g, ''));
                 if (ts.isFunctionDeclaration(node)) properties.total_functions++;

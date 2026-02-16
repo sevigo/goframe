@@ -40,3 +40,7 @@ func (p *PDFPlugin) CanHandle(path string, info fs.FileInfo) bool {
 func (p *PDFPlugin) IsGenerated(content string, path string) bool {
 	return false
 }
+
+func (p *PDFPlugin) ExtractUsedSymbols(content string) []string {
+	return nil
+}

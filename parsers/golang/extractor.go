@@ -280,3 +280,73 @@ func (p *GoPlugin) countMethods(file *ast.File) int {
 	}
 	return count
 }
+
+// ExtractUsedSymbols finds external types and functions referenced in the code.
+func (p *GoPlugin) ExtractUsedSymbols(content string) []string {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "", content, 0)
+	if err != nil {
+		return nil
+	}
+
+	symbols := make(map[string]struct{})
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.Ident:
+			if shouldKeepIdentifier(x) {
+				symbols[x.Name] = struct{}{}
+			}
+		case *ast.SelectorExpr:
+			symbols[flattenSelector(x)] = struct{}{}
+		}
+		return true
+	})
+
+	result := make([]string, 0, len(symbols))
+	for s := range symbols {
+		result = append(result, s)
+	}
+	return result
+}
+
+var goBuiltins = map[string]struct{}{
+	"append": {}, "cap": {}, "close": {}, "complex": {}, "copy": {}, "delete": {}, "imag": {}, "len": {},
+	"make": {}, "new": {}, "panic": {}, "print": {}, "println": {}, "real": {}, "recover": {},
+	"bool": {}, "byte": {}, "complex64": {}, "complex128": {}, "error": {}, "float32": {}, "float64": {},
+	"int": {}, "int8": {}, "int16": {}, "int32": {}, "int64": {}, "rune": {}, "string": {},
+	"uint": {}, "uint8": {}, "uint16": {}, "uint32": {}, "uint64": {}, "uintptr": {},
+	"nil": {}, "true": {}, "false": {}, "iota": {}, "any": {}, "comparable": {},
+}
+
+func flattenSelector(x *ast.SelectorExpr) string {
+	parts := []string{x.Sel.Name}
+	var curr ast.Node = x.X
+	for {
+		if s, ok := curr.(*ast.SelectorExpr); ok {
+			parts = append([]string{s.Sel.Name}, parts...)
+			curr = s.X
+		} else if id, ok := curr.(*ast.Ident); ok {
+			parts = append([]string{id.Name}, parts...)
+			break
+		} else {
+			break
+		}
+	}
+	return strings.Join(parts, ".")
+}
+
+func shouldKeepIdentifier(id *ast.Ident) bool {
+	if id.Obj != nil {
+		// If it's defined in the same file, it's not an "external" symbol we're looking for
+		return false
+	}
+	name := id.Name
+	if len(name) == 0 {
+		return false
+	}
+	if _, ok := goBuiltins[name]; ok {
+		return false
+	}
+	// Most Go symbols we care about (types, functions) are capitalized
+	return len(name) > 0 && name[0] >= 'A' && name[0] <= 'Z'
+}

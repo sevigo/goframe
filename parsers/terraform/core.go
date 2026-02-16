@@ -43,3 +43,8 @@ func (p *TerraformPlugin) CanHandle(path string, info fs.FileInfo) bool {
 func (p *TerraformPlugin) IsGenerated(content string, path string) bool {
 	return false
 }
+
+func (p *TerraformPlugin) ExtractUsedSymbols(content string) []string {
+	// TODO: Implement more robust HCL parsing
+	return nil
+}

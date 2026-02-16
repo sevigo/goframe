@@ -129,7 +129,9 @@ func (r *LLMReranker) scoreDocument(ctx context.Context, query string, doc schem
 			data[k] = v
 		}
 		if _, ok := data["Source"]; !ok {
-			data["Source"], _ = doc.Metadata["source"]
+			if source, exists := doc.Metadata["source"]; exists {
+				data["Source"] = source
+			}
 		}
 
 		if err := r.template.Execute(&buf, data); err == nil {

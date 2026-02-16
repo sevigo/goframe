@@ -190,3 +190,44 @@ func (p *Parser) IsGenerated(content string, path string) bool {
 	}
 	return false
 }
+
+// ExtractUsedSymbols identifies potential external types/functions being used in the code.
+func (p *Parser) ExtractUsedSymbols(content string) []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	callable, ok := goja.AssertFunction(p.vm.Get("extractUsedSymbols"))
+	if !ok {
+		p.logger.Error("extractUsedSymbols is not a function in JS runtime")
+		return nil
+	}
+
+	result, err := callable(goja.Undefined(), p.vm.ToValue(content), p.vm.ToValue("temp.ts"))
+	if err != nil {
+		p.logger.Error("failed to execute extractUsedSymbols script", "error", err)
+		return nil
+	}
+
+	resultStr := result.String()
+
+	var response struct {
+		Error   string   `json:"error"`
+		Symbols []string `json:"symbols"`
+	}
+
+	// Try to unmarshal as direct array first (original behavior)
+	if err := json.Unmarshal([]byte(resultStr), &response.Symbols); err != nil {
+		// If failure, try to unmarshal as error object
+		if err := json.Unmarshal([]byte(resultStr), &response); err != nil {
+			p.logger.Error("failed to unmarshal symbols from JS runtime", "error", err)
+			return nil
+		}
+	}
+
+	if response.Error != "" {
+		p.logger.Error("javascript parser error", "error", response.Error)
+		return nil
+	}
+
+	return response.Symbols
+}

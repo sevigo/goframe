@@ -66,27 +66,32 @@ func New(opts ...Option) (*LLM, error) {
 	}
 
 	if o.apiKey != "" {
-		httpClient = &http.Client{
-			Transport: &authTransport{
-				base:   httpClient.Transport,
-				apiKey: o.apiKey,
-			},
-			Timeout: httpClient.Timeout,
+		at := &authTransport{
+			base:   httpClient.Transport,
+			apiKey: o.apiKey,
 		}
-		if httpClient.Transport.(*authTransport).base == nil {
+		httpClient = &http.Client{
+			Transport: at,
+			Timeout:   httpClient.Timeout,
+		}
+		if at.base == nil {
 			// Create a specialized transport for high concurrency
-			t := http.DefaultTransport.(*http.Transport).Clone()
-			t.MaxIdleConns = 100
-			t.MaxIdleConnsPerHost = 20 // Optimize for concurrent ingestion (4-8 workers)
-			httpClient.Transport.(*authTransport).base = t
+			if t, ok := http.DefaultTransport.(*http.Transport); ok {
+				newTransport := t.Clone()
+				newTransport.MaxIdleConns = 100
+				newTransport.MaxIdleConnsPerHost = 20 // Optimize for concurrent ingestion (4-8 workers)
+				at.base = newTransport
+			}
 		}
 		slog.Debug("Ollama client initialized with API key", "prefix", o.apiKey[:4]+"...")
 	} else if httpClient.Transport == nil {
 		// Optimize default transport if no API key but default client
-		t := http.DefaultTransport.(*http.Transport).Clone()
-		t.MaxIdleConns = 100
-		t.MaxIdleConnsPerHost = 20
-		httpClient.Transport = t
+		if t, ok := http.DefaultTransport.(*http.Transport); ok {
+			newTransport := t.Clone()
+			newTransport.MaxIdleConns = 100
+			newTransport.MaxIdleConnsPerHost = 20
+			httpClient.Transport = newTransport
+		}
 	}
 
 	client := api.NewClient(serverURL, httpClient)

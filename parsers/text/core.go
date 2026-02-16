@@ -63,3 +63,7 @@ func (p *TextPlugin) CanHandle(path string, info fs.FileInfo) bool {
 func (p *TextPlugin) IsGenerated(content string, path string) bool {
 	return false
 }
+
+func (p *TextPlugin) ExtractUsedSymbols(content string) []string {
+	return nil
+}

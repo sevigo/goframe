@@ -34,6 +34,7 @@ func (p *fakeGoParser) ExtractMetadata(content string, path string) (schema.File
 	return schema.FileMetadata{}, nil
 }
 func (p *fakeGoParser) IsGenerated(content string, path string) bool { return false }
+func (p *fakeGoParser) ExtractUsedSymbols(string) []string           { return nil }
 
 type fakeTextParser struct{}
 
@@ -51,6 +52,7 @@ func (p *fakeTextParser) ExtractMetadata(content string, path string) (schema.Fi
 	return schema.FileMetadata{}, nil
 }
 func (p *fakeTextParser) IsGenerated(content string, path string) bool { return false }
+func (p *fakeTextParser) ExtractUsedSymbols(string) []string           { return nil }
 
 type fakeParserRegistry struct {
 	goParser   schema.ParserPlugin
