@@ -319,17 +319,20 @@ var goBuiltins = map[string]struct{}{
 }
 
 func flattenSelector(x *ast.SelectorExpr) string {
-	left := ""
-	switch t := x.X.(type) {
-	case *ast.Ident:
-		left = t.Name
-	case *ast.SelectorExpr:
-		left = flattenSelector(t)
+	parts := []string{x.Sel.Name}
+	var curr ast.Node = x.X
+	for {
+		if s, ok := curr.(*ast.SelectorExpr); ok {
+			parts = append([]string{s.Sel.Name}, parts...)
+			curr = s.X
+		} else if id, ok := curr.(*ast.Ident); ok {
+			parts = append([]string{id.Name}, parts...)
+			break
+		} else {
+			break
+		}
 	}
-	if left == "" {
-		return x.Sel.Name
-	}
-	return left + "." + x.Sel.Name
+	return strings.Join(parts, ".")
 }
 
 func shouldKeepIdentifier(id *ast.Ident) bool {

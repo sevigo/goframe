@@ -24,8 +24,7 @@ import (
 )
 
 var (
-	vocabOnce         sync.Once
-	errVocab          error
+	vocabMu           sync.RWMutex
 	tokenizerInstance *tokenizer.Tokenizer
 )
 
@@ -124,7 +123,8 @@ func downloadAndExtract(ctx context.Context, url, destination string) error {
 			if err := os.MkdirAll(filepath.Dir(target), 0750); err != nil {
 				return fmt.Errorf("failed to create parent dir: %w", err)
 			}
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, os.FileMode(header.Mode))
+			// Hardcode secure permissions (0640) vs trusting tar header
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, 0600)
 			if err != nil {
 				return fmt.Errorf("failed to open file: %w", err)
 			}
@@ -162,28 +162,32 @@ func verifyChecksum(data []byte, expected string) error {
 
 // GetTokenizer returns a singleton instance of the tokenizer.
 func GetTokenizer(ctx context.Context) (*tokenizer.Tokenizer, error) {
-	vocabOnce.Do(func() {
-		modelPath, err := EnsureModelDownloaded(ctx)
-		if err != nil {
-			errVocab = err
-			return
-		}
-
-		tokenizerPath := filepath.Join(modelPath, "tokenizer.json")
-		tk, err := pretrained.FromFile(tokenizerPath)
-		if err != nil {
-			errVocab = fmt.Errorf("failed to load tokenizer from %s: %w", tokenizerPath, err)
-			return
-		}
-		tokenizerInstance = tk
-	})
-
-	if errVocab != nil {
-		return nil, errVocab
+	vocabMu.RLock()
+	if tokenizerInstance != nil {
+		defer vocabMu.RUnlock()
+		return tokenizerInstance, nil
 	}
-	if tokenizerInstance == nil {
-		return nil, errors.New("tokenizer initialization failed")
+	vocabMu.RUnlock()
+
+	vocabMu.Lock()
+	defer vocabMu.Unlock()
+
+	// Double-check after acquiring write lock
+	if tokenizerInstance != nil {
+		return tokenizerInstance, nil
 	}
+
+	modelPath, err := EnsureModelDownloaded(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	tokenizerPath := filepath.Join(modelPath, "tokenizer.json")
+	tk, err := pretrained.FromFile(tokenizerPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load tokenizer from %s: %w", tokenizerPath, err)
+	}
+	tokenizerInstance = tk
 	return tokenizerInstance, nil
 }
 

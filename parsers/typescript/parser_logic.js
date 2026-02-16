@@ -170,7 +170,7 @@ function extractUsedSymbols(sourceCode, sourcePath) {
         function walk(node) {
             if (ts.isIdentifier(node)) {
                 const name = node.getText(sourceFile);
-                if (name && /^[A-Z]/.test(name)) {
+                if (name && name.length >= 2) {
                     const parent = node.parent;
                     if (parent && ts.isPropertyAccessExpression(parent) && parent.name === node) {
                         const expression = parent.expression.getText(sourceFile);
