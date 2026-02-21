@@ -52,87 +52,89 @@ func (c *CodeAwareTextSplitter) buildEnrichedContent(
 		return truncatedContent + "\n// ... (content truncated)"
 	}
 
-	var contentBuilder strings.Builder
-	contentBuilder.WriteString(chunk.Content)
 	remainingTokens := maxTokens - mainContentTokens
 
-	if chunk.ParentContext != "" && remainingTokens > 50 {
-		remainingTokens = c.addParentContext(&contentBuilder, chunk.ParentContext, ctx, modelName, remainingTokens)
-	}
+	// Collect enrichment parts in priority order: Header > Parent > Overlap > Content
+	// But we build them carefully based on remaining tokens.
+	var header, parentCtx, overlap string
 
+	// 1. Prepare Header (high priority)
 	if remainingTokens > 30 {
 		fileHeader := c.buildFileContextHeader(metadata)
-		remainingTokens = c.addFileHeader(&contentBuilder, fileHeader, ctx, modelName, remainingTokens)
+		headerTokens := c.getTokenCount(ctx, modelName, fileHeader)
+		if headerTokens <= remainingTokens {
+			header = fileHeader
+			remainingTokens -= headerTokens
+		}
 	}
 
-	// Add strategic overlap
+	// 2. Prepare Parent Context
+	if chunk.ParentContext != "" && remainingTokens > 50 {
+		parentCtx, remainingTokens = c.getValidParentContext(ctx, chunk.ParentContext, modelName, remainingTokens)
+	}
+
+	// 3. Prepare Strategic Overlap
 	if len(parentChunks) > 0 && remainingTokens > 20 {
-		c.addStrategicOverlap(&contentBuilder, parentChunks, ctx, modelName, remainingTokens)
+		overlap, _ = c.getValidStrategicOverlap(ctx, parentChunks, modelName, remainingTokens)
 	}
 
-	return contentBuilder.String()
+	// Assemble final content: Header -> Parent -> Overlap -> Content
+	var parts []string
+	if header != "" {
+		parts = append(parts, header)
+	}
+	if parentCtx != "" {
+		parts = append(parts, parentCtx)
+	}
+	if overlap != "" {
+		parts = append(parts, overlap)
+	}
+	parts = append(parts, chunk.Content)
+
+	return strings.Join(parts, "\n")
 }
 
-func (c *CodeAwareTextSplitter) addParentContext(
-	builder *strings.Builder,
-	parentContext string,
+func (c *CodeAwareTextSplitter) getValidParentContext(
 	ctx context.Context,
-	modelName string,
+	parentContext, modelName string,
 	remainingTokens int,
-) int {
+) (string, int) {
 	parentTokens := c.getTokenCount(ctx, modelName, parentContext)
 
 	if parentTokens <= remainingTokens {
-		*builder = c.prependContent(builder.String(), parentContext)
-		return remainingTokens - parentTokens
+		return parentContext, remainingTokens - parentTokens
 	}
 
 	truncatedParent := c.truncateToTokenLimit(ctx, parentContext, remainingTokens-10, modelName)
 	if len(strings.TrimSpace(truncatedParent)) > 20 {
-		*builder = c.prependContent(builder.String(), truncatedParent+"...")
-		return remainingTokens - c.getTokenCount(ctx, modelName, truncatedParent)
+		finalParent := truncatedParent + "..."
+		return finalParent, remainingTokens - c.getTokenCount(ctx, modelName, finalParent)
 	}
 
-	return remainingTokens
+	return "", remainingTokens
 }
 
-func (c *CodeAwareTextSplitter) addFileHeader(
-	builder *strings.Builder,
-	fileHeader string,
+func (c *CodeAwareTextSplitter) getValidStrategicOverlap(
 	ctx context.Context,
-	modelName string,
-	remainingTokens int,
-) int {
-	headerTokens := c.getTokenCount(ctx, modelName, fileHeader)
-
-	if headerTokens <= remainingTokens {
-		*builder = c.prependContent(builder.String(), fileHeader)
-		return remainingTokens - headerTokens
-	}
-
-	return remainingTokens
-}
-
-func (c *CodeAwareTextSplitter) addStrategicOverlap(
-	builder *strings.Builder,
 	parentChunks []model.CodeChunk,
-	ctx context.Context,
 	modelName string,
 	remainingTokens int,
-) {
+) (string, int) {
 	prevChunk := parentChunks[len(parentChunks)-1]
 	overlap := c.calculateStrategicOverlap(prevChunk)
 
 	if overlap == "" {
-		return
+		return "", remainingTokens
 	}
 
-	overlapWithMarkers := "// Previous context:\n" + overlap + "\n// Current section:\n"
+	overlapWithMarkers := "// Previous context:\n" + overlap + "\n// Current section:"
 	overlapTokens := c.getTokenCount(ctx, modelName, overlapWithMarkers)
 
 	if overlapTokens <= remainingTokens {
-		*builder = c.prependContent(builder.String(), overlapWithMarkers)
+		return overlapWithMarkers, remainingTokens - overlapTokens
 	}
+
+	return "", remainingTokens
 }
 
 func (c *CodeAwareTextSplitter) getTokenCount(ctx context.Context, modelName, content string) int {
@@ -140,16 +142,6 @@ func (c *CodeAwareTextSplitter) getTokenCount(ctx context.Context, modelName, co
 		return tokens
 	}
 	return c.tokenizer.EstimateTokens(ctx, modelName, content)
-}
-
-func (c *CodeAwareTextSplitter) prependContent(mainContent, contextContent string) strings.Builder {
-	var result strings.Builder
-	result.WriteString(contextContent)
-	if !strings.HasSuffix(contextContent, "\n") {
-		result.WriteString("\n")
-	}
-	result.WriteString(mainContent)
-	return result
 }
 
 func (c *CodeAwareTextSplitter) truncateToTokenLimit(ctx context.Context, content string, maxTokens int, modelName string) string {

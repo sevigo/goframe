@@ -7,10 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sevigo/goframe/parsers/golang"
-	logger "github.com/sevigo/goframe/parsers/testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/sevigo/goframe/parsers/golang"
+	logger "github.com/sevigo/goframe/parsers/testing"
 )
 
 const testGoFileContent = `package main

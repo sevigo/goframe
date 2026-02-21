@@ -12,6 +12,7 @@ import (
 	"log/slog"
 
 	"github.com/ollama/ollama/api"
+
 	"github.com/sevigo/goframe/embeddings"
 	"github.com/sevigo/goframe/llms"
 	"github.com/sevigo/goframe/schema"

@@ -18,9 +18,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sevigo/goframe/schema"
 	"github.com/sugarme/tokenizer"
 	"github.com/sugarme/tokenizer/pretrained"
+
+	"github.com/sevigo/goframe/schema"
 )
 
 var (

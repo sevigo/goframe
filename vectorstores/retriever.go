@@ -42,6 +42,15 @@ type RerankingRetriever struct {
 	Retriever schema.Retriever
 	Reranker  schema.Reranker
 	TopK      int // Final number of documents to return after reranking
+
+	// Pre-filter candidates before sending to the reranker. Useful for cheap
+	// filtering (e.g. BM25 scoring) to reduce the number of documents the
+	// expensive LLM-based reranker has to process.
+	CandidateFilter func(query string, docs []schema.Document) []schema.Document
+
+	// MinScore filters out documents that have a reranked score below this threshold.
+	// If zero, no threshold is applied.
+	MinScore float32
 }
 
 func (r RerankingRetriever) GetRelevantDocuments(ctx context.Context, query string) ([]schema.Document, error) {
@@ -57,25 +66,43 @@ func (r RerankingRetriever) GetRelevantDocuments(ctx context.Context, query stri
 }
 
 func (r RerankingRetriever) GetRelevantScoredDocuments(ctx context.Context, query string) ([]schema.ScoredDocument, error) {
-	// 1. Fetch wide net of documents
-	// IMPORTANT: The provided r.Retriever should be configured to return a broad set of results
-	// (e.g., if you want top 5 reranked, the base retriever should probably return 20).
+	// Fetch a broad set of candidates from the base retriever
 	docs, err := r.Retriever.GetRelevantDocuments(ctx, query)
 	if err != nil {
 		return nil, err
+	}
+
+	// Apply pre-filter if configured (e.g. BM25 to narrow candidates for the reranker)
+	if r.CandidateFilter != nil {
+		docs = r.CandidateFilter(query, docs)
 	}
 
 	if len(docs) == 0 {
 		return nil, nil
 	}
 
-	// 2. Rerank them
+	// Rerank the filtered candidates
 	scored, err := r.Reranker.Rerank(ctx, query, docs)
 	if err != nil {
 		return nil, err
 	}
 
-	// 3. Keep topK
+	// Apply score threshold if configured
+	if r.MinScore > 0 {
+		filtered := make([]schema.ScoredDocument, 0, len(scored))
+		for _, sd := range scored {
+			if float32(sd.Score) >= r.MinScore {
+				filtered = append(filtered, sd)
+			}
+		}
+		scored = filtered
+	}
+
+	if len(scored) == 0 {
+		return nil, nil
+	}
+
+	// Keep topK
 	topK := r.TopK
 	if topK <= 0 {
 		topK = len(scored)

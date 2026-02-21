@@ -7,10 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	model "github.com/sevigo/goframe/schema"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/parser"
+
+	model "github.com/sevigo/goframe/schema"
 )
 
 const frontMatterSeparator = "---"

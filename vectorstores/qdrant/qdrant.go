@@ -520,178 +520,21 @@ func createQdrantClient(opts options, logger *slog.Logger) (*qdrant.Client, erro
 	return client, nil
 }
 
-func (s *Store) SimilaritySearch(
+// executeSearch is the shared search implementation used by both SimilaritySearch
+// and SimilaritySearchWithScores. It handles embedding, hybrid vs dense branching,
+// metadata filters, and error handling in a single place.
+func (s *Store) executeSearch(
 	ctx context.Context,
 	query string,
 	numDocuments int,
-	options ...vectorstores.Option,
-) ([]schema.Document, error) {
-	if strings.TrimSpace(query) == "" {
-		// Allow empty query if filters are present
-		opts := vectorstores.ParseOptions(options...)
-		if len(opts.Filters) == 0 {
-			s.logger.WarnContext(ctx, "Empty query provided with no filters")
-			return []schema.Document{}, nil
-		}
-	}
-
-	if numDocuments <= 0 {
-		s.logger.WarnContext(ctx, "Invalid number of documents requested", "num_documents", numDocuments)
-		return nil, ErrInvalidNumDocuments
-	}
-
-	if s.embedder == nil {
-		s.logger.ErrorContext(ctx, "Embedder not provided for search")
-		return nil, ErrMissingEmbedder
-	}
-
-	opts := vectorstores.ParseOptions(options...)
-	if err := s.validateHybridSearchOptions(opts); err != nil {
-		return nil, err
-	}
-	collectionName := s.getCollectionName(opts)
-
-	embedStart := time.Now()
-	queryVector, err := s.embedder.EmbedQuery(ctx, query)
-	embedDuration := time.Since(embedStart)
-
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Query embedding failed",
-			"error", err, "duration", embedDuration)
-		return nil, fmt.Errorf("failed to embed query: %w", err)
-	}
-
-	searchStart := time.Now()
-	limit := uint64(numDocuments)
-
-	var results []*qdrant.ScoredPoint
-	if len(s.options.sparseVectors) > 0 && opts.SparseQuery != nil {
-		if len(s.options.sparseVectors) == 0 {
-			return nil, ErrMissingSparseName
-		}
-		sparseName := s.options.sparseVectors[0]
-
-		var denseNamePtr *string
-		if DefaultDenseVectorName != "" {
-			name := DefaultDenseVectorName
-			denseNamePtr = &name
-		}
-
-		queryPoints := &qdrant.QueryPoints{
-			CollectionName: collectionName,
-			Query: &qdrant.Query{
-				Variant: &qdrant.Query_Fusion{
-					Fusion: qdrant.Fusion_RRF,
-				},
-			},
-			Prefetch: []*qdrant.PrefetchQuery{
-				{
-					Query: &qdrant.Query{
-						Variant: &qdrant.Query_Nearest{
-							Nearest: qdrant.NewVectorInputDense(queryVector),
-						},
-					},
-					Using: denseNamePtr,
-					Limit: &limit,
-				},
-				{
-					Query: &qdrant.Query{
-						Variant: &qdrant.Query_Nearest{
-							Nearest: qdrant.NewVectorInputSparse(opts.SparseQuery.Indices, opts.SparseQuery.Values),
-						},
-					},
-					Using: &sparseName,
-					Limit: &limit,
-				},
-			},
-			WithPayload: &qdrant.WithPayloadSelector{
-				SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
-			},
-			ScoreThreshold: &opts.ScoreThreshold,
-		}
-
-		queryResult, err := s.client.GetPointsClient().Query(ctx, queryPoints)
-		if err != nil {
-			return nil, fmt.Errorf("qdrant hybrid query failed: %w", err)
-		}
-		results = queryResult.GetResult()
-
-		s.logger.DebugContext(ctx, "Hybrid similarity search executed",
-			"fusion", "RRF",
-			"dense_limit", limit,
-			"sparse_limit", limit,
-			"results", len(results),
-			"duration", time.Since(searchStart),
-		)
-	} else {
-		searchResult, err := s.client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
-			CollectionName: collectionName,
-			Vector:         queryVector,
-			Limit:          limit,
-			WithPayload: &qdrant.WithPayloadSelector{
-				SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
-			},
-			ScoreThreshold: &opts.ScoreThreshold,
-		})
-		if err != nil {
-			if stat, ok := status.FromError(err); ok && stat.Code() == codes.NotFound {
-				s.logger.WarnContext(ctx, "Collection not found during search", "collection", collectionName)
-				return nil, vectorstores.ErrCollectionNotFound
-			}
-			searchDuration := time.Since(searchStart)
-			s.logger.ErrorContext(ctx, "Search failed",
-				"error", err, "collection", collectionName, "duration", searchDuration)
-			return nil, fmt.Errorf("qdrant search failed: %w", err)
-		}
-		results = searchResult.GetResult()
-
-		s.logger.DebugContext(ctx, "Dense similarity search executed",
-			"limit", limit,
-			"results", len(results),
-			"duration", time.Since(searchStart),
-		)
-	}
-
-	docs := make([]schema.Document, 0, len(results))
-	for _, point := range results {
-		docs = append(docs, s.payloadToDocument(point.GetPayload()))
-	}
-	return docs, nil
-}
-
-func (s *Store) SimilaritySearchWithScores(
-	ctx context.Context,
-	query string,
-	numDocuments int,
-	options ...vectorstores.Option,
-) ([]vectorstores.DocumentWithScore, error) {
-	start := time.Now()
-	s.logger.DebugContext(ctx, "Starting similarity search with scores",
-		"query_length", len(query), "num_documents", numDocuments)
-
-	if strings.TrimSpace(query) == "" {
-		s.logger.WarnContext(ctx, "Empty query provided for scored search")
-		return []vectorstores.DocumentWithScore{}, nil
-	}
-
-	if numDocuments <= 0 {
-		return nil, ErrInvalidNumDocuments
-	}
-
-	if s.embedder == nil {
-		return nil, ErrMissingEmbedder
-	}
-
-	opts := vectorstores.ParseOptions(options...)
-	if err := s.validateHybridSearchOptions(opts); err != nil {
-		return nil, err
-	}
+	opts vectorstores.Options,
+) ([]*qdrant.ScoredPoint, string, error) {
 	collectionName := s.getCollectionName(opts)
 
 	queryVector, err := s.embedder.EmbedQuery(ctx, query)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "Query embedding failed for scored search", "error", err)
-		return nil, fmt.Errorf("failed to embed query: %w", err)
+		s.logger.ErrorContext(ctx, "Query embedding failed", "error", err)
+		return nil, collectionName, fmt.Errorf("failed to embed query: %w", err)
 	}
 
 	filter := buildQdrantFilter(opts.Filters)
@@ -699,10 +542,8 @@ func (s *Store) SimilaritySearchWithScores(
 	searchStart := time.Now()
 
 	var results []*qdrant.ScoredPoint
+
 	if len(s.options.sparseVectors) > 0 && opts.SparseQuery != nil {
-		if len(s.options.sparseVectors) == 0 {
-			return nil, ErrMissingSparseName
-		}
 		sparseName := s.options.sparseVectors[0]
 
 		var denseNamePtr *string
@@ -748,15 +589,13 @@ func (s *Store) SimilaritySearchWithScores(
 
 		queryResult, err := s.client.GetPointsClient().Query(ctx, queryPoints)
 		if err != nil {
-			return nil, fmt.Errorf("qdrant hybrid query failed: %w", err)
+			return nil, collectionName, fmt.Errorf("qdrant hybrid query failed: %w", err)
 		}
 		results = queryResult.GetResult()
 
-		s.logger.DebugContext(ctx, "Hybrid similarity search with scores executed",
-			"fusion", "RRF",
-			"results", len(results),
-			"duration", time.Since(searchStart),
-		)
+		s.logger.DebugContext(ctx, "Hybrid search executed",
+			"fusion", "RRF", "results", len(results),
+			"duration", time.Since(searchStart))
 	} else {
 		searchResult, err := s.client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
 			CollectionName: collectionName,
@@ -770,13 +609,88 @@ func (s *Store) SimilaritySearchWithScores(
 		})
 		if err != nil {
 			if stat, ok := status.FromError(err); ok && stat.Code() == codes.NotFound {
-				s.logger.WarnContext(ctx, "Collection not found during scored search", "collection", collectionName)
-				return nil, vectorstores.ErrCollectionNotFound
+				s.logger.WarnContext(ctx, "Collection not found during search", "collection", collectionName)
+				return nil, collectionName, vectorstores.ErrCollectionNotFound
 			}
-			s.logger.ErrorContext(ctx, "Scored search failed", "error", err, "collection", collectionName)
-			return nil, fmt.Errorf("qdrant search failed: %w", err)
+			s.logger.ErrorContext(ctx, "Search failed",
+				"error", err, "collection", collectionName, "duration", time.Since(searchStart))
+			return nil, collectionName, fmt.Errorf("qdrant search failed: %w", err)
 		}
 		results = searchResult.GetResult()
+
+		s.logger.DebugContext(ctx, "Dense search executed",
+			"results", len(results), "duration", time.Since(searchStart))
+	}
+
+	return results, collectionName, nil
+}
+
+func (s *Store) SimilaritySearch(
+	ctx context.Context,
+	query string,
+	numDocuments int,
+	options ...vectorstores.Option,
+) ([]schema.Document, error) {
+	if strings.TrimSpace(query) == "" {
+		opts := vectorstores.ParseOptions(options...)
+		if len(opts.Filters) == 0 {
+			s.logger.WarnContext(ctx, "Empty query provided with no filters")
+			return []schema.Document{}, nil
+		}
+	}
+
+	if numDocuments <= 0 {
+		return nil, ErrInvalidNumDocuments
+	}
+	if s.embedder == nil {
+		return nil, ErrMissingEmbedder
+	}
+
+	opts := vectorstores.ParseOptions(options...)
+	if err := s.validateHybridSearchOptions(opts); err != nil {
+		return nil, err
+	}
+
+	results, _, err := s.executeSearch(ctx, query, numDocuments, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	docs := make([]schema.Document, 0, len(results))
+	for _, point := range results {
+		docs = append(docs, s.payloadToDocument(point.GetPayload()))
+	}
+	return docs, nil
+}
+
+func (s *Store) SimilaritySearchWithScores(
+	ctx context.Context,
+	query string,
+	numDocuments int,
+	options ...vectorstores.Option,
+) ([]vectorstores.DocumentWithScore, error) {
+	start := time.Now()
+
+	if strings.TrimSpace(query) == "" {
+		s.logger.WarnContext(ctx, "Empty query provided for scored search")
+		return []vectorstores.DocumentWithScore{}, nil
+	}
+
+	if numDocuments <= 0 {
+		return nil, ErrInvalidNumDocuments
+	}
+	if s.embedder == nil {
+		return nil, ErrMissingEmbedder
+	}
+
+	opts := vectorstores.ParseOptions(options...)
+	if err := s.validateHybridSearchOptions(opts); err != nil {
+		return nil, err
+	}
+
+	results, collectionName, err := s.executeSearch(ctx, query, numDocuments, opts)
+	if err != nil {
+		return nil, err
 	}
 
 	docsWithScore := make([]vectorstores.DocumentWithScore, len(results))
@@ -797,10 +711,9 @@ func (s *Store) SimilaritySearchWithScores(
 		}
 	}
 
-	duration := time.Since(start)
 	s.logger.InfoContext(ctx, "Similarity search with scores completed",
 		"collection", collectionName, "results", len(docsWithScore),
-		"min_score", minScore, "max_score", maxScore, "duration", duration)
+		"min_score", minScore, "max_score", maxScore, "duration", time.Since(start))
 
 	return docsWithScore, nil
 }
