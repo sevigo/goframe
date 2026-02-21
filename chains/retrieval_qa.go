@@ -10,16 +10,48 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
+type RetrievalQAOption func(*RetrievalQA)
+
 type RetrievalQA struct {
-	Retriever schema.Retriever
-	LLM       llms.Model
+	Retriever     schema.Retriever
+	LLM           llms.Model
+	PromptBuilder func(query string, docs []schema.Document) (string, error)
 }
 
-func NewRetrievalQA(retriever schema.Retriever, llm llms.Model) RetrievalQA {
-	return RetrievalQA{
+// WithPromptBuilder allows passing a custom function to format the
+// retrieved documents and query into a final string prompt.
+func WithPromptBuilder(pb func(query string, docs []schema.Document) (string, error)) RetrievalQAOption {
+	return func(c *RetrievalQA) {
+		c.PromptBuilder = pb
+	}
+}
+
+func NewRetrievalQA(retriever schema.Retriever, llm llms.Model, opts ...RetrievalQAOption) RetrievalQA {
+	chain := RetrievalQA{
 		Retriever: retriever,
 		LLM:       llm,
 	}
+	for _, opt := range opts {
+		opt(&chain)
+	}
+
+	// Fall back to the standard RAG prompt if no custom builder was provided
+	if chain.PromptBuilder == nil {
+		chain.PromptBuilder = func(query string, docs []schema.Document) (string, error) {
+			docContents := make([]string, len(docs))
+			for i, doc := range docs {
+				docContents[i] = doc.PageContent
+			}
+			contextStr := strings.Join(docContents, "\n\n---\n\n")
+
+			return prompts.DefaultRAGPrompt.Format(map[string]string{
+				"context": contextStr,
+				"query":   query,
+			}), nil
+		}
+	}
+
+	return chain
 }
 
 func (c RetrievalQA) Call(ctx context.Context, query string) (string, error) {
@@ -32,16 +64,10 @@ func (c RetrievalQA) Call(ctx context.Context, query string) (string, error) {
 		return c.LLM.Call(ctx, query)
 	}
 
-	docContents := make([]string, len(docs))
-	for i, doc := range docs {
-		docContents[i] = doc.PageContent
+	prompt, err := c.PromptBuilder(query, docs)
+	if err != nil {
+		return "", fmt.Errorf("prompt building failed: %w", err)
 	}
-	context := strings.Join(docContents, "\n\n---\n\n")
-
-	prompt := prompts.DefaultRAGPrompt.Format(map[string]string{
-		"context": context,
-		"query":   query,
-	})
 
 	return c.LLM.Call(ctx, prompt)
 }

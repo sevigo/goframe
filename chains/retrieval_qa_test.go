@@ -83,4 +83,28 @@ Helpful Answer:`, contextStr)
 
 		assert.Equal(t, 0, fakeLLM.GetCallCount(), "LLM should not have been called when retrieval fails")
 	})
+
+	t.Run("Custom PromptBuilder is used", func(t *testing.T) {
+		retrievedDocs := []schema.Document{
+			{PageContent: "Go is compiled."},
+		}
+
+		fakeLLM := fake.NewFakeLLM([]string{"custom response"})
+		fakeRetriever := fakeretriever.NewRetriever()
+		fakeRetriever.DocsToReturn = retrievedDocs
+
+		customBuilder := func(query string, docs []schema.Document) (string, error) {
+			return fmt.Sprintf("CUSTOM: %s | docs=%d", query, len(docs)), nil
+		}
+
+		ragChain := chains.NewRetrievalQA(fakeRetriever, fakeLLM, chains.WithPromptBuilder(customBuilder))
+
+		answer, err := ragChain.Call(ctx, "test query")
+
+		require.NoError(t, err)
+		assert.Equal(t, "custom response", answer)
+
+		lastPrompt, _ := fakeLLM.LastPrompt()
+		assert.Equal(t, "CUSTOM: test query | docs=1", lastPrompt)
+	})
 }
