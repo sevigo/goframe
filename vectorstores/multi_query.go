@@ -2,6 +2,7 @@ package vectorstores
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/sevigo/goframe/llms"
@@ -9,42 +10,58 @@ import (
 )
 
 type MultiQueryRetriever struct {
-	Retriever schema.Retriever
-	LLM       llms.Model
-	Count     int
+	Store        VectorStore
+	LLM          llms.Model
+	NumDocuments int
+	Count        int
+	// Hook to generate sparse vectors for the newly generated queries
+	SparseGenFunc func(ctx context.Context, queries []string) ([]*schema.SparseVector, error)
 }
 
 func (r MultiQueryRetriever) GetRelevantDocuments(ctx context.Context, query string) ([]schema.Document, error) {
-	// 1. Ask LLM to generate variations
 	prompt := `Generate {{.count}} different versions of the following user query to retrieve relevant code snippets from a vector database. 
 Original query: {{.query}}
 Provide only the queries, one per line, without numbers or bullets.`
 
-	formattedPrompt := strings.ReplaceAll(prompt, "{{.count}}", "3") // Default to 3
+	count := "3"
+	if r.Count > 0 {
+		count = fmt.Sprint(r.Count)
+	}
+	formattedPrompt := strings.ReplaceAll(prompt, "{{.count}}", count)
 	formattedPrompt = strings.ReplaceAll(formattedPrompt, "{{.query}}", query)
 
 	resp, err := r.LLM.Call(ctx, formattedPrompt)
-	if err != nil {
-		return r.Retriever.GetRelevantDocuments(ctx, query) // Fallback to original
+
+	// On LLM failure, we still search with the original query below
+	var queries []string
+	if err == nil {
+		lines := strings.Split(resp, "\n")
+		for _, l := range lines {
+			if trimmed := strings.TrimSpace(l); trimmed != "" {
+				queries = append(queries, trimmed)
+			}
+		}
+	}
+	queries = append(queries, query) // Always include original query
+
+	var opts []Option
+	if r.SparseGenFunc != nil {
+		sparseVecs, sparseErr := r.SparseGenFunc(ctx, queries)
+		if sparseErr == nil && len(sparseVecs) == len(queries) {
+			opts = append(opts, WithSparseQueries(sparseVecs))
+		}
 	}
 
-	queries := append(strings.Split(resp, "\n"), query)
+	// Use efficient Batch Search
+	batchResults, err := r.Store.SimilaritySearchBatch(ctx, queries, r.NumDocuments, opts...)
+	if err != nil {
+		return nil, err
+	}
 
-	// 2. We need to check if our store supports Batch Search.
-	// Since you implemented SimilaritySearchBatch in Qdrant, we can leverage it.
-	// This is where your framework's interface shines.
+	// Deduplicate by source + content
 	uniqueDocs := make(map[string]schema.Document)
-
-	// Implementation Note: In a production version, you'd cast Retriever
-	// to an interface that supports Batch search for efficiency.
-	for _, q := range queries {
-		trimmed := strings.TrimSpace(q)
-		if trimmed == "" {
-			continue
-		}
-		docs, _ := r.Retriever.GetRelevantDocuments(ctx, trimmed)
+	for _, docs := range batchResults {
 		for _, doc := range docs {
-			// Use the source/line as a unique key to deduplicate
 			source, _ := doc.Metadata["source"].(string)
 			key := source + doc.PageContent
 			uniqueDocs[key] = doc
