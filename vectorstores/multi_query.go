@@ -14,6 +14,9 @@ type MultiQueryRetriever struct {
 	LLM          llms.Model
 	NumDocuments int
 	Count        int
+	// Max results to return after deduplication across all query variations.
+	// Defaults to NumDocuments when zero.
+	MaxResults int
 	// Hook to generate sparse vectors for the newly generated queries
 	SparseGenFunc func(ctx context.Context, queries []string) ([]*schema.SparseVector, error)
 }
@@ -52,7 +55,6 @@ Provide only the queries, one per line, without numbers or bullets.`
 		}
 	}
 
-	// Use efficient Batch Search
 	batchResults, err := r.Store.SimilaritySearchBatch(ctx, queries, r.NumDocuments, opts...)
 	if err != nil {
 		return nil, err
@@ -68,9 +70,18 @@ Provide only the queries, one per line, without numbers or bullets.`
 		}
 	}
 
-	var finalDocs []schema.Document
+	finalDocs := make([]schema.Document, 0, len(uniqueDocs))
 	for _, doc := range uniqueDocs {
 		finalDocs = append(finalDocs, doc)
+	}
+
+	// Cap output to prevent overwhelming downstream consumers
+	maxResults := r.MaxResults
+	if maxResults <= 0 {
+		maxResults = r.NumDocuments
+	}
+	if maxResults > 0 && len(finalDocs) > maxResults {
+		finalDocs = finalDocs[:maxResults]
 	}
 
 	return finalDocs, nil

@@ -4,8 +4,9 @@ import (
 	"io/fs"
 	"testing"
 
-	"github.com/sevigo/goframe/schema"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/sevigo/goframe/schema"
 )
 
 func TestIsTestFileInternal(t *testing.T) {

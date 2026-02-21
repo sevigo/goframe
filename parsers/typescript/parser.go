@@ -12,6 +12,7 @@ import (
 	_ "embed" // Required for go:embed
 
 	"github.com/dop251/goja"
+
 	"github.com/sevigo/goframe/schema" // Use your actual schema import path
 )
 

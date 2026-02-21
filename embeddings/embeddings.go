@@ -65,6 +65,12 @@ func (e *EmbedderImpl) EmbedQueries(ctx context.Context, texts []string) ([][]fl
 
 	allEmbeddings := make([][]float32, 0, len(texts))
 	for i := 0; i < len(texts); i += e.opts.BatchSize {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		end := i + e.opts.BatchSize
 		if end > len(texts) {
 			end = len(texts)
@@ -76,7 +82,7 @@ func (e *EmbedderImpl) EmbedQueries(ctx context.Context, texts []string) ([][]fl
 			processedBatch[j] = e.opts.QueryPrefix + e.preprocessText(text)
 		}
 
-		batchEmbeddings, err := e.client.EmbedDocuments(ctx, processedBatch)
+		batchEmbeddings, err := e.client.EmbedQueries(ctx, processedBatch)
 		if err != nil {
 			return nil, err
 		}
@@ -99,6 +105,12 @@ func (e *EmbedderImpl) EmbedDocuments(ctx context.Context, texts []string) ([][]
 
 	allEmbeddings := make([][]float32, 0, len(texts))
 	for i := 0; i < len(texts); i += e.opts.BatchSize {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		end := i + e.opts.BatchSize
 		if end > len(texts) {
 			end = len(texts)

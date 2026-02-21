@@ -8,9 +8,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sevigo/goframe/schema"
 	"github.com/yoheimuta/go-protoparser/v4"
 	"github.com/yoheimuta/go-protoparser/v4/parser"
+
+	"github.com/sevigo/goframe/schema"
 )
 
 // NewProtobufParser is the factory function that creates a new Protobuf parser plugin.
