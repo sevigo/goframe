@@ -2,7 +2,9 @@ package vectorstores
 
 import (
 	"context"
+	"log/slog"
 
+	"github.com/sevigo/goframe/embeddings/sparse"
 	"github.com/sevigo/goframe/schema"
 )
 
@@ -14,12 +16,24 @@ func NewDefinitionRetriever(store VectorStore) *DefinitionRetriever {
 	return &DefinitionRetriever{store: store}
 }
 
-// GetDefinition performs an exact match lookup for a symbol name
+// GetDefinition looks up a symbol definition using hybrid search (dense + sparse).
+// Filters by identifier and is_definition metadata for precise results.
 func (r *DefinitionRetriever) GetDefinition(ctx context.Context, symbolName string) ([]schema.Document, error) {
-	return r.store.SimilaritySearch(ctx, symbolName, 1,
+	searchOpts := []Option{
 		WithFilters(map[string]any{
 			"identifier":    symbolName,
 			"is_definition": true,
 		}),
-	)
+	}
+
+	// Add sparse vector for better exact symbol matching
+	sparseVec, err := sparse.GenerateSparseVector(ctx, symbolName)
+	if err != nil {
+		slog.Warn("sparse vector generation failed, falling back to dense-only search",
+			"error", err, "symbol", symbolName)
+	} else {
+		searchOpts = append(searchOpts, WithSparseQuery(sparseVec))
+	}
+
+	return r.store.SimilaritySearch(ctx, symbolName, 1, searchOpts...)
 }
