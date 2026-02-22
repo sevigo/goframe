@@ -81,6 +81,7 @@ func (c *MapReduceChain[In, Mid, Out]) Call(ctx context.Context, inputs []In) (O
 	}
 
 	resultCh := make(chan mapResult, total)
+	done := make(chan struct{})
 
 	// Semaphore for concurrency limiting
 	maxWorkers := total
@@ -100,7 +101,12 @@ func (c *MapReduceChain[In, Mid, Out]) Call(ctx context.Context, inputs []In) (O
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
 			case <-ctx.Done():
-				resultCh <- mapResult{err: ctx.Err()}
+				select {
+				case resultCh <- mapResult{err: ctx.Err()}:
+				case <-done:
+				}
+				return
+			case <-done:
 				return
 			}
 
@@ -113,7 +119,10 @@ func (c *MapReduceChain[In, Mid, Out]) Call(ctx context.Context, inputs []In) (O
 			}
 
 			val, err := c.MapFunc(taskCtx, in)
-			resultCh <- mapResult{value: val, err: err}
+			select {
+			case resultCh <- mapResult{value: val, err: err}:
+			case <-done:
+			}
 		}(input)
 	}
 
@@ -133,6 +142,7 @@ func (c *MapReduceChain[In, Mid, Out]) Call(ctx context.Context, inputs []In) (O
 			// Check if quorum is no longer achievable
 			remaining := total - len(collected) - failures
 			if len(collected)+remaining < quorumNeeded {
+				close(done)
 				return zero, fmt.Errorf("quorum not achievable: %d/%d succeeded, need %d", len(collected), total, quorumNeeded)
 			}
 			continue
@@ -140,6 +150,7 @@ func (c *MapReduceChain[In, Mid, Out]) Call(ctx context.Context, inputs []In) (O
 
 		collected = append(collected, res.value)
 		if len(collected) >= quorumNeeded {
+			close(done)
 			break
 		}
 	}

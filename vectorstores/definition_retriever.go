@@ -2,6 +2,7 @@ package vectorstores
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/sevigo/goframe/embeddings/sparse"
@@ -12,8 +13,11 @@ type DefinitionRetriever struct {
 	store VectorStore
 }
 
-func NewDefinitionRetriever(store VectorStore) *DefinitionRetriever {
-	return &DefinitionRetriever{store: store}
+func NewDefinitionRetriever(store VectorStore) (*DefinitionRetriever, error) {
+	if store == nil {
+		return nil, fmt.Errorf("store cannot be nil")
+	}
+	return &DefinitionRetriever{store: store}, nil
 }
 
 // GetDefinition looks up a symbol definition using hybrid search (dense + sparse).

@@ -20,11 +20,15 @@ type DependencyRetriever struct {
 	store VectorStore
 }
 
-// NewDependencyRetriever creates a new graph-based retriever
-func NewDependencyRetriever(store VectorStore) *DependencyRetriever {
+// NewDependencyRetriever creates a new graph-based retriever.
+// It returns an error if store is nil.
+func NewDependencyRetriever(store VectorStore) (*DependencyRetriever, error) {
+	if store == nil {
+		return nil, fmt.Errorf("store cannot be nil")
+	}
 	return &DependencyRetriever{
 		store: store,
-	}
+	}, nil
 }
 
 // GetContextNetwork retrieves both upstream dependencies and downstream impact

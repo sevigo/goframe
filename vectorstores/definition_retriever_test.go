@@ -88,7 +88,8 @@ func TestDefinitionRetriever_GetDefinition(t *testing.T) {
 		},
 	}
 
-	retriever := vectorstores.NewDefinitionRetriever(mockStore)
+	retriever, err := vectorstores.NewDefinitionRetriever(mockStore)
+	require.NoError(t, err)
 
 	t.Run("LookupExistingStruct", func(t *testing.T) {
 		docs, err := retriever.GetDefinition(context.Background(), "User")

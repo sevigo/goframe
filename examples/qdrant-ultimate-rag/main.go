@@ -166,7 +166,10 @@ Answer (be technical and concise):`, contextBuilder.String(), query)
 func runImpactAnalysis(ctx context.Context, logger *slog.Logger, vStore vectorstores.VectorStore, targetPackage string) error {
 	logger.Info("Step 6: Impact Analysis (Graph-Like Retrieval)")
 
-	depRetriever := vectorstores.NewDependencyRetriever(vStore)
+	depRetriever, err := vectorstores.NewDependencyRetriever(vStore)
+	if err != nil {
+		return fmt.Errorf("failed to create dependency retriever: %w", err)
+	}
 	network, err := depRetriever.GetContextNetwork(ctx, targetPackage, nil)
 	if err != nil {
 		return fmt.Errorf("impact analysis failed: %w", err)

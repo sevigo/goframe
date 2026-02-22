@@ -41,7 +41,8 @@ Helpful Answer:`, contextStr)
 		fakeRetriever := fakeretriever.NewRetriever()
 		fakeRetriever.DocsToReturn = retrievedDocs
 
-		ragChain := chains.NewRetrievalQA(fakeRetriever, fakeLLM)
+		ragChain, err := chains.NewRetrievalQA(fakeRetriever, fakeLLM)
+		require.NoError(t, err)
 
 		answer, err := ragChain.Call(ctx, "What colors are in nature?")
 
@@ -57,7 +58,8 @@ Helpful Answer:`, contextStr)
 		fakeRetriever := fakeretriever.NewRetriever()
 		fakeRetriever.DocsToReturn = []schema.Document{} // No documents found
 
-		ragChain := chains.NewRetrievalQA(fakeRetriever, fakeLLM)
+		ragChain, err := chains.NewRetrievalQA(fakeRetriever, fakeLLM)
+		require.NoError(t, err)
 
 		answer, err := ragChain.Call(ctx, "A question with no context.")
 
@@ -74,8 +76,9 @@ Helpful Answer:`, contextStr)
 		fakeRetriever := fakeretriever.NewRetriever()
 		fakeRetriever.ErrToReturn = retrievalErr
 
-		ragChain := chains.NewRetrievalQA(fakeRetriever, fakeLLM)
-		_, err := ragChain.Call(ctx, "Any question.")
+		ragChain, err := chains.NewRetrievalQA(fakeRetriever, fakeLLM)
+		require.NoError(t, err)
+		_, err = ragChain.Call(ctx, "Any question.")
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, retrievalErr)
@@ -97,7 +100,8 @@ Helpful Answer:`, contextStr)
 			return fmt.Sprintf("CUSTOM: %s | docs=%d", query, len(docs)), nil
 		}
 
-		ragChain := chains.NewRetrievalQA(fakeRetriever, fakeLLM, chains.WithPromptBuilder(customBuilder))
+		ragChain, err := chains.NewRetrievalQA(fakeRetriever, fakeLLM, chains.WithPromptBuilder(customBuilder))
+		require.NoError(t, err)
 
 		answer, err := ragChain.Call(ctx, "test query")
 

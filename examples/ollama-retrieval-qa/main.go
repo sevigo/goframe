@@ -73,7 +73,10 @@ func setupRAGSystem(logger *slog.Logger) (vectorstores.VectorStore, *chains.Retr
 	}
 
 	retriever := vectorstores.ToRetriever(vectorStore, 3, vectorstores.WithScoreThreshold(0.6))
-	ragChain := chains.NewRetrievalQA(retriever, generationLLM)
+	ragChain, err := chains.NewRetrievalQA(retriever, generationLLM)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create RAG chain: %w", err)
+	}
 
 	logger.Info("RAG system setup completed", "collection", collectionName)
 	return vectorStore, &ragChain, nil

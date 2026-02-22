@@ -43,7 +43,9 @@ type LLMRerankerOption func(*LLMReranker)
 
 func WithConcurrency(c int) LLMRerankerOption {
 	return func(r *LLMReranker) {
-		r.concurrency = c
+		if c > 0 {
+			r.concurrency = c
+		}
 	}
 }
 

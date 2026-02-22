@@ -38,7 +38,15 @@ func WithLLMCallOptions[T any](opts ...llms.CallOption) LLMChainOption[T] {
 
 // NewLLMChain creates a new LLMChain. If no parser is provided via options,
 // a StringParser is used (only valid when T is string).
-func NewLLMChain[T any](llm llms.Model, prompt prompts.PromptTemplate, opts ...LLMChainOption[T]) *LLMChain[T] {
+// Returns an error if llm or prompt is nil.
+func NewLLMChain[T any](llm llms.Model, prompt prompts.PromptTemplate, opts ...LLMChainOption[T]) (*LLMChain[T], error) {
+	if llm == nil {
+		return nil, fmt.Errorf("llm cannot be nil")
+	}
+	if prompt.Template == "" {
+		return nil, fmt.Errorf("prompt template cannot be empty")
+	}
+
 	chain := &LLMChain[T]{
 		LLM:    llm,
 		Prompt: prompt,
@@ -46,7 +54,7 @@ func NewLLMChain[T any](llm llms.Model, prompt prompts.PromptTemplate, opts ...L
 	for _, opt := range opts {
 		opt(chain)
 	}
-	return chain
+	return chain, nil
 }
 
 // Call renders the prompt with the provided variables, calls the LLM,

@@ -26,7 +26,14 @@ func WithPromptBuilder(pb func(query string, docs []schema.Document) (string, er
 	}
 }
 
-func NewRetrievalQA(retriever schema.Retriever, llm llms.Model, opts ...RetrievalQAOption) RetrievalQA {
+func NewRetrievalQA(retriever schema.Retriever, llm llms.Model, opts ...RetrievalQAOption) (RetrievalQA, error) {
+	if retriever == nil {
+		return RetrievalQA{}, fmt.Errorf("retriever cannot be nil")
+	}
+	if llm == nil {
+		return RetrievalQA{}, fmt.Errorf("llm cannot be nil")
+	}
+
 	chain := RetrievalQA{
 		Retriever: retriever,
 		LLM:       llm,
@@ -51,7 +58,7 @@ func NewRetrievalQA(retriever schema.Retriever, llm llms.Model, opts ...Retrieva
 		}
 	}
 
-	return chain
+	return chain, nil
 }
 
 func (c RetrievalQA) Call(ctx context.Context, query string) (string, error) {
