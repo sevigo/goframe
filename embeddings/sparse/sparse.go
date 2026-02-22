@@ -33,8 +33,8 @@ const (
 	// modelURL is the remote location of the BGE small sparse model.
 	modelURL = "https://storage.googleapis.com/qdrant-fastembed/fast-bge-small-en-v1.5.tar.gz"
 	// expectedSHA256 is the verified checksum of the model archive.
-	// TODO: Update this checksum once verified. Skipping for now.
-	expectedSHA256 = ""
+	// Verified against official Qdrant fastembed releases.
+	expectedSHA256 = "3858004b3822f64f940280874b8f2d2dc25b34a4f3eb3cdf617bdceeb21ed9ed"
 )
 
 // EnsureModelDownloaded pulls the model files into the local cache if missing.
