@@ -1,3 +1,5 @@
+// Package parsers provides a registry for language-specific parser plugins.
+// Parsers extract metadata and chunk code for various programming languages.
 package parsers
 
 import (
@@ -18,16 +20,23 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
-// ParserRegistry tracks registered language plugins
+// ParserRegistry tracks registered language plugins and provides
+// methods to look up parsers by language, file path, or extension.
 type ParserRegistry interface {
+	// RegisterParser adds a new parser plugin to the registry.
 	RegisterParser(plugin schema.ParserPlugin) error
+	// GetParser returns the parser for the given language name.
 	GetParser(language string) (schema.ParserPlugin, error)
+	// GetParserForFile returns the appropriate parser for the given file.
 	GetParserForFile(path string, info fs.FileInfo) (schema.ParserPlugin, error)
+	// GetParserForExtension returns the parser for the given file extension.
 	GetParserForExtension(ext string) (schema.ParserPlugin, error)
+	// GetAllParsers returns all registered parsers.
 	GetAllParsers() []schema.ParserPlugin
 }
 
 // RegisterLanguagePlugins initializes and populates a language registry
+// with all built-in parser plugins (Go, TypeScript, Markdown, JSON, YAML, etc.).
 func RegisterLanguagePlugins(logger *slog.Logger) (ParserRegistry, error) {
 	registry := NewRegistry(logger)
 
