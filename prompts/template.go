@@ -1,15 +1,18 @@
+// Package prompts provides prompt templates for LLM interactions.
 package prompts
 
 import (
 	"strings"
 )
 
-// PromptTemplate represents a string template that can be formatted.
+// PromptTemplate represents a string template that can be formatted with variables.
+// Variables are in the format `{{.variable_name}}` and are replaced with values.
 type PromptTemplate struct {
+	// Template is the raw template string with placeholders.
 	Template string
 }
 
-// NewPromptTemplate creates a new prompt template.
+// NewPromptTemplate creates a new prompt template from the given string.
 func NewPromptTemplate(template string) PromptTemplate {
 	return PromptTemplate{Template: template}
 }

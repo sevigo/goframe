@@ -11,13 +11,19 @@ import (
 // the collected results into a final output. Supports concurrency limits,
 // per-task timeouts, and quorum-based early return.
 type MapReduceChain[In, Mid, Out any] struct {
-	MapFunc        func(ctx context.Context, input In) (Mid, error)
-	ReduceFunc     func(ctx context.Context, results []Mid) (Out, error)
+	// MapFunc processes each input item.
+	MapFunc func(ctx context.Context, input In) (Mid, error)
+	// ReduceFunc combines all map results into the final output.
+	ReduceFunc func(ctx context.Context, results []Mid) (Out, error)
+	// MaxConcurrency limits concurrent map operations. 0 means unlimited.
 	MaxConcurrency int
-	Timeout        time.Duration // per-task timeout (0 = no timeout)
-	QuorumFraction float64       // e.g. 0.66 = return when 2/3 succeed
+	// Timeout is the per-task timeout. 0 means no timeout.
+	Timeout time.Duration
+	// QuorumFraction is the fraction of tasks that must succeed (e.g., 0.66).
+	QuorumFraction float64
 }
 
+// MapReduceOption configures a MapReduceChain.
 type MapReduceOption[In, Mid, Out any] func(*MapReduceChain[In, Mid, Out])
 
 // WithMaxConcurrency limits the number of map tasks running in parallel.
@@ -43,6 +49,7 @@ func WithQuorum[In, Mid, Out any](fraction float64) MapReduceOption[In, Mid, Out
 	}
 }
 
+// NewMapReduceChain creates a new MapReduceChain with the given map and reduce functions.
 func NewMapReduceChain[In, Mid, Out any](
 	mapFn func(ctx context.Context, input In) (Mid, error),
 	reduceFn func(ctx context.Context, results []Mid) (Out, error),

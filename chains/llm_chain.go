@@ -1,3 +1,6 @@
+// Package chains provides composable chains for LLM workflows.
+// Chains combine prompts, LLMs, retrievers, and other components into
+// reusable pipelines for tasks like RAG, validation, and map-reduce.
 package chains
 
 import (
@@ -16,9 +19,13 @@ type LLMChainOption[T any] func(*LLMChain[T])
 // into a single callable unit. It renders the prompt, calls the LLM,
 // and parses the output into a typed result.
 type LLMChain[T any] struct {
-	LLM         llms.Model
-	Prompt      prompts.PromptTemplate
-	Parser      schema.OutputParser[T]
+	// LLM is the language model to use for generation.
+	LLM llms.Model
+	// Prompt is the template to render before calling the LLM.
+	Prompt prompts.PromptTemplate
+	// Parser converts the LLM output to type T.
+	Parser schema.OutputParser[T]
+	// CallOptions are options passed to the LLM call.
 	CallOptions []llms.CallOption
 }
 
