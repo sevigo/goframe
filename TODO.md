@@ -1953,6 +1953,501 @@ func (g *CodeGenerator) gatherGenerationContext(ctx context.Context, query strin
 
 ---
 
+## 11. Code-Warden Specific Enhancements
+
+Features specifically designed for the Code-Warden GitHub review agent and RAG-based code assistant.
+
+### 11.1 Multi-Stage Retrieval Pipeline Support
+
+**Priority:** High | **Effort:** Medium**
+
+Built-in support for Code-Warden's 5-stage retrieval pipeline.
+
+```go
+// Proposed API
+type MultiStageRetriever struct {
+    store       VectorStore
+    stages      []RetrievalStage
+    merger      ResultMerger
+}
+
+type RetrievalStage struct {
+    Name        string
+    Retriever   Retriever
+    Weight      float32
+    MaxResults  int
+}
+
+// Pre-built stages for Code-Warden
+func NewArchitecturalContextStage(store VectorStore) RetrievalStage
+func NewHyDERetrieverStage(llm llms.Model, store VectorStore) RetrievalStage
+func NewImpactAnalysisStage(graph *CodeGraph, store VectorStore) RetrievalStage
+func NewMultiQueryStage(llm llms.Model, store VectorStore) RetrievalStage
+func NewSymbolDefinitionStage(graph *CodeGraph, store VectorStore, depth int) RetrievalStage
+
+func (r *MultiStageRetriever) Retrieve(ctx context.Context, query string) (*MultiStageResult, error)
+
+type MultiStageResult struct {
+    Documents   []ScoredDocument
+    StageResults map[string][]ScoredDocument  // Results per stage
+    Metadata    map[string]any
+}
+```
+
+**Tasks:**
+- [ ] Implement `MultiStageRetriever`
+- [ ] Implement HyDE retriever stage
+- [ ] Implement Impact Analysis stage
+- [ ] Implement MultiQuery retriever stage
+- [ ] Implement Symbol Definition stage (Graph-RAG Lite)
+- [ ] Add result fusion/merging strategies
+- [ ] Add tests
+
+### 11.2 PR Overlay System
+
+**Priority:** High | **Effort:** High**
+
+Ephemeral overlay system for PR changes without corrupting main branch index.
+
+```go
+// Proposed API
+type PROverlayStore struct {
+    baseStore   VectorStore    // Main branch store (immutable)
+    overlays    map[string]*OverlayLayer
+    mu          sync.RWMutex
+}
+
+type OverlayLayer struct {
+    PRNumber    int
+    BaseSHA     string
+    Added       []schema.Document
+    Modified    []schema.Document    // New versions
+    Deleted     []string             // IDs to exclude
+    CreatedAt   time.Time
+}
+
+type PROptions struct {
+    PRNumber    int
+    BaseSHA     string
+    Changes     []FileChange
+}
+
+type FileChange struct {
+    Path        string
+    OldContent  string    // Empty for new files
+    NewContent  string    // Empty for deleted files
+    Status      string    // "added", "modified", "deleted"
+}
+
+func NewPROverlayStore(base VectorStore) *PROverlayStore
+func (s *PROverlayStore) CreateOverlay(ctx context.Context, opts PROptions) error
+func (s *PROverlayStore) SearchWithOverlay(ctx context.Context, prNumber int, query string, numDocs int, opts ...Option) ([]schema.Document, error)
+func (s *PROverlayStore) RemoveOverlay(prNumber int) error
+func (s *PROverlayStore) RefreshOverlay(ctx context.Context, prNumber int, opts PROptions) error
+```
+
+**Key Features:**
+- Base store remains unmodified
+- PR changes are overlaid in memory
+- Deleted files are excluded from results
+- Modified files show new versions
+- Automatic cleanup of old overlays
+
+**Tasks:**
+- [ ] Implement `PROverlayStore` wrapper
+- [ ] Implement overlay creation from PR diff
+- [ ] Implement search with overlay merging
+- [ ] Implement overlay cleanup
+- [ ] Add concurrent access safety
+- [ ] Add tests
+
+### 11.3 Consensus Review Pipeline
+
+**Priority:** High | **Effort:** Medium**
+
+Built-in support for multi-model consensus reviews.
+
+```go
+// Proposed API
+type ConsensusReviewer struct {
+    models      []llms.Model
+    prompt      string
+    reducer     ConsensusReducer
+    maxParallel int
+}
+
+type ConsensusReducer interface {
+    Reduce(ctx context.Context, reviews []Review) (*ConsensusReview, error)
+}
+
+type Review struct {
+    Model       string
+    Comments    []ReviewComment
+    Confidence  float32
+    RawOutput   string
+}
+
+type ConsensusReview struct {
+    AgreedComments   []ReviewComment    // Issues found by multiple models
+    UniqueComments   []ReviewComment    // Issues found by single model
+    Confidence       float32
+    Agreement        float32            // Agreement ratio
+    Synthesis        string             // LLM-generated summary
+}
+
+func NewConsensusReviewer(models []llms.Model, reducer ConsensusReducer) *ConsensusReviewer
+func (c *ConsensusReviewer) Review(ctx context.Context, diff string, context []schema.Document) (*ConsensusReview, error)
+
+// Built-in reducers
+type VotingReducer struct{}          // Vote on each issue
+type LLMReducer struct { llm Model } // Use LLM to synthesize
+type HybridReducer struct{}          // Vote + LLM synthesis
+```
+
+**Tasks:**
+- [ ] Implement `ConsensusReviewer`
+- [ ] Implement `VotingReducer`
+- [ ] Implement `LLMReducer`
+- [ ] Implement `HybridReducer`
+- [ ] Add parallel model execution
+- [ ] Add tests
+
+### 11.4 Smart Incremental Indexing
+
+**Priority:** High | **Effort:** Medium**
+
+Git-aware incremental indexing with PostgreSQL state tracking.
+
+```go
+// Proposed API
+type IncrementalGitIndexer struct {
+    store       VectorStore
+    git         GitClient
+    stateStore  IndexStateStore
+    parser      ParserPlugin
+    options     IndexerOptions
+}
+
+type IndexStateStore interface {
+    GetLastIndexedSHA(ctx context.Context, repoID string) (string, error)
+    SetLastIndexedSHA(ctx context.Context, repoID, sha string) error
+    GetIndexedFiles(ctx context.Context, repoID string) (map[string]FileHash, error)
+    MarkFileIndexed(ctx context.Context, repoID, path, hash string) error
+    RemoveFile(ctx context.Context, repoID, path string) error
+}
+
+type PostgreSQLStateStore struct {
+    db *sql.DB
+}
+
+type IndexerOptions struct {
+    BatchSize       int
+    ExcludePatterns []string
+    IncludePatterns []string
+    OnProgress      func(processed, total int)
+}
+
+func NewIncrementalGitIndexer(store VectorStore, git GitClient, state IndexStateStore, parser ParserPlugin, opts IndexerOptions) *IncrementalGitIndexer
+func (i *IncrementalGitIndexer) Sync(ctx context.Context, repoPath, repoID string) (*SyncResult, error)
+
+type SyncResult struct {
+    Added       int
+    Modified    int
+    Deleted     int
+    Skipped     int
+    Duration    time.Duration
+    Errors      []error
+}
+```
+
+**Tasks:**
+- [ ] Implement `IncrementalGitIndexer`
+- [ ] Implement `PostgreSQLStateStore`
+- [ ] Implement git diff detection
+- [ ] Implement file hash tracking
+- [ ] Add tests with real git repos
+
+### 11.5 Token-Aware Context Packing
+
+**Priority:** High | **Effort:** Medium**
+
+Strict token budget enforcement for RAG context.
+
+```go
+// Proposed API
+type TokenAwarePacker struct {
+    tokenizer   Tokenizer
+    maxTokens   int
+    strategy    PackingStrategy
+}
+
+type PackingStrategy string
+const (
+    StrategyImportance PackingStrategy = "importance"  // Highest scores first
+    StrategyRecency    PackingStrategy = "recency"     // Most recent first
+    StrategyDiversity  PackingStrategy = "diversity"   // Diverse content
+    StrategyBalanced   PackingStrategy = "balanced"    // Balance all factors
+)
+
+type PackedContext struct {
+    Documents   []schema.Document
+    Tokens      int
+    Budget      int
+    Utilization float32
+    Skipped     int
+}
+
+func NewTokenAwarePacker(tokenizer Tokenizer, maxTokens int, strategy PackingStrategy) *TokenAwarePacker
+func (p *TokenAwarePacker) Pack(ctx context.Context, docs []ScoredDocument) (*PackedContext, error)
+func (p *TokenAwarePacker) PackWithTemplate(ctx context.Context, docs []ScoredDocument, template string) (*PackedContext, error)
+
+// Template-aware packing
+type TemplatePacker struct {
+    packer      *TokenAwarePacker
+    template    string
+    reserved    int    // Tokens reserved for template + response
+}
+
+func (p *TemplatePacker) EstimateAvailableTokens() int
+func (p *TemplatePacker) PackForPrompt(ctx context.Context, docs []ScoredDocument) (string, *PackedContext, error)
+```
+
+**Tasks:**
+- [ ] Implement `TokenAwarePacker`
+- [ ] Implement importance-based strategy
+- [ ] Implement diversity-based strategy
+- [ ] Implement template-aware packing
+- [ ] Add token counting utilities
+- [ ] Add tests
+
+### 11.6 Contiguous Chunk Splicing
+
+**Priority:** Medium | **Effort:** Medium**
+
+Merge overlapping code chunks for continuous logic flows.
+
+```go
+// Proposed API
+type ChunkSplicer struct {
+    overlapThreshold float32    // Minimum overlap ratio to splice
+    maxGap           int        // Maximum line gap to splice
+}
+
+type SplicedChunk struct {
+    Documents    []schema.Document  // Original chunks
+    Spliced      string             // Merged content
+    LineRanges   [][2]int           // Line ranges in original files
+    Files        []string           // Source files
+}
+
+func NewChunkSplicer(overlapThreshold float32, maxGap int) *ChunkSplicer
+func (s *ChunkSplicer) Splice(docs []schema.Document) []SplicedChunk
+func (s *ChunkSplicer) CanSplice(doc1, doc2 schema.Document) bool
+
+// Detect overlap
+func detectOverlap(content1, content2 string) (overlap string, ratio float32)
+// Merge chunks
+func mergeChunks(doc1, doc2 schema.Document, overlap string) schema.Document
+```
+
+**Tasks:**
+- [ ] Implement overlap detection
+- [ ] Implement chunk merging
+- [ ] Implement line range tracking
+- [ ] Handle multi-file chunks
+- [ ] Add tests
+
+### 11.7 Reverse HyDE (Synthetic Questions)
+
+**Priority:** Medium | **Effort:** Medium**
+
+Generate synthetic questions during ingestion for better retrieval.
+
+```go
+// Proposed API
+type SyntheticQuestionGenerator struct {
+    llm         llms.Model
+    questionsPerDoc int
+    promptTemplate  string
+}
+
+type SyntheticDocument struct {
+    Original        schema.Document
+    Questions       []string
+    QuestionVectors [][]float32
+}
+
+func NewSyntheticQuestionGenerator(llm llms.Model, questionsPerDoc int) *SyntheticQuestionGenerator
+func (g *SyntheticQuestionGenerator) Generate(ctx context.Context, doc schema.Document) (*SyntheticDocument, error)
+func (g *SyntheticQuestionGenerator) GenerateBatch(ctx context.Context, docs []schema.Document) ([]SyntheticDocument, error)
+
+// During indexing
+func (s *SyntheticDocument) ToDocuments() []schema.Document {
+    // Returns original + synthetic question documents
+    // Questions embed more naturally with user queries
+}
+
+// During search
+type ReverseHyDERetriever struct {
+    store       VectorStore
+    generator   *SyntheticQuestionGenerator
+}
+
+func (r *ReverseHyDERetriever) Retrieve(ctx context.Context, query string, numDocs int) ([]schema.Document, error)
+```
+
+**Tasks:**
+- [ ] Implement question generation prompts
+- [ ] Implement `SyntheticQuestionGenerator`
+- [ ] Implement storage format
+- [ ] Implement retrieval logic
+- [ ] Add tests
+
+### 11.8 GitHub Integration Helpers
+
+**Priority:** Medium | **Effort:** Low**
+
+Utilities for GitHub PR handling.
+
+```go
+// Proposed API
+package githubutil
+
+type PRDiff struct {
+    Number      int
+    Title       string
+    Description string
+    Files       []FileDiff
+    BaseSHA     string
+    HeadSHA     string
+}
+
+type FileDiff struct {
+    Path        string
+    Status      string    // "added", "modified", "deleted", "renamed"
+    OldContent  string
+    NewContent  string
+    Hunks       []Hunk
+}
+
+type Hunk struct {
+    OldStart    int
+    OldLines    int
+    NewStart    int
+    NewLines    int
+    Content     string
+}
+
+func ParsePRDiff(diffText string) (*PRDiff, error)
+func ExtractChangedLines(file *FileDiff) []LineRange
+func ToDocuments(diff *PRDiff) []schema.Document
+
+// GitHub API helpers
+type GitHubClient struct {
+    client *github.Client
+}
+
+func (c *GitHubClient) GetPR(ctx context.Context, owner, repo string, number int) (*PRDiff, error)
+func (c *GitHubClient) PostReviewComments(ctx context.Context, owner, repo string, number int, comments []ReviewComment) error
+func (c *GitHubClient) ResolveComment(ctx context.Context, owner, repo string, commentID int64) error
+```
+
+**Tasks:**
+- [ ] Implement PR diff parser
+- [ ] Implement hunk extraction
+- [ ] Implement document conversion
+- [ ] Implement GitHub API client
+- [ ] Add tests
+
+### 11.9 Hallucination Detection
+
+**Priority:** Low | **Effort:** Medium**
+
+Detect and flag potential LLM hallucinations.
+
+```go
+// Proposed API
+type HallucinationDetector struct {
+    store       VectorStore
+    llm         llms.Model
+    threshold   float32
+}
+
+type HallucinationCheck struct {
+    Statement   string
+    Confidence  float32
+    Verified    bool
+    Sources     []schema.Document
+    Reason      string
+}
+
+func NewHallucinationDetector(store VectorStore, llm llms.Model, threshold float32) *HallucinationDetector
+func (d *HallucinationDetector) Check(ctx context.Context, statement string, context []schema.Document) (*HallucinationCheck, error)
+func (d *HallucinationDetector) CheckBatch(ctx context.Context, statements []string, context []schema.Document) ([]HallucinationCheck, error)
+
+// Verification strategies
+func (d *HallucinationDetector) verifyAgainstSources(statement string, sources []schema.Document) bool
+func (d *HallucinationDetector) verifyWithRetrieval(ctx context.Context, statement string) ([]schema.Document, bool)
+```
+
+**Tasks:**
+- [ ] Implement statement extraction
+- [ ] Implement source verification
+- [ ] Implement retrieval-based verification
+- [ ] Add confidence scoring
+- [ ] Add tests
+
+### 11.10 Structured Output Parsing
+
+**Priority:** High | **Effort:** Low**
+
+Enhanced typed output parsing with validation.
+
+```go
+// Proposed API
+package output
+
+type StructuredParser[T any] struct {
+    schema      string
+    validator   func(T) error
+    maxRetries  int
+}
+
+func NewStructuredParser[T any](schema string, validator func(T) error) *StructuredParser[T]
+func (p *StructuredParser[T]) Parse(ctx context.Context, raw string) (T, error)
+func (p *StructuredParser[T]) ParseWithRetry(ctx context.Context, llm llms.Model, prompt string) (T, error)
+
+// Pre-built parsers for code review
+type ReviewComment struct {
+    File        string `json:"file"`
+    Line        int    `json:"line"`
+    Severity    string `json:"severity"`
+    Message     string `json:"message"`
+    Suggestion  string `json:"suggestion,omitempty"`
+}
+
+type ReviewOutput struct {
+    Summary     string           `json:"summary"`
+    Comments    []ReviewComment  `json:"comments"`
+    Score       float32          `json:"score"`
+}
+
+// JSON schema enforcement
+func WithJSONSchema(schema string) ParseOption
+func WithXMLFormat() ParseOption
+func WithStrictValidation() ParseOption
+```
+
+**Tasks:**
+- [ ] Implement `StructuredParser`
+- [ ] Implement retry logic
+- [ ] Add JSON schema validation
+- [ ] Add XML parsing support
+- [ ] Add pre-built review parsers
+- [ ] Add tests
+
+---
+
 ## Quick Start Guide for Contributors
 
 ### High Priority, Low Effort (Start Here!)
