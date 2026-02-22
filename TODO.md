@@ -1282,6 +1282,677 @@ Potential additions:
 
 ---
 
+## 10. Advanced RAG Techniques for Code
+
+This section covers advanced techniques specifically designed for code understanding, code reviews, and code FAQ systems.
+
+### 10.1 Multi-Granularity Code Indexing
+
+**Priority:** High | **Effort:** Medium**
+
+Index code at multiple levels of granularity for better retrieval.
+
+```go
+// Proposed API
+type CodeIndexConfig struct {
+    // Index levels
+    IndexFunctions    bool // Function/method level
+    IndexClasses      bool // Class/struct level
+    IndexFiles        bool // File level summaries
+    IndexPackages     bool // Package/module level
+    IndexCrossRefs    bool // Cross-references between entities
+}
+
+// Store multiple representations
+type CodeDocument struct {
+    ID              string
+    Content         string
+    Granularity     GranularityLevel // function, class, file, package
+    ParentID        string            // ID of containing entity
+    ChildrenIDs     []string          // IDs of contained entities
+    Dependencies    []string          // Import dependencies
+    CallGraph       []string          // Function calls
+    Signature       string            // Function signature
+    DocComment      string            // Documentation
+    CodeEmbedding   []float32         // Dense embedding
+    SparseVector    *SparseVector     // Sparse embedding (keywords)
+}
+```
+
+**Use Cases:**
+- Retrieve function implementations + class context
+- Find related functions across files
+- Understand code structure at multiple levels
+
+**Tasks:**
+- [ ] Design multi-level document schema
+- [ ] Implement hierarchical chunking
+- [ ] Add parent-child relationship storage
+- [ ] Update search to use hierarchy
+- [ ] Add tests
+
+### 10.2 Call Graph and Dependency Graph Integration
+
+**Priority:** High | **Effort:** High**
+
+Build and query code relationship graphs.
+
+```go
+// Proposed API
+type CodeGraph struct {
+    nodes map[string]*CodeNode
+    edges []CodeEdge
+}
+
+type CodeNode struct {
+    ID           string
+    Type         NodeType // function, class, file, package
+    Name         string
+    File         string
+    StartLine    int
+    EndLine      int
+    Embedding    []float32
+}
+
+type CodeEdge struct {
+    From         string
+    To           string
+    Type         EdgeType // calls, imports, extends, implements
+    Weight       float32
+}
+
+// Graph queries
+func (g *CodeGraph) GetCallers(functionID string) []*CodeNode
+func (g *CodeGraph) GetCallees(functionID string) []*CodeNode
+func (g *CodeGraph) GetDependencies(fileID string) []*CodeNode
+func (g *CodeGraph) GetDependents(fileID string) []*CodeNode
+func (g *CodeGraph) GetImplementations(interfaceID string) []*CodeNode
+func (g *CodeGraph) FindPath(from, to string) []*CodeEdge
+func (g *CodeGraph) GetContextWindow(nodeID string, depth int) []*CodeNode
+```
+
+**Use Cases:**
+- "What functions call this function?" (impact analysis)
+- "What does this function depend on?" (dependency analysis)
+- "Show me the call chain that leads here" (trace analysis)
+- "What files would be affected by this change?" (change impact)
+
+**Tasks:**
+- [ ] Design graph schema
+- [ ] Implement call graph extraction (Go, TypeScript)
+- [ ] Implement dependency graph extraction
+- [ ] Add graph storage layer
+- [ ] Implement graph queries
+- [ ] Integrate with vector search for hybrid retrieval
+- [ ] Add tests
+
+### 10.3 Code-Aware Reranking
+
+**Priority:** High | **Effort:** Medium**
+
+Specialized reranking for code search results.
+
+```go
+// Proposed API
+type CodeReranker struct {
+    // Scoring factors
+    SemanticWeight    float32 // Semantic similarity
+    ExactMatchWeight  float32 // Exact identifier matches
+    ContextWeight     float32 // Contextual relevance
+    RecencyWeight     float32 // Git recency
+    AuthorWeight      float32 // Author expertise
+}
+
+type CodeRerankOptions struct {
+    QueryLanguage     string   // Filter by language
+    QueryType         QueryType // function, class, usage
+    PreferExactMatch  bool     // Boost exact matches
+    IncludeContext    bool     // Include surrounding code
+    MaxContextLines   int      // Lines of context
+}
+
+func (r *CodeReranker) Rerank(ctx context.Context, query string, docs []CodeDocument, opts CodeRerankOptions) ([]ScoredDocument, error)
+
+// Scoring methods
+func (r *CodeReranker) scoreExactMatch(query string, doc CodeDocument) float32
+func (r *CodeReranker) scoreContextRelevance(query string, doc CodeDocument) float32
+func (r *CodeReranker) scoreGitRecency(doc CodeDocument) float32
+```
+
+**Use Cases:**
+- Exact identifier matches should rank higher
+- Recent code changes might be more relevant
+- Code in the same package has higher context relevance
+
+**Tasks:**
+- [ ] Implement exact match scoring
+- [ ] Implement contextual relevance scoring
+- [ ] Implement git recency scoring
+- [ ] Add language-specific boosting
+- [ ] Add tests
+
+### 10.4 Query Understanding for Code
+
+**Priority:** Medium | **Effort:** Medium**
+
+Parse and understand code-related queries.
+
+```go
+// Proposed API
+type CodeQueryParser struct {
+    llm llms.Model
+}
+
+type ParsedCodeQuery struct {
+    OriginalQuery     string
+    QueryType         QueryType      // definition, usage, example, explanation
+    Entities          []CodeEntity   // Mentioned functions, classes, packages
+    Languages         []string       // Mentioned or inferred languages
+    Intent            QueryIntent    // find, understand, fix, improve
+    Constraints       []Constraint   // "in Go", "in tests", "recent"
+    ExpandedQueries   []string       // Query expansions for better recall
+}
+
+type CodeEntity struct {
+    Name         string
+    Type         EntityType // function, class, variable, package
+    Context      string     // Package/class context
+    Language     string
+}
+
+type QueryType string
+const (
+    QueryTypeDefinition   QueryType = "definition"   // "What is function X?"
+    QueryTypeUsage        QueryType = "usage"        // "How do I use X?"
+    QueryTypeExample      QueryType = "example"      // "Show me an example of X"
+    QueryTypeExplanation  QueryType = "explanation"  // "Explain how X works"
+    QueryTypeFix          QueryType = "fix"          // "How do I fix X?"
+    QueryTypeCompare      QueryType = "compare"      // "What's the difference between X and Y?"
+    QueryTypeImpact       QueryType = "impact"       // "What does X affect?"
+)
+
+func (p *CodeQueryParser) Parse(ctx context.Context, query string) (*ParsedCodeQuery, error)
+```
+
+**Use Cases:**
+- "What does `SimilaritySearch` do?" → definition query
+- "How do I use the Qdrant client?" → usage query
+- "Show me examples of RAG chains" → example query
+- "What files import `parser.go`?" → impact query
+
+**Tasks:**
+- [ ] Design query parsing schema
+- [ ] Implement entity extraction
+- [ ] Implement intent classification
+- [ ] Add query expansion
+- [ ] Integrate with retrieval pipeline
+- [ ] Add tests
+
+### 10.5 Code Context Expansion
+
+**Priority:** Medium | **Effort:** Medium**
+
+Automatically expand retrieved code with relevant context.
+
+```go
+// Proposed API
+type ContextExpander struct {
+    store       VectorStore
+    graph       *CodeGraph
+    maxTokens   int
+}
+
+type ExpansionConfig struct {
+    IncludeImports     bool    // Include import statements
+    IncludeSignature   bool    // Include function signatures
+    IncludeDocComments bool    // Include doc comments
+    IncludeCallers     bool    // Include calling functions
+    IncludeCallees     bool    // Include called functions
+    IncludeClass       bool    // Include containing class
+    IncludeTests       bool    // Include related tests
+    MaxExpansionTokens int     // Token budget for expansion
+}
+
+func (e *ContextExpander) Expand(ctx context.Context, doc CodeDocument, config ExpansionConfig) (*ExpandedContext, error)
+
+type ExpandedContext struct {
+    Primary         string     // Original code
+    Imports         string     // Import statements
+    Definitions     []string   // Referenced definitions
+    Context         string     // Surrounding context
+    Tests           []string   // Related tests
+    RelatedFiles    []string   // Related files
+    TotalTokens     int        // Total token count
+}
+```
+
+**Use Cases:**
+- When showing a function, also show its imports
+- When showing a class method, show the class definition
+- When showing code, include related test code
+- Provide complete context for LLM understanding
+
+**Tasks:**
+- [ ] Implement import extraction
+- [ ] Implement signature extraction
+- [ ] Implement caller/callee expansion
+- [ ] Implement test association
+- [ ] Add token budget management
+- [ ] Add tests
+
+### 10.6 Self-Querying RAG for Code
+
+**Priority:** Medium | **Effort:** High**
+
+Let the system generate its own search queries.
+
+```go
+// Proposed API
+type SelfQueryingRetriever struct {
+    llm         llms.Model
+    store       VectorStore
+    maxQueries  int
+}
+
+type QueryPlan struct {
+    OriginalQuery    string
+    SubQueries       []SubQuery
+    SynthesisPlan    SynthesisPlan
+}
+
+type SubQuery struct {
+    Query          string
+    Filters        map[string]any
+    QueryType      QueryType
+    Priority       int
+}
+
+type SynthesisPlan struct {
+    Strategy       string    // "merge", "compare", "synthesize"
+    Template       string    // Synthesis prompt template
+}
+
+func (r *SelfQueryingRetriever) Plan(ctx context.Context, query string) (*QueryPlan, error)
+func (r *SelfQueryingRetriever) Execute(ctx context.Context, plan *QueryPlan) ([]schema.Document, error)
+
+// Example flow:
+// User: "Compare the error handling in Qdrant and Ollama clients"
+// System generates:
+//   1. Search: "error handling" + filters:{package: "qdrant"}
+//   2. Search: "error handling" + filters:{package: "ollama"}
+//   3. Synthesis: Compare the two result sets
+```
+
+**Use Cases:**
+- Complex multi-part questions
+- Comparative queries
+- Queries requiring multiple search strategies
+
+**Tasks:**
+- [ ] Design query planning schema
+- [ ] Implement query decomposition
+- [ ] Implement filter generation
+- [ ] Implement result synthesis
+- [ ] Add tests
+
+### 10.7 Code Review Assistant
+
+**Priority:** High | **Effort:** High**
+
+Specialized pipeline for code reviews.
+
+```go
+// Proposed API
+type CodeReviewPipeline struct {
+    retriever    Retriever
+    llm          llms.Model
+    gitClient    GitClient
+}
+
+type ReviewContext struct {
+    PR              PullRequest
+    ChangedFiles    []ChangedFile
+    HistoricalPRs   []PullRequest      // Similar past PRs
+    RelatedCode     []CodeDocument     // Related code in codebase
+    AuthorHistory   []Commit           // Author's past changes
+    BlameInfo       []BlameLine        // Git blame for context
+}
+
+type ReviewComment struct {
+    File          string
+    Line          int
+    Severity      Severity    // info, warning, error
+    Category      string      // style, bug, performance, security
+    Message       string
+    Suggestion    string      // Code suggestion
+    Confidence    float32
+    References    []string    // Supporting references
+}
+
+type ReviewResult struct {
+    Summary       string
+    Comments      []ReviewComment
+    OverallScore  float32
+    Checklist     []ChecklistItem
+}
+
+func (p *CodeReviewPipeline) Review(ctx context.Context, pr PullRequest) (*ReviewResult, error)
+
+// Review stages
+func (p *CodeReviewPipeline) gatherContext(ctx context.Context, pr PullRequest) (*ReviewContext, error)
+func (p *CodeReviewPipeline) detectIssues(ctx context.Context, diff string, context *ReviewContext) ([]ReviewComment, error)
+func (p *CodeReviewPipeline) findSimilarPRs(ctx context.Context, pr PullRequest) ([]PullRequest, error)
+func (p *CodeReviewPipeline) generateSuggestions(ctx context.Context, comments []ReviewComment) error
+```
+
+**Use Cases:**
+- Automated code review comments
+- Finding similar PRs that introduced bugs
+- Style consistency checking
+- Security vulnerability detection
+- Performance regression detection
+
+**Tasks:**
+- [ ] Design review pipeline architecture
+- [ ] Implement git integration
+- [ ] Implement diff parsing
+- [ ] Implement context gathering
+- [ ] Implement issue detection
+- [ ] Implement suggestion generation
+- [ ] Add tests with real PRs
+
+### 10.8 Semantic Code Search with Filters
+
+**Priority:** Medium | **Effort:** Low**
+
+Enhanced search with semantic code filters.
+
+```go
+// Proposed API
+type SemanticCodeFilter struct {
+    Languages       []string   // Go, TypeScript, Python
+    FilePatterns    []string   // Glob patterns
+    Authors         []string   // Git authors
+    DateRange       DateRange  // Commit date range
+    CodeTypes       []string   // function, class, interface, test
+    Visibility      []string   // public, private
+    MinComplexity   int        // Cyclomatic complexity
+    HasTests        *bool      // Has associated tests
+    HasComments     *bool      // Has doc comments
+    ModifiedIn      []string   // Branch names
+}
+
+func (s *Store) SemanticCodeSearch(ctx context.Context, query string, filters SemanticCodeFilter, numResults int) ([]CodeDocument, error)
+
+// Example usage:
+results, err := store.SemanticCodeSearch(ctx,
+    "error handling pattern",
+    SemanticCodeFilter{
+        Languages:   []string{"go"},
+        CodeTypes:   []string{"function"},
+        Visibility:  []string{"public"},
+        HasComments: boolPtr(true),
+    },
+    10,
+)
+```
+
+**Use Cases:**
+- "Show me public Go functions with error handling"
+- "Find all tests that test authentication"
+- "Find code modified in the last month"
+
+**Tasks:**
+- [ ] Design filter schema
+- [ ] Implement language filter
+- [ ] Implement code type filter
+- [ ] Implement complexity filter
+- [ ] Implement git-based filters
+- [ ] Add tests
+
+### 10.9 Code FAQ System
+
+**Priority:** High | **Effort:** Medium**
+
+Build a self-learning FAQ system from codebase.
+
+```go
+// Proposed API
+type CodeFAQSystem struct {
+    store       VectorStore
+    llm         llms.Model
+    faqStore    FAQStore
+}
+
+type FAQEntry struct {
+    ID              string
+    Question        string
+    Answer          string
+    CodeReferences  []CodeReference
+    Tags            []string
+    Confidence      float32
+    Source          string      // "user", "generated", "curated"
+    LastUpdated     time.Time
+    AccessCount     int
+    HelpfulVotes    int
+}
+
+type CodeReference struct {
+    File        string
+    LineStart   int
+    LineEnd     int
+    Code        string
+    Description string
+}
+
+func (f *CodeFAQSystem) Ask(ctx context.Context, question string) (*FAQAnswer, error)
+func (f *CodeFAQSystem) Learn(ctx context.Context, question, answer string, refs []CodeReference) error
+func (f *CodeFAQSystem) GenerateFAQs(ctx context.Context, codebase []CodeDocument) ([]FAQEntry, error)
+func (f *CodeFAQSystem) FindSimilarFAQs(ctx context.Context, question string) ([]FAQEntry, error)
+
+type FAQAnswer struct {
+    Answer          string
+    CodeReferences  []CodeReference
+    RelatedFAQs     []FAQEntry
+    Confidence      float32
+    WasFromCache    bool
+}
+```
+
+**Features:**
+- Learn from user Q&A pairs
+- Auto-generate FAQs from code comments
+- Cache frequent questions
+- Track question patterns
+
+**Tasks:**
+- [ ] Design FAQ schema
+- [ ] Implement FAQ storage
+- [ ] Implement question similarity
+- [ ] Implement FAQ generation from code
+- [ ] Implement learning from feedback
+- [ ] Add tests
+
+### 10.10 Incremental Indexing
+
+**Priority:** Medium | **Effort:** Medium**
+
+Efficiently update the index as code changes.
+
+```go
+// Proposed API
+type IncrementalIndexer struct {
+    store       VectorStore
+    gitClient   GitClient
+    parser      ParserPlugin
+    stateStore  StateStore
+}
+
+type IndexState struct {
+    LastCommitHash   string
+    IndexedFiles     map[string]FileState
+    LastIndexed      time.Time
+}
+
+type FileState struct {
+    Path         string
+    Hash         string    // Content hash
+    LastModified time.Time
+    ChunkIDs     []string  // Stored chunk IDs
+}
+
+type IndexDiff struct {
+    Added    []string
+    Modified []string
+    Deleted  []string
+}
+
+func (i *IncrementalIndexer) Sync(ctx context.Context, repoPath string) (*IndexStats, error)
+func (i *IncrementalIndexer) GetDiff(ctx context.Context, repoPath string) (*IndexDiff, error)
+func (i *IncrementalIndexer) IndexCommit(ctx context.Context, commitHash string) error
+func (i *IncrementalIndexer) IndexFiles(ctx context.Context, files []string) error
+func (i *IncrementalIndexer) RemoveFiles(ctx context.Context, files []string) error
+
+type IndexStats struct {
+    FilesProcessed   int
+    ChunksAdded      int
+    ChunksUpdated    int
+    ChunksDeleted    int
+    TimeElapsed      time.Duration
+}
+```
+
+**Use Cases:**
+- CI/CD integration for automatic indexing
+- Large codebases where full reindex is expensive
+- Real-time code search during development
+
+**Tasks:**
+- [ ] Design state storage schema
+- [ ] Implement git diff detection
+- [ ] Implement incremental updates
+- [ ] Implement deletion handling
+- [ ] Add tests
+
+### 10.11 Code Embedding Strategies
+
+**Priority:** Medium | **Effort:** Medium**
+
+Multiple embedding strategies optimized for code.
+
+```go
+// Proposed API
+type CodeEmbeddingStrategy interface {
+    Embed(ctx context.Context, code CodeDocument) (*EmbeddingResult, error)
+    EmbedBatch(ctx context.Context, codes []CodeDocument) ([]EmbeddingResult, error)
+}
+
+type EmbeddingResult struct {
+    Dense          []float32       // Dense embedding
+    Sparse         *SparseVector   // Sparse embedding (keywords)
+    Structural     []float32       // Structural embedding (AST)
+    Semantic       []float32       // Semantic embedding
+}
+
+// Strategy 1: Code-specific models
+type CodeBERTEmbedder struct { ... }  // CodeBERT, GraphCodeBERT
+type StarCoderEmbedder struct { ... } // StarCoder embeddings
+
+// Strategy 2: Structure-aware embedding
+type StructuralEmbedder struct {
+    embedder   Embedder
+    options    StructuralOptions
+}
+type StructuralOptions struct {
+    IncludeImports     bool
+    IncludeSignature   bool
+    IncludeDocComments bool
+    IncludeContext     int  // Lines of context
+}
+
+// Strategy 3: Multi-vector embedding
+type MultiVectorEmbedder struct {
+    strategies []CodeEmbeddingStrategy
+}
+// Creates multiple embeddings per code chunk for different aspects
+
+// Strategy 4: Contrastive embedding
+type ContrastiveEmbedder struct {
+    embedder   Embedder
+    augmenter  CodeAugmenter
+}
+// Uses code augmentation for contrastive learning
+```
+
+**Use Cases:**
+- Code-specific models understand syntax better
+- Structure-aware embeddings capture code structure
+- Multi-vector embeddings improve recall
+
+**Tasks:**
+- [ ] Research best code embedding models
+- [ ] Implement structure-aware embedding
+- [ ] Implement multi-vector strategy
+- [ ] Add embedding evaluation
+- [ ] Add tests
+
+### 10.12 Code Generation from Context
+
+**Priority:** Low | **Effort:** High**
+
+Generate code suggestions from retrieved context.
+
+```go
+// Proposed API
+type CodeGenerator struct {
+    llm         llms.Model
+    retriever   Retriever
+}
+
+type GenerationContext struct {
+    Query           string
+    Language        string
+    StyleGuide      string
+    RelatedCode     []CodeDocument
+    Imports         []string
+    TypeContext     []TypeDefinition
+    TestExamples    []string
+}
+
+type CodeSuggestion struct {
+    Code            string
+    Explanation     string
+    Confidence      float32
+    References      []CodeReference
+    AlternativeCode []string    // Alternative implementations
+}
+
+func (g *CodeGenerator) GenerateFunction(ctx context.Context, spec FunctionSpec) (*CodeSuggestion, error)
+func (g *CodeGenerator) GenerateTest(ctx context.Context, functionCode string) (*CodeSuggestion, error)
+func (g *CodeGenerator) GenerateDocs(ctx context.Context, code string) (string, error)
+func (g *CodeGenerator) RefactorCode(ctx context.Context, code string, goal string) (*CodeSuggestion, error)
+func (g *CodeGenerator) FixCode(ctx context.Context, code string, error string) (*CodeSuggestion, error)
+
+// Context gathering for generation
+func (g *CodeGenerator) gatherGenerationContext(ctx context.Context, query string, lang string) (*GenerationContext, error)
+```
+
+**Use Cases:**
+- Generate function implementations from specs
+- Generate tests for existing code
+- Generate documentation
+- Suggest refactoring
+
+**Tasks:**
+- [ ] Design generation pipeline
+- [ ] Implement context gathering
+- [ ] Implement function generation
+- [ ] Implement test generation
+- [ ] Implement doc generation
+- [ ] Add tests
+
+---
+
 ## Quick Start Guide for Contributors
 
 ### High Priority, Low Effort (Start Here!)
