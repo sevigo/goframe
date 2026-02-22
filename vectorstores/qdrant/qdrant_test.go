@@ -53,8 +53,6 @@ func (m *MockEmbedder) GetDimension(ctx context.Context) (int, error) {
 }
 
 func TestWithCollectionName(t *testing.T) {
-	t.Parallel()
-
 	t.Run("sets_collection_name", func(t *testing.T) {
 		opt := WithCollectionName("test-collection")
 		opts := options{}
@@ -71,8 +69,6 @@ func TestWithCollectionName(t *testing.T) {
 }
 
 func TestWithEmbedder(t *testing.T) {
-	t.Parallel()
-
 	embedder := &MockEmbedder{dimension: 768}
 	opt := WithEmbedder(embedder)
 	opts := options{}
@@ -81,8 +77,6 @@ func TestWithEmbedder(t *testing.T) {
 }
 
 func TestWithAPIKey(t *testing.T) {
-	t.Parallel()
-
 	opt := WithAPIKey("secret-key-123")
 	opts := options{}
 	opt(&opts)
@@ -90,8 +84,6 @@ func TestWithAPIKey(t *testing.T) {
 }
 
 func TestWithSparseVector(t *testing.T) {
-	t.Parallel()
-
 	opt := WithSparseVector("bow")
 	opts := options{}
 	opt(&opts)
@@ -99,8 +91,6 @@ func TestWithSparseVector(t *testing.T) {
 }
 
 func TestWithPayloadIndex(t *testing.T) {
-	t.Parallel()
-
 	opt := WithPayloadIndex("source", "package_name")
 	opts := options{}
 	opt(&opts)
@@ -108,8 +98,6 @@ func TestWithPayloadIndex(t *testing.T) {
 }
 
 func TestBuildQdrantFilter(t *testing.T) {
-	t.Parallel()
-
 	t.Run("empty_filters", func(t *testing.T) {
 		filter := buildQdrantFilter(nil)
 		assert.Nil(t, filter)
@@ -121,7 +109,7 @@ func TestBuildQdrantFilter(t *testing.T) {
 	t.Run("string_value", func(t *testing.T) {
 		filter := buildQdrantFilter(map[string]any{"name": "test"})
 		assert.NotNil(t, filter)
-		assert.Len(t, filter.Must, 1)
+		assert.Len(t, filter.GetMust(), 1)
 	})
 
 	t.Run("int_value", func(t *testing.T) {
@@ -157,11 +145,11 @@ func TestBuildQdrantFilter(t *testing.T) {
 	t.Run("unsupported_type", func(t *testing.T) {
 		// Should not panic, just skip unsupported type
 		filter := buildQdrantFilter(map[string]any{
-			"valid":   "string",
+			"valid":       "string",
 			"unsupported": struct{ X int }{X: 1},
 		})
 		assert.NotNil(t, filter)
-		assert.Len(t, filter.Must, 1) // Only valid field should be included
+		assert.Len(t, filter.GetMust(), 1) // Only valid field should be included
 	})
 
 	t.Run("nil_value_in_slice", func(t *testing.T) {
@@ -173,8 +161,6 @@ func TestBuildQdrantFilter(t *testing.T) {
 }
 
 func TestBuildMatchFromSlice(t *testing.T) {
-	t.Parallel()
-
 	t.Run("empty_slice", func(t *testing.T) {
 		match := buildMatchFromSlice("key", []any{})
 		assert.Nil(t, match)
@@ -188,13 +174,13 @@ func TestBuildMatchFromSlice(t *testing.T) {
 	t.Run("string_slice", func(t *testing.T) {
 		match := buildMatchFromSlice("tags", []any{"a", "b", "c"})
 		assert.NotNil(t, match)
-		assert.NotNil(t, match.MatchValue)
+		assert.NotNil(t, match.GetMatchValue())
 	})
 
 	t.Run("int_slice", func(t *testing.T) {
 		match := buildMatchFromSlice("ids", []any{1, 2, 3})
 		assert.NotNil(t, match)
-		assert.NotNil(t, match.MatchValue)
+		assert.NotNil(t, match.GetMatchValue())
 	})
 
 	t.Run("mixed_int_types", func(t *testing.T) {
@@ -209,8 +195,6 @@ func TestBuildMatchFromSlice(t *testing.T) {
 }
 
 func TestStoreValidateAndNormalizeBatchConfig(t *testing.T) {
-	t.Parallel()
-
 	// Create store with a logger to avoid nil pointer errors
 	store := &Store{
 		logger: nil, // Test doesn't use logging
@@ -275,8 +259,6 @@ func TestStoreValidateAndNormalizeBatchConfig(t *testing.T) {
 }
 
 func TestStoreValidateHybridSearchOptions(t *testing.T) {
-	t.Parallel()
-
 	t.Run("nil_sparse_query", func(t *testing.T) {
 		store := &Store{options: options{sparseVectors: []string{"bow"}}}
 		err := store.validateHybridSearchOptions(vectorstores.Options{SparseQuery: nil})
@@ -308,8 +290,6 @@ func TestStoreValidateHybridSearchOptions(t *testing.T) {
 }
 
 func TestStoreBuildSparseVectorConfig(t *testing.T) {
-	t.Parallel()
-
 	t.Run("no_sparse_vectors", func(t *testing.T) {
 		store := &Store{options: options{sparseVectors: nil}}
 		config := store.buildSparseVectorConfig()
@@ -320,22 +300,20 @@ func TestStoreBuildSparseVectorConfig(t *testing.T) {
 		store := &Store{options: options{sparseVectors: []string{"bow"}}}
 		config := store.buildSparseVectorConfig()
 		assert.NotNil(t, config)
-		assert.Len(t, config.Map, 1)
-		assert.NotNil(t, config.Map["bow"].Index)
-		assert.True(t, *config.Map["bow"].Index.OnDisk)
+		assert.Len(t, config.GetMap(), 1)
+		assert.NotNil(t, config.GetMap()["bow"].GetIndex())
+		assert.True(t, config.GetMap()["bow"].GetIndex().GetOnDisk())
 	})
 
 	t.Run("multiple_sparse_vectors", func(t *testing.T) {
 		store := &Store{options: options{sparseVectors: []string{"bow", "bm25"}}}
 		config := store.buildSparseVectorConfig()
 		assert.NotNil(t, config)
-		assert.Len(t, config.Map, 2)
+		assert.Len(t, config.GetMap(), 2)
 	})
 }
 
 func TestStoreConvertToQdrantValue(t *testing.T) {
-	t.Parallel()
-
 	store := &Store{}
 
 	t.Run("string_value", func(t *testing.T) {
@@ -386,7 +364,7 @@ func TestStoreConvertToQdrantValue(t *testing.T) {
 		val := store.convertToQdrantValue([]string{"a", "b", "c"})
 		assert.IsType(t, &qdrant.Value{}, val)
 		assert.NotNil(t, val.GetListValue())
-		assert.Len(t, val.GetListValue().Values, 3)
+		assert.Len(t, val.GetListValue().GetValues(), 3)
 	})
 
 	t.Run("nil_value", func(t *testing.T) {
@@ -404,8 +382,6 @@ func TestStoreConvertToQdrantValue(t *testing.T) {
 }
 
 func TestStoreConvertFromQdrantValue(t *testing.T) {
-	t.Parallel()
-
 	store := &Store{}
 
 	t.Run("string_value", func(t *testing.T) {
@@ -455,8 +431,6 @@ func TestStoreConvertFromQdrantValue(t *testing.T) {
 }
 
 func TestStoreDocumentToPayload(t *testing.T) {
-	t.Parallel()
-
 	store := &Store{}
 
 	t.Run("basic_document", func(t *testing.T) {
@@ -483,7 +457,7 @@ func TestStoreDocumentToPayload(t *testing.T) {
 
 		payload := store.documentToPayload(doc)
 		assert.Equal(t, int64(42), payload["count"].GetIntegerValue())
-		assert.Len(t, payload["tags"].GetListValue().Values, 2)
+		assert.Len(t, payload["tags"].GetListValue().GetValues(), 2)
 	})
 
 	t.Run("nil_metadata", func(t *testing.T) {
@@ -499,8 +473,6 @@ func TestStoreDocumentToPayload(t *testing.T) {
 }
 
 func TestStorePayloadToDocument(t *testing.T) {
-	t.Parallel()
-
 	store := &Store{}
 
 	t.Run("basic_payload", func(t *testing.T) {
@@ -522,7 +494,7 @@ func TestStorePayloadToDocument(t *testing.T) {
 			"float_field":  {Kind: &qdrant.Value_DoubleValue{DoubleValue: 3.14}},
 			"bool_field":   {Kind: &qdrant.Value_BoolValue{BoolValue: true}},
 			"null_field":   {Kind: &qdrant.Value_NullValue{}},
-			"list_field": &qdrant.Value{
+			"list_field": {
 				Kind: &qdrant.Value_ListValue{
 					ListValue: &qdrant.ListValue{
 						Values: []*qdrant.Value{
@@ -553,8 +525,6 @@ func TestStorePayloadToDocument(t *testing.T) {
 }
 
 func TestStoreIsRetryableError(t *testing.T) {
-	t.Parallel()
-
 	store := &Store{}
 
 	t.Run("error_500", func(t *testing.T) {
@@ -589,8 +559,6 @@ func TestStoreIsRetryableError(t *testing.T) {
 }
 
 func TestStoreCalculateNextDelay(t *testing.T) {
-	t.Parallel()
-
 	store := &Store{batchConfig: BatchConfig{MaxRetryDelay: 30 * time.Second}}
 
 	t.Run("normal_delay_increase", func(t *testing.T) {
@@ -610,8 +578,6 @@ func TestStoreCalculateNextDelay(t *testing.T) {
 }
 
 func TestStoreGetBatchConfig(t *testing.T) {
-	t.Parallel()
-
 	batchConfig := BatchConfig{
 		BatchSize:      50,
 		MaxConcurrency: 4,
@@ -628,8 +594,6 @@ func TestStoreGetBatchConfig(t *testing.T) {
 }
 
 func TestStoreGetEmbedder(t *testing.T) {
-	t.Parallel()
-
 	embedder := &MockEmbedder{dimension: 768}
 	store := &Store{embedder: embedder}
 

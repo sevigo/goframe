@@ -421,3 +421,10 @@ linters:
           - gosec
           - noctx
           - wrapcheck
+
+      # qdrant_test.go needs to use package "qdrant" instead of "qdrant_test"
+      # to access internal types like options and With* functions
+      - path: 'vectorstores/qdrant/qdrant_test\.go'
+        linters:
+          - testpackage
+          - tparallel
