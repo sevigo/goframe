@@ -4,6 +4,45 @@ A comprehensive development roadmap for the GoFrame RAG/Chain framework, organiz
 
 ---
 
+## 🎯 Code-Warden Priority Items
+
+The following items are particularly valuable for the Code-Warden project:
+
+### Immediate Priorities (Direct Impact)
+
+| Section | Item | Why Important |
+|---------|------|---------------|
+| §11.2 | **PR Overlay System** | Core feature - PR changes without corrupting main index |
+| §11.4 | **Smart Incremental Indexing** | Performance - git diff tracking with PostgreSQL |
+| §11.5 | **Token-Aware Context Packing** | "Zero-Hallucination" goal - strict token budgets |
+| §11.10 | **Structured Output Parsing** | JSON/XML parsing for review comments |
+| §2.2 | **Count API** | Progress tracking during indexing |
+| §2.3 | **Groups API** | Group results by file (avoid over-representation) |
+
+### High Value Features
+
+| Section | Item | Why Important |
+|---------|------|---------------|
+| §11.1 | **Multi-Stage Retrieval** | 5-stage pipeline support |
+| §11.3 | **Consensus Review** | Multi-model review synthesis |
+| §11.6 | **Chunk Splicing** | Continuous logic flows |
+| §11.7 | **Reverse HyDE** | Better query-code alignment |
+| §10.2 | **Call Graph Integration** | Impact analysis |
+| §10.3 | **Code-Aware Reranking** | Exact match boosting |
+
+### Supporting Features
+
+| Section | Item | Why Important |
+|---------|------|---------------|
+| §11.8 | **GitHub Integration** | PR diff parsing, API helpers |
+| §11.9 | **Hallucination Detection** | Zero-hallucination verification |
+| §10.4 | **Query Understanding** | Parse code-related queries |
+| §10.7 | **Code Review Pipeline** | Automated review workflow |
+| §3.1 | **List Models/Model Info** | Model selection for consensus |
+| §3.2 | **JSON Mode** | Reliable structured output |
+
+---
+
 ## Table of Contents
 
 1. [Architecture Improvements](#1-architecture-improvements)
