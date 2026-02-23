@@ -13,6 +13,29 @@ import (
 	model "github.com/sevigo/goframe/schema"
 )
 
+// Pre-compiled regex patterns for performance.
+var (
+	// headingPatterns matches various heading formats.
+	headingPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`^#{1,6}\s+.*$`),      // Markdown headings
+		regexp.MustCompile(`^[A-Z][A-Z\s]{2,}$`), // ALL CAPS TITLES
+		regexp.MustCompile(`^={3,}$`),            // Setext H1 underlines
+		regexp.MustCompile(`^-{3,}$`),            // Setext H2 underlines
+		regexp.MustCompile(`^\d+\.\s+[A-Z].*$`),  // Numbered sections
+		regexp.MustCompile(`^Chapter\s+\d+.*$`),  // Chapter headings
+		regexp.MustCompile(`^Section\s+\d+.*$`),  // Section headings
+	}
+	// listItemPatterns matches list item formats.
+	listItemPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`^\s*[-*+]\s+.*`),    // Bullet points
+		regexp.MustCompile(`^\s*\d+\.\s+.*`),    // Numbered lists
+		regexp.MustCompile(`^\s*[a-z]\)\s+.*`),  // Lettered lists
+		regexp.MustCompile(`^\s*[IVX]+\.\s+.*`), // Roman numerals
+	}
+	// headingCleanRegex removes markdown heading markers.
+	headingCleanRegex = regexp.MustCompile(`^#+\s*`)
+)
+
 // Chunk breaks text into semantic chunks based on paragraphs and sections
 func (p *TextPlugin) Chunk(content string, path string, opts *model.CodeChunkingOptions) ([]model.CodeChunk, error) {
 	if strings.TrimSpace(content) == "" {
@@ -129,18 +152,8 @@ func (p *TextPlugin) analyzeTextStructure(content string) TextStructure {
 
 // isHeading checks if a line looks like a heading
 func (p *TextPlugin) isHeading(line string) bool {
-	// Common heading patterns
-	patterns := []string{
-		`^[A-Z][A-Z\s]+$`,  // ALL CAPS
-		`^#+\s+.*`,         // Markdown style
-		`^=+$`,             // Underline with =
-		`^-+$`,             // Underline with -
-		`^\d+\.\s+[A-Z].*`, // Numbered sections
-		`^[A-Z][^.!?]*:$`,  // Title with colon
-	}
-
-	for _, pattern := range patterns {
-		if matched, _ := regexp.MatchString(pattern, line); matched {
+	for _, pattern := range headingPatterns {
+		if pattern.MatchString(line) {
 			return true
 		}
 	}
@@ -165,15 +178,8 @@ func (p *TextPlugin) isHeading(line string) bool {
 
 // isListItem checks if a line is a list item
 func (p *TextPlugin) isListItem(line string) bool {
-	patterns := []string{
-		`^\s*[-*+]\s+.*`,    // Bullet points
-		`^\s*\d+\.\s+.*`,    // Numbered lists
-		`^\s*[a-z]\)\s+.*`,  // Lettered lists
-		`^\s*[IVX]+\.\s+.*`, // Roman numerals
-	}
-
-	for _, pattern := range patterns {
-		if matched, _ := regexp.MatchString(pattern, line); matched {
+	for _, pattern := range listItemPatterns {
+		if pattern.MatchString(line) {
 			return true
 		}
 	}
@@ -183,7 +189,7 @@ func (p *TextPlugin) isListItem(line string) bool {
 // cleanHeading removes formatting from headings
 func (p *TextPlugin) cleanHeading(line string) string {
 	// Remove markdown #
-	cleaned := regexp.MustCompile(`^#+\s*`).ReplaceAllString(line, "")
+	cleaned := headingCleanRegex.ReplaceAllString(line, "")
 
 	// Remove trailing colons
 	cleaned = strings.TrimSuffix(cleaned, ":")
