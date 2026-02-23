@@ -14,6 +14,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Pre-compiled regex patterns for performance.
+var (
+	// tableSeparatorRegex matches markdown table separator rows.
+	tableSeparatorRegex = regexp.MustCompile(`^\|?(\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?$`)
+	// numberedListRegex matches numbered list items.
+	numberedListRegex = regexp.MustCompile(`^\d+\.\s+`)
+	// headingRegex matches markdown heading lines.
+	headingRegex = regexp.MustCompile(`^#{1,6}\s+`)
+)
+
 // MarkdownElement represents different types of markdown elements
 type MarkdownElement struct {
 	Type        string            `json:"type"`
@@ -434,8 +444,7 @@ func (p *MarkdownPlugin) isTableRow(line string) bool {
 	}
 
 	// Check if it's a separator row
-	separatorPattern := regexp.MustCompile(`^\|?(\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?$`)
-	if separatorPattern.MatchString(trimmed) {
+	if tableSeparatorRegex.MatchString(trimmed) {
 		return true
 	}
 
@@ -466,6 +475,5 @@ func (p *MarkdownPlugin) isListItem(line string) bool {
 	}
 
 	// Numbered list
-	numberedListRegex := regexp.MustCompile(`^\d+\.\s+`)
 	return numberedListRegex.MatchString(trimmed)
 }

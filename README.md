@@ -1,5 +1,9 @@
 # GoFrame
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/sevigo/goframe.svg)](https://pkg.go.dev/github.com/sevigo/goframe)
+[![Go Report Card](https://goreportcard.com/badge/github.com/sevigo/goframe)](https://goreportcard.com/report/github.com/sevigo/goframe)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A modular Go framework for building production-ready LLM and RAG applications. GoFrame provides a clean, extensible architecture with a powerful set of tools for document processing, embedding, and vector storage.
 
 ## Overview
@@ -26,6 +30,56 @@ The framework is built around a set of core interfaces for LLMs, Embedders, and 
     -   **Code-Aware Splitter**: Semantically chunks code while preserving context.
     -   **Parsers**: Plugins for Go, TypeScript, Markdown, JSON, YAML, PDF, and more.
 
+## Quick Start
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "github.com/sevigo/goframe/chains"
+    "github.com/sevigo/goframe/embeddings"
+    "github.com/sevigo/goframe/llms/ollama"
+    "github.com/sevigo/goframe/schema"
+    "github.com/sevigo/goframe/vectorstores"
+    "github.com/sevigo/goframe/vectorstores/qdrant"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // 1. Create LLM client
+    llm, _ := ollama.New(ollama.WithModel("llama3.2"))
+
+    // 2. Create embedder
+    embedder, _ := embeddings.NewEmbedder(llm)
+
+    // 3. Create vector store
+    store, _ := qdrant.New(
+        qdrant.WithCollectionName("my-docs"),
+        qdrant.WithEmbedder(embedder),
+    )
+
+    // 4. Add documents
+    docs := []schema.Document{
+        schema.NewDocument("Go is a programming language created at Google.", nil),
+        schema.NewDocument("Rust focuses on memory safety without garbage collection.", nil),
+    }
+    store.AddDocuments(ctx, docs)
+
+    // 5. Create RAG chain
+    retriever := vectorstores.ToRetriever(store, 3)
+    ragChain, _ := chains.NewRetrievalQA(retriever, llm)
+
+    // 6. Query
+    answer, _ := ragChain.Call(ctx, "What is Go?")
+    fmt.Println(answer)
+}
+```
+
 ## Architecture
 
 GoFrame follows a modular pipeline:
@@ -40,19 +94,21 @@ GoFrame follows a modular pipeline:
 3.  **Embed & Index**: content is embedded and stored in Qdrant with enriched metadata.
 4.  **Graph Retrieval**: The `DependencyRetriever` uses this metadata to traverse the dependency graph.
 
-## Getting Started
+## Prerequisites
 
-### Prerequisites
+-   Go 1.21 or later
+-   [Ollama](https://ollama.com/) (for embeddings & local LLMs)
+-   [Docker](https://www.docker.com/) (for Qdrant)
 
--   Go 1.21 or later.
--   [Ollama](https://ollama.com/) (for embeddings & local LLMs).
--   [Docker](https://www.docker.com/) (for Qdrant).
-
-### Installation
+## Installation
 
 ```bash
 go get github.com/sevigo/goframe@latest
 ```
+
+## API Reference
+
+Full API documentation is available at [pkg.go.dev](https://pkg.go.dev/github.com/sevigo/goframe).
 
 ## Usage Examples
 

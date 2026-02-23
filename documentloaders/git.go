@@ -28,6 +28,29 @@ const (
 	maxParentTextLength = 2000
 )
 
+// skipDirs contains directory names to skip during loading.
+var skipDirs = map[string]bool{
+	".git": true, ".svn": true, ".hg": true,
+	"vendor": true, "node_modules": true, "__pycache__": true,
+	"build": true, "dist": true, "target": true, "out": true, "bin": true,
+	".vscode": true, ".idea": true, ".vs": true,
+	".DS_Store": true, "Thumbs.db": true,
+}
+
+// binaryExts contains file extensions for binary files to skip.
+var binaryExts = map[string]bool{
+	".exe": true, ".dll": true, ".so": true, ".dylib": true,
+	".png": true, ".jpg": true, ".jpeg": true, ".gif": true,
+	".bmp": true, ".tiff": true, ".svg": true, ".ico": true,
+	".zip": true, ".tar": true, ".gz": true, ".rar": true,
+	".7z": true, ".bz2": true, ".xz": true,
+	".mp3": true, ".mp4": true, ".avi": true, ".mov": true,
+	".wav": true, ".flac": true, ".ogg": true,
+	".doc": true, ".docx": true, ".xls": true, ".xlsx": true,
+	".ppt": true, ".pptx": true,
+	".bin": true, ".dat": true, ".db": true, ".sqlite": true,
+}
+
 // Error variables for document loading operations.
 var (
 	// ErrInvalidPath is returned when the repository path is invalid.
@@ -570,13 +593,6 @@ func buildChunkMetadata(baseMetadata map[string]any, chunk schema.CodeChunk, chu
 }
 
 func shouldSkipDir(name string) bool {
-	skipDirs := map[string]bool{
-		".git": true, ".svn": true, ".hg": true,
-		"vendor": true, "node_modules": true, "__pycache__": true,
-		"build": true, "dist": true, "target": true, "out": true, "bin": true,
-		".vscode": true, ".idea": true, ".vs": true,
-		".DS_Store": true, "Thumbs.db": true,
-	}
 	return skipDirs[name]
 }
 
@@ -586,21 +602,6 @@ func shouldSkipFile(path string, info fs.FileInfo) bool {
 	}
 
 	ext := strings.ToLower(filepath.Ext(path))
-
-	// Use a map for O(1) lookup
-	binaryExts := map[string]bool{
-		".exe": true, ".dll": true, ".so": true, ".dylib": true,
-		".png": true, ".jpg": true, ".jpeg": true, ".gif": true,
-		".bmp": true, ".tiff": true, ".svg": true, ".ico": true,
-		".zip": true, ".tar": true, ".gz": true, ".rar": true,
-		".7z": true, ".bz2": true, ".xz": true,
-		".mp3": true, ".mp4": true, ".avi": true, ".mov": true,
-		".wav": true, ".flac": true, ".ogg": true,
-		".doc": true, ".docx": true, ".xls": true, ".xlsx": true,
-		".ppt": true, ".pptx": true,
-		".bin": true, ".dat": true, ".db": true, ".sqlite": true,
-	}
-
 	return binaryExts[ext]
 }
 

@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -243,7 +242,6 @@ func (p *MarkdownPlugin) calculateDocumentStats(lines []string) map[string]strin
 	totalLines := len(lines)
 
 	inCodeBlock := false
-	headingRegex := regexp.MustCompile(`^#{1,6}\s+`)
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
