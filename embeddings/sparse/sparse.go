@@ -24,10 +24,131 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
+// Provider defines the interface for generating sparse vectors.
+type Provider interface {
+	GenerateSparseVector(ctx context.Context, text string) (*schema.SparseVector, error)
+}
+
 var (
-	vocabMu           sync.RWMutex
-	tokenizerInstance *tokenizer.Tokenizer
+	providerMu sync.RWMutex
+	provider   Provider
 )
+
+// RegisterProvider registers a sparse vector provider.
+func RegisterProvider(p Provider) {
+	providerMu.Lock()
+	defer providerMu.Unlock()
+	provider = p
+}
+
+// GenerateSparseVector builds a normalized sparse vector from text using the registered provider.
+// If no provider is registered, it returns an error.
+func GenerateSparseVector(ctx context.Context, text string) (*schema.SparseVector, error) {
+	providerMu.RLock()
+	p := provider
+	providerMu.RUnlock()
+
+	if p == nil {
+		return nil, errors.New("no sparse provider registered; call sparse.RegisterProvider first")
+	}
+
+	return p.GenerateSparseVector(ctx, text)
+}
+
+// BoWProvider implements the Provider interface using a Bag-of-Words approach
+// with a pretrained tokenizer.
+type BoWProvider struct {
+	mu                sync.RWMutex
+	tokenizerInstance *tokenizer.Tokenizer
+}
+
+// NewBoWProvider creates a new Bag-of-Words sparse provider.
+func NewBoWProvider() *BoWProvider {
+	return &BoWProvider{}
+}
+
+// GenerateSparseVector builds a normalized BOW sparse vector from text.
+// Special tokens (PAD, CLS, SEP) are filtered to reduce noise.
+func (p *BoWProvider) GenerateSparseVector(ctx context.Context, text string) (*schema.SparseVector, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, errors.New("text cannot be empty")
+	}
+
+	tk, err := p.getTokenizer(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tokenizer: %w", err)
+	}
+
+	// Truncation is handled by default tokenizer settings if configured in tokenizer.json.
+	encodings, err := tk.EncodeSingle(text)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode text: %w", err)
+	}
+
+	tokenCounts := make(map[uint32]float32)
+	for _, id := range encodings.Ids {
+		// Skip special tokens: 0 (PAD), 101 (CLS), 102 (SEP) are noise for BOW sparse vectors.
+		if id == 0 || id == 101 || id == 102 {
+			continue
+		}
+		tokenCounts[uint32(id)] += 1.0
+	}
+
+	if len(tokenCounts) == 0 {
+		return nil, errors.New("no valid tokens generated after filtering special tokens")
+	}
+
+	var normSq float64
+	for _, count := range tokenCounts {
+		normSq += float64(count) * float64(count)
+	}
+	norm := math.Sqrt(normSq)
+
+	if norm <= 0 {
+		return nil, fmt.Errorf("invalid normalization: norm=%f for %d tokens", norm, len(tokenCounts))
+	}
+
+	indices := make([]uint32, 0, len(tokenCounts))
+	values := make([]float32, 0, len(tokenCounts))
+	for id, count := range tokenCounts {
+		indices = append(indices, id)
+		values = append(values, float32(float64(count)/norm))
+	}
+
+	return &schema.SparseVector{
+		Indices: indices,
+		Values:  values,
+	}, nil
+}
+
+func (p *BoWProvider) getTokenizer(ctx context.Context) (*tokenizer.Tokenizer, error) {
+	p.mu.RLock()
+	if p.tokenizerInstance != nil {
+		defer p.mu.RUnlock()
+		return p.tokenizerInstance, nil
+	}
+	p.mu.RUnlock()
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.tokenizerInstance != nil {
+		return p.tokenizerInstance, nil
+	}
+
+	modelPath, err := EnsureModelDownloaded(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	tokenizerPath := filepath.Join(modelPath, "tokenizer.json")
+	tk, err := pretrained.FromFile(tokenizerPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load tokenizer from %s: %w", tokenizerPath, err)
+	}
+	p.tokenizerInstance = tk
+	return p.tokenizerInstance, nil
+}
 
 const (
 	// modelURL is the remote location of the BGE small sparse model.
@@ -159,94 +280,4 @@ func verifyChecksum(data []byte, expected string) error {
 		return fmt.Errorf("checksum mismatch: expected %s, got %s", expected, actual)
 	}
 	return nil
-}
-
-// GetTokenizer returns the shared tokenizer instance, initializing it if needed.
-func GetTokenizer(ctx context.Context) (*tokenizer.Tokenizer, error) {
-	vocabMu.RLock()
-	if tokenizerInstance != nil {
-		defer vocabMu.RUnlock()
-		return tokenizerInstance, nil
-	}
-	vocabMu.RUnlock()
-
-	vocabMu.Lock()
-	defer vocabMu.Unlock()
-
-	// Double-check after acquiring write lock
-	if tokenizerInstance != nil {
-		return tokenizerInstance, nil
-	}
-
-	modelPath, err := EnsureModelDownloaded(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	tokenizerPath := filepath.Join(modelPath, "tokenizer.json")
-	tk, err := pretrained.FromFile(tokenizerPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load tokenizer from %s: %w", tokenizerPath, err)
-	}
-	tokenizerInstance = tk
-	return tokenizerInstance, nil
-}
-
-// GenerateSparseVector builds a normalized BOW sparse vector from text.
-// Special tokens (PAD, CLS, SEP) are filtered to reduce noise.
-//
-// Returns error if:
-//   - Text cannot be tokenized
-//   - No valid tokens remain after filtering
-//   - Normalization fails (due to zero norm)
-func GenerateSparseVector(ctx context.Context, text string) (*schema.SparseVector, error) {
-	if strings.TrimSpace(text) == "" {
-		return nil, errors.New("text cannot be empty")
-	}
-
-	tk, err := GetTokenizer(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get tokenizer: %w", err)
-	}
-
-	// Truncation is handled by default tokenizer settings if configured in tokenizer.json.
-	encodings, err := tk.EncodeSingle(text)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode text: %w", err)
-	}
-
-	tokenCounts := make(map[uint32]float32)
-	for _, id := range encodings.Ids {
-		// Skip special tokens: 0 (PAD), 101 (CLS), 102 (SEP) are noise for BOW sparse vectors.
-		if id == 0 || id == 101 || id == 102 {
-			continue
-		}
-		tokenCounts[uint32(id)] += 1.0
-	}
-
-	if len(tokenCounts) == 0 {
-		return nil, errors.New("no valid tokens generated after filtering special tokens")
-	}
-
-	var normSq float64
-	for _, count := range tokenCounts {
-		normSq += float64(count) * float64(count)
-	}
-	norm := math.Sqrt(normSq)
-
-	if norm <= 0 {
-		return nil, fmt.Errorf("invalid normalization: norm=%f for %d tokens", norm, len(tokenCounts))
-	}
-
-	indices := make([]uint32, 0, len(tokenCounts))
-	values := make([]float32, 0, len(tokenCounts))
-	for id, count := range tokenCounts {
-		indices = append(indices, id)
-		values = append(values, float32(float64(count)/norm))
-	}
-
-	return &schema.SparseVector{
-		Indices: indices,
-		Values:  values,
-	}, nil
 }

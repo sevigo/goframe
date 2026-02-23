@@ -943,13 +943,10 @@ func (s *Store) SimilaritySearchBatch(
 	limit := uint64(numDocuments)
 	var batchResults [][]schema.Document
 
-	if len(s.options.sparseVectors) > 0 {
+	if len(s.options.sparseVectors) > 0 && len(opts.SparseQueries) > 0 {
 		if len(opts.SparseQueries) != len(queryVectors) {
 			return nil, fmt.Errorf("sparse query count (%d) must match query count (%d)",
 				len(opts.SparseQueries), len(queryVectors))
-		}
-		if len(s.options.sparseVectors) == 0 {
-			return nil, ErrMissingSparseName
 		}
 		sparseName := s.options.sparseVectors[0]
 		var denseNamePtr *string
