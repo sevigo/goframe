@@ -718,11 +718,11 @@ Files needing tests:
 ```
 
 **Tasks:**
-- [ ] Add tests for `NewLLMChain` with nil parameters
-- [ ] Add tests for `NewRetrievalQA` with nil parameters
-- [ ] Add tests for `NewDependencyRetriever` with nil store
-- [ ] Add tests for `NewDefinitionRetriever` with nil store
-- [ ] Add tests for `WithConcurrency` with invalid values
+- [x] Add tests for `NewLLMChain` with nil parameters
+- [x] Add tests for `NewRetrievalQA` with nil parameters
+- [x] Add tests for `NewDependencyRetriever` with nil store
+- [x] Add tests for `NewDefinitionRetriever` with nil store
+- [x] Add tests for `WithConcurrency` with invalid values
 
 ### 4.2 Integration Tests with Docker
 

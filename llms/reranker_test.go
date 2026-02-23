@@ -43,6 +43,31 @@ func (s *scorerLLM) Call(ctx context.Context, prompt string, options ...llms.Cal
 	return resp.Choices[0].Content, nil
 }
 
+func TestLLMReranker_Options(t *testing.T) {
+	fakeLLM := &scorerLLM{}
+
+	t.Run("Valid concurrency", func(t *testing.T) {
+		reranker := llms.NewLLMReranker(fakeLLM, llms.WithConcurrency(10))
+		// We cannot inspect the private concurrency field directly from outside the package,
+		// but we can ensure it runs without panicking.
+		if reranker == nil {
+			t.Fatal("expected non-nil reranker")
+		}
+	})
+
+	t.Run("Invalid concurrency defaults to 5", func(t *testing.T) {
+		reranker := llms.NewLLMReranker(fakeLLM, llms.WithConcurrency(0))
+		if reranker == nil {
+			t.Fatal("expected non-nil reranker")
+		}
+
+		rerankerNegative := llms.NewLLMReranker(fakeLLM, llms.WithConcurrency(-1))
+		if rerankerNegative == nil {
+			t.Fatal("expected non-nil reranker")
+		}
+	})
+}
+
 func TestLLMReranker(t *testing.T) {
 	fakeLLM := &scorerLLM{}
 

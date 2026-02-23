@@ -16,6 +16,27 @@ import (
 	fakeretriever "github.com/sevigo/goframe/schema/fake"
 )
 
+func TestNewRetrievalQA_Validation(t *testing.T) {
+	fakeLLM := fake.NewFakeLLM([]string{"response"})
+	fakeRetriever := fakeretriever.NewRetriever()
+
+	t.Run("nil retriever returns error", func(t *testing.T) {
+		chain, err := chains.NewRetrievalQA(nil, fakeLLM)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "retriever cannot be nil")
+		// The returned chain should be zero-value
+		assert.Nil(t, chain.Retriever)
+	})
+
+	t.Run("nil LLM returns error", func(t *testing.T) {
+		chain, err := chains.NewRetrievalQA(fakeRetriever, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "llm cannot be nil")
+		// The returned chain should be zero-value
+		assert.Nil(t, chain.LLM)
+	})
+}
+
 func TestRetrievalQA_Call(t *testing.T) {
 	ctx := context.Background()
 

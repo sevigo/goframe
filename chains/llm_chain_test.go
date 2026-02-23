@@ -110,15 +110,34 @@ func TestLLMChain_Call(t *testing.T) {
 
 func TestLLMChain_GetPrompt(t *testing.T) {
 	tmpl := prompts.NewPromptTemplate("Analyze: {{.input}}")
-	chain, err := chains.NewLLMChain[string](nil, tmpl)
-	// Even with nil LLM, GetPrompt should work
-	if err != nil {
-		// If constructor returns error for nil LLM, skip this test
-		t.Skip("Constructor returns error for nil LLM")
-	}
+	
+	// Create a chain correctly so we can test GetPrompt
+	fakeLLM := fake.NewFakeLLM([]string{"some output"})
+	chain, err := chains.NewLLMChain[string](fakeLLM, tmpl)
+	require.NoError(t, err)
 
 	result := chain.GetPrompt(map[string]string{"input": "test data"})
 	assert.Equal(t, "Analyze: test data", result)
+}
+
+func TestNewLLMChain_Validation(t *testing.T) {
+	tmpl := prompts.NewPromptTemplate("Analyze: {{.input}}")
+	fakeLLM := fake.NewFakeLLM([]string{"some output"})
+
+	t.Run("nil LLM returns error", func(t *testing.T) {
+		chain, err := chains.NewLLMChain[string](nil, tmpl)
+		require.Error(t, err)
+		assert.Nil(t, chain)
+		assert.Contains(t, err.Error(), "llm cannot be nil")
+	})
+
+	t.Run("empty prompt template returns error", func(t *testing.T) {
+		emptyTmpl := prompts.NewPromptTemplate("")
+		chain, err := chains.NewLLMChain[string](fakeLLM, emptyTmpl)
+		require.Error(t, err)
+		assert.Nil(t, chain)
+		assert.Contains(t, err.Error(), "prompt template cannot be empty")
+	})
 }
 
 // failingParser always returns an error, for testing error paths.
