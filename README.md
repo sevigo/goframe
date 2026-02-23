@@ -80,7 +80,10 @@ Perform sophisticated code navigation using the `DependencyRetriever`.
 import "github.com/sevigo/goframe/vectorstores"
 
 // Initialize retriever
-retriever := vectorstores.NewDependencyRetriever(store)
+retriever, err := vectorstores.NewDependencyRetriever(store)
+if err != nil {
+    log.Fatal(err)
+}
 
 // 1. Impact Analysis: Who imports "my/package"?
 network, _ := retriever.GetContextNetwork(ctx, "github.com/my/project/pkg", nil)

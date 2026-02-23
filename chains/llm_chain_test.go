@@ -44,7 +44,8 @@ func TestLLMChain_Call(t *testing.T) {
 
 	t.Run("string output without parser", func(t *testing.T) {
 		fakeLLM := fake.NewFakeLLM([]string{"Looks good, no issues found."})
-		chain := chains.NewLLMChain[string](fakeLLM, tmpl)
+		chain, err := chains.NewLLMChain[string](fakeLLM, tmpl)
+		require.NoError(t, err)
 
 		result, err := chain.Call(ctx, map[string]string{"code": "fmt.Println()"})
 
@@ -57,10 +58,11 @@ func TestLLMChain_Call(t *testing.T) {
 
 	t.Run("typed output with custom parser", func(t *testing.T) {
 		fakeLLM := fake.NewFakeLLM([]string{"No issues found|low"})
-		chain := chains.NewLLMChain[testReview](
+		chain, err := chains.NewLLMChain[testReview](
 			fakeLLM, tmpl,
 			chains.WithOutputParser[testReview](testReviewParser{}),
 		)
+		require.NoError(t, err)
 
 		result, err := chain.Call(ctx, map[string]string{"code": "x := 1"})
 
@@ -71,9 +73,10 @@ func TestLLMChain_Call(t *testing.T) {
 
 	t.Run("LLM error is propagated", func(t *testing.T) {
 		fakeLLM := fake.NewFakeLLM([]string{})
-		chain := chains.NewLLMChain[string](fakeLLM, tmpl)
+		chain, err := chains.NewLLMChain[string](fakeLLM, tmpl)
+		require.NoError(t, err)
 
-		_, err := chain.Call(ctx, map[string]string{"code": "x"})
+		_, err = chain.Call(ctx, map[string]string{"code": "x"})
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "llm call failed")
@@ -81,12 +84,13 @@ func TestLLMChain_Call(t *testing.T) {
 
 	t.Run("parser error is propagated", func(t *testing.T) {
 		fakeLLM := fake.NewFakeLLM([]string{"bad format without pipe"})
-		chain := chains.NewLLMChain[testReview](
+		chain, err := chains.NewLLMChain[testReview](
 			fakeLLM, tmpl,
 			chains.WithOutputParser[testReview](testReviewParser{}),
 		)
+		require.NoError(t, err)
 
-		_, err := chain.Call(ctx, map[string]string{"code": "x"})
+		_, err = chain.Call(ctx, map[string]string{"code": "x"})
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "output parsing failed")
@@ -94,9 +98,10 @@ func TestLLMChain_Call(t *testing.T) {
 
 	t.Run("non-string type without parser returns error", func(t *testing.T) {
 		fakeLLM := fake.NewFakeLLM([]string{"some output"})
-		chain := chains.NewLLMChain[testReview](fakeLLM, tmpl)
+		chain, err := chains.NewLLMChain[testReview](fakeLLM, tmpl)
+		require.NoError(t, err)
 
-		_, err := chain.Call(ctx, map[string]string{"code": "x"})
+		_, err = chain.Call(ctx, map[string]string{"code": "x"})
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no output parser configured")
@@ -105,10 +110,34 @@ func TestLLMChain_Call(t *testing.T) {
 
 func TestLLMChain_GetPrompt(t *testing.T) {
 	tmpl := prompts.NewPromptTemplate("Analyze: {{.input}}")
-	chain := chains.NewLLMChain[string](nil, tmpl)
+
+	// Create a chain correctly so we can test GetPrompt
+	fakeLLM := fake.NewFakeLLM([]string{"some output"})
+	chain, err := chains.NewLLMChain[string](fakeLLM, tmpl)
+	require.NoError(t, err)
 
 	result := chain.GetPrompt(map[string]string{"input": "test data"})
 	assert.Equal(t, "Analyze: test data", result)
+}
+
+func TestNewLLMChain_Validation(t *testing.T) {
+	tmpl := prompts.NewPromptTemplate("Analyze: {{.input}}")
+	fakeLLM := fake.NewFakeLLM([]string{"some output"})
+
+	t.Run("nil LLM returns error", func(t *testing.T) {
+		chain, err := chains.NewLLMChain[string](nil, tmpl)
+		require.Error(t, err)
+		assert.Nil(t, chain)
+		assert.Contains(t, err.Error(), "llm cannot be nil")
+	})
+
+	t.Run("empty prompt template returns error", func(t *testing.T) {
+		emptyTmpl := prompts.NewPromptTemplate("")
+		chain, err := chains.NewLLMChain[string](fakeLLM, emptyTmpl)
+		require.Error(t, err)
+		assert.Nil(t, chain)
+		assert.Contains(t, err.Error(), "prompt template cannot be empty")
+	})
 }
 
 // failingParser always returns an error, for testing error paths.
@@ -125,10 +154,11 @@ func TestLLMChain_WithStringParser(t *testing.T) {
 	fakeLLM := fake.NewFakeLLM([]string{"raw output"})
 	tmpl := prompts.NewPromptTemplate("{{.q}}")
 
-	chain := chains.NewLLMChain[string](
+	chain, err := chains.NewLLMChain[string](
 		fakeLLM, tmpl,
 		chains.WithOutputParser[string](schema.StringParser{}),
 	)
+	require.NoError(t, err)
 
 	result, err := chain.Call(ctx, map[string]string{"q": "test"})
 	require.NoError(t, err)

@@ -11,13 +11,19 @@ import (
 // the collected results into a final output. Supports concurrency limits,
 // per-task timeouts, and quorum-based early return.
 type MapReduceChain[In, Mid, Out any] struct {
-	MapFunc        func(ctx context.Context, input In) (Mid, error)
-	ReduceFunc     func(ctx context.Context, results []Mid) (Out, error)
+	// MapFunc processes each input item.
+	MapFunc func(ctx context.Context, input In) (Mid, error)
+	// ReduceFunc combines all map results into the final output.
+	ReduceFunc func(ctx context.Context, results []Mid) (Out, error)
+	// MaxConcurrency limits concurrent map operations. 0 means unlimited.
 	MaxConcurrency int
-	Timeout        time.Duration // per-task timeout (0 = no timeout)
-	QuorumFraction float64       // e.g. 0.66 = return when 2/3 succeed
+	// Timeout is the per-task timeout. 0 means no timeout.
+	Timeout time.Duration
+	// QuorumFraction is the fraction of tasks that must succeed (e.g., 0.66).
+	QuorumFraction float64
 }
 
+// MapReduceOption configures a MapReduceChain.
 type MapReduceOption[In, Mid, Out any] func(*MapReduceChain[In, Mid, Out])
 
 // WithMaxConcurrency limits the number of map tasks running in parallel.
@@ -43,6 +49,7 @@ func WithQuorum[In, Mid, Out any](fraction float64) MapReduceOption[In, Mid, Out
 	}
 }
 
+// NewMapReduceChain creates a new MapReduceChain with the given map and reduce functions.
 func NewMapReduceChain[In, Mid, Out any](
 	mapFn func(ctx context.Context, input In) (Mid, error),
 	reduceFn func(ctx context.Context, results []Mid) (Out, error),
@@ -81,6 +88,7 @@ func (c *MapReduceChain[In, Mid, Out]) Call(ctx context.Context, inputs []In) (O
 	}
 
 	resultCh := make(chan mapResult, total)
+	done := make(chan struct{})
 
 	// Semaphore for concurrency limiting
 	maxWorkers := total
@@ -100,7 +108,12 @@ func (c *MapReduceChain[In, Mid, Out]) Call(ctx context.Context, inputs []In) (O
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
 			case <-ctx.Done():
-				resultCh <- mapResult{err: ctx.Err()}
+				select {
+				case resultCh <- mapResult{err: ctx.Err()}:
+				case <-done:
+				}
+				return
+			case <-done:
 				return
 			}
 
@@ -113,7 +126,10 @@ func (c *MapReduceChain[In, Mid, Out]) Call(ctx context.Context, inputs []In) (O
 			}
 
 			val, err := c.MapFunc(taskCtx, in)
-			resultCh <- mapResult{value: val, err: err}
+			select {
+			case resultCh <- mapResult{value: val, err: err}:
+			case <-done:
+			}
 		}(input)
 	}
 
@@ -133,6 +149,7 @@ func (c *MapReduceChain[In, Mid, Out]) Call(ctx context.Context, inputs []In) (O
 			// Check if quorum is no longer achievable
 			remaining := total - len(collected) - failures
 			if len(collected)+remaining < quorumNeeded {
+				close(done)
 				return zero, fmt.Errorf("quorum not achievable: %d/%d succeeded, need %d", len(collected), total, quorumNeeded)
 			}
 			continue
@@ -140,6 +157,7 @@ func (c *MapReduceChain[In, Mid, Out]) Call(ctx context.Context, inputs []In) (O
 
 		collected = append(collected, res.value)
 		if len(collected) >= quorumNeeded {
+			close(done)
 			break
 		}
 	}

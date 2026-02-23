@@ -1,3 +1,6 @@
+// Package documentloaders provides document loading utilities for RAG applications.
+// It includes loaders for git repositories and other document sources with support
+// for streaming, batch processing, and memory protection.
 package documentloaders
 
 import (
@@ -25,26 +28,38 @@ const (
 	maxParentTextLength = 2000
 )
 
+// Error variables for document loading operations.
 var (
-	ErrInvalidPath         = errors.New("documentloaders: invalid repository path")
-	ErrNilRegistry         = errors.New("documentloaders: parser registry is nil")
-	ErrPathNotExist        = errors.New("documentloaders: path does not exist")
+	// ErrInvalidPath is returned when the repository path is invalid.
+	ErrInvalidPath = errors.New("documentloaders: invalid repository path")
+	// ErrNilRegistry is returned when the parser registry is nil.
+	ErrNilRegistry = errors.New("documentloaders: parser registry is nil")
+	// ErrPathNotExist is returned when the path does not exist.
+	ErrPathNotExist = errors.New("documentloaders: path does not exist")
+	// ErrMemoryLimitExceeded is returned when memory limit is exceeded during loading.
 	ErrMemoryLimitExceeded = errors.New("documentloaders: memory limit exceeded")
 )
 
 // FileData is an in-memory representation of a file to be processed.
 type FileData struct {
-	Path     string
-	Content  string
+	// Path is the file path relative to the repository root.
+	Path string
+	// Content is the file content.
+	Content string
+	// FileInfo contains file metadata.
 	FileInfo fs.FileInfo
 }
 
+// Loader is the interface for document loaders.
 type Loader interface {
+	// Load loads all documents from the source.
 	Load(ctx context.Context) ([]schema.Document, error)
+	// LoadAndProcessStream loads documents in batches and processes them.
 	LoadAndProcessStream(ctx context.Context, processFn func(ctx context.Context, docs []schema.Document) error) error
 }
 
 // GitLoader loads and processes documents from a git repository on the local file system.
+// It supports batch processing, parallel file processing, and memory protection.
 type GitLoader struct {
 	path           string
 	parserRegistry parsers.ParserRegistry
@@ -63,8 +78,10 @@ type gitLoaderOptions struct {
 	DetectGeneratedCode bool
 }
 
+// GitLoaderOption configures a GitLoader.
 type GitLoaderOption func(*gitLoaderOptions)
 
+// WithLogger sets the logger for the loader.
 func WithLogger(logger *slog.Logger) GitLoaderOption {
 	return func(opts *gitLoaderOptions) {
 		if logger != nil {
@@ -73,6 +90,7 @@ func WithLogger(logger *slog.Logger) GitLoaderOption {
 	}
 }
 
+// WithBatchSize sets the batch size for document processing.
 func WithBatchSize(size int) GitLoaderOption {
 	return func(opts *gitLoaderOptions) {
 		if size > 0 {
@@ -81,6 +99,7 @@ func WithBatchSize(size int) GitLoaderOption {
 	}
 }
 
+// WithWorkerCount sets the number of parallel workers for file processing.
 func WithWorkerCount(count int) GitLoaderOption {
 	return func(opts *gitLoaderOptions) {
 		if count > 0 {
@@ -89,6 +108,8 @@ func WithWorkerCount(count int) GitLoaderOption {
 	}
 }
 
+// WithMaxMemoryBuffer sets the maximum memory buffer in bytes.
+// Processing will pause when memory usage exceeds this limit.
 func WithMaxMemoryBuffer(bytes int64) GitLoaderOption {
 	return func(opts *gitLoaderOptions) {
 		if bytes > 0 {
@@ -97,6 +118,8 @@ func WithMaxMemoryBuffer(bytes int64) GitLoaderOption {
 	}
 }
 
+// WithExcludeExts sets file extensions to exclude from loading.
+// Extensions can be provided with or without the leading dot.
 func WithExcludeExts(exts []string) GitLoaderOption {
 	return func(opts *gitLoaderOptions) {
 		if opts.ExcludeExts == nil {
@@ -111,6 +134,7 @@ func WithExcludeExts(exts []string) GitLoaderOption {
 	}
 }
 
+// WithExcludeDirs sets directory names to exclude from loading.
 func WithExcludeDirs(dirs []string) GitLoaderOption {
 	return func(opts *gitLoaderOptions) {
 		if opts.ExcludeDirs == nil {
@@ -122,6 +146,8 @@ func WithExcludeDirs(dirs []string) GitLoaderOption {
 	}
 }
 
+// WithIncludeExts sets file extensions to include in loading.
+// If set, only files with these extensions will be loaded.
 func WithIncludeExts(exts []string) GitLoaderOption {
 	return func(opts *gitLoaderOptions) {
 		if opts.IncludeExts == nil {
@@ -136,12 +162,16 @@ func WithIncludeExts(exts []string) GitLoaderOption {
 	}
 }
 
+// WithGeneratedCodeDetection enables or disables detection of auto-generated code.
+// When enabled, files detected as generated will be skipped.
 func WithGeneratedCodeDetection(enable bool) GitLoaderOption {
 	return func(opts *gitLoaderOptions) {
 		opts.DetectGeneratedCode = enable
 	}
 }
 
+// NewGit creates a new GitLoader for the specified repository path.
+// Returns an error if the path is invalid, registry is nil, or path doesn't exist.
 func NewGit(path string, registry parsers.ParserRegistry, opts ...GitLoaderOption) (*GitLoader, error) {
 	if path == "" {
 		return nil, ErrInvalidPath

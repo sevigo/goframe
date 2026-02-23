@@ -216,7 +216,10 @@ docs, _ := retriever.GetRelevantDocuments(ctx, description)
 ### DependencyRetriever - Graph Traversal
 
 ```go
-retriever := vectorstores.NewDependencyRetriever(store)
+retriever, err := vectorstores.NewDependencyRetriever(store)
+if err != nil {
+    log.Fatal(err)
+}
 network, _ := retriever.GetContextNetwork(ctx, packageName, imports)
 
 // network.Dependencies - upstream dependencies
@@ -226,7 +229,10 @@ network, _ := retriever.GetContextNetwork(ctx, packageName, imports)
 ### DefinitionRetriever - Symbol Lookup
 
 ```go
-retriever := vectorstores.NewDefinitionRetriever(store)
+retriever, err := vectorstores.NewDefinitionRetriever(store)
+if err != nil {
+    log.Fatal(err)
+}
 docs, _ := retriever.GetDefinition(ctx, "MyFunction")
 // Returns document where identifier="MyFunction" AND is_definition=true
 // Now uses hybrid search (dense + sparse) for better exact matching

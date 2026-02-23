@@ -13,21 +13,30 @@ import (
 )
 
 // ValidatingRetrievalQA validates the relevance of retrieved context before generation.
+// It uses a separate validator LLM to check if the retrieved documents are relevant
+// to the query before using them for generation.
 type ValidatingRetrievalQA struct {
-	Retriever    schema.Retriever
+	// Retriever fetches relevant documents for the query.
+	Retriever schema.Retriever
+	// GeneratorLLM generates the final answer.
 	GeneratorLLM llms.Model
+	// ValidatorLLM validates context relevance.
 	ValidatorLLM llms.Model
-	logger       *slog.Logger
+	// logger is used for logging.
+	logger *slog.Logger
 }
 
+// ValidatingRetrievalQAOption configures a ValidatingRetrievalQA chain.
 type ValidatingRetrievalQAOption func(*ValidatingRetrievalQA)
 
+// WithValidator sets the LLM used for context validation.
 func WithValidator(llm llms.Model) ValidatingRetrievalQAOption {
 	return func(c *ValidatingRetrievalQA) {
 		c.ValidatorLLM = llm
 	}
 }
 
+// WithLogger sets the logger for the chain.
 func WithLogger(logger *slog.Logger) ValidatingRetrievalQAOption {
 	return func(c *ValidatingRetrievalQA) {
 		c.logger = logger
@@ -35,6 +44,7 @@ func WithLogger(logger *slog.Logger) ValidatingRetrievalQAOption {
 }
 
 // NewValidatingRetrievalQA creates a new ValidatingRetrievalQA chain.
+// Returns an error if retriever, generator, or validator is nil.
 func NewValidatingRetrievalQA(retriever schema.Retriever, generator llms.Model, opts ...ValidatingRetrievalQAOption) (ValidatingRetrievalQA, error) {
 	if retriever == nil {
 		return ValidatingRetrievalQA{}, errors.New("retriever cannot be nil")
@@ -60,6 +70,8 @@ func NewValidatingRetrievalQA(retriever schema.Retriever, generator llms.Model, 
 	return chain, nil
 }
 
+// Call retrieves documents, validates context relevance, and generates an answer.
+// If the retrieved context is not relevant, it generates an answer without context.
 func (c *ValidatingRetrievalQA) Call(ctx context.Context, query string) (string, error) {
 	if query == "" {
 		return "", errors.New("query cannot be empty")

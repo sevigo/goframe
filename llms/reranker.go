@@ -12,10 +12,11 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
+// RerankPromptDefault is the default prompt template for LLM-based reranking.
 const RerankPromptDefault = `You are an expert technical lead and code auditor.
 Evaluate the relevance of the following code snippet to the user's query.
 
-Query: 
+Query:
 {{.Query}}
 
 Code Snippet (Source: {{.Source}}):
@@ -23,15 +24,17 @@ Code Snippet (Source: {{.Source}}):
 {{.Content}}
 ---
 
-Task: 
-Assign a relevance score from 0 to 10. 
+Task:
+Assign a relevance score from 0 to 10.
 - 10: The snippet contains exactly the logic, function, or type mentioned in the query.
 - 5: The snippet is in the same package or related logic but doesn't answer the query directly.
 - 0: The snippet is completely unrelated.
 
-Respond ONLY with a JSON object in this format: 
+Respond ONLY with a JSON object in this format:
 {"score": <number>, "reason": "<1-sentence-explanation>"}`
 
+// LLMReranker uses an LLM to rerank documents by relevance to a query.
+// It evaluates each document in parallel with configurable concurrency.
 type LLMReranker struct {
 	model       Model
 	concurrency int
@@ -39,20 +42,29 @@ type LLMReranker struct {
 	template    *template.Template
 }
 
+// LLMRerankerOption configures an LLMReranker.
 type LLMRerankerOption func(*LLMReranker)
 
+// WithConcurrency sets the number of concurrent reranking operations.
+// Values <= 0 are ignored, keeping the default of 5.
 func WithConcurrency(c int) LLMRerankerOption {
 	return func(r *LLMReranker) {
-		r.concurrency = c
+		if c > 0 {
+			r.concurrency = c
+		}
 	}
 }
 
+// WithPrompt sets a custom prompt template for reranking.
+// The template receives .Query, .Content, and all document metadata fields.
 func WithPrompt(p string) LLMRerankerOption {
 	return func(r *LLMReranker) {
 		r.prompt = p
 	}
 }
 
+// NewLLMReranker creates a new LLM-based reranker.
+// By default, it uses 5 concurrent operations and the default prompt.
 func NewLLMReranker(model Model, opts ...LLMRerankerOption) *LLMReranker {
 	r := &LLMReranker{
 		model:       model,
@@ -74,6 +86,8 @@ func NewLLMReranker(model Model, opts ...LLMRerankerOption) *LLMReranker {
 	return r
 }
 
+// Rerank reranks documents by relevance to the query using the LLM.
+// Documents are evaluated in parallel and sorted by score descending.
 func (r *LLMReranker) Rerank(ctx context.Context, query string, docs []schema.Document) ([]schema.ScoredDocument, error) {
 	if len(docs) == 0 {
 		return nil, nil

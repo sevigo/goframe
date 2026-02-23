@@ -404,10 +404,14 @@ func (s *Store) AddDocumentsBatch(
 				}
 			}
 			processedCount += len(bDocs)
-			if progressCallback != nil {
-				progressCallback(processedCount, totalDocs, time.Since(start))
-			}
+			currentCount := processedCount
 			mu.Unlock()
+
+			// Call progress callback outside the lock to prevent potential deadlock
+			// if the callback panics or blocks
+			if progressCallback != nil {
+				progressCallback(currentCount, totalDocs, time.Since(start))
+			}
 		}(batchIdx, batchDocs)
 	}
 
@@ -1053,6 +1057,20 @@ func (s *Store) Health(ctx context.Context) error {
 		return fmt.Errorf("qdrant health check failed: %w", err)
 	}
 
+	return nil
+}
+
+// Close closes the gRPC connection to the Qdrant server.
+// It should be called when the Store is no longer needed to release resources.
+func (s *Store) Close() error {
+	if s.client == nil {
+		return nil
+	}
+	if err := s.client.Close(); err != nil {
+		s.logger.Error("Failed to close Qdrant client", "error", err)
+		return fmt.Errorf("failed to close qdrant client: %w", err)
+	}
+	s.logger.Info("Qdrant client closed successfully")
 	return nil
 }
 

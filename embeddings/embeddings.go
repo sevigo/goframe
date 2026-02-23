@@ -1,3 +1,6 @@
+// Package embeddings provides interfaces and utilities for text embedding.
+// Embeddings are vector representations of text that capture semantic meaning
+// for use in similarity search and RAG applications.
 package embeddings
 
 import (
@@ -6,20 +9,31 @@ import (
 	"strings"
 )
 
+// Embedder is the interface for embedding providers.
+// Implementations convert text into dense vector representations.
 type Embedder interface {
+	// EmbedDocuments generates embeddings for multiple documents.
 	EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error)
+	// EmbedQuery generates an embedding for a single query.
 	EmbedQuery(ctx context.Context, text string) ([]float32, error)
+	// EmbedQueries generates embeddings for multiple queries.
 	EmbedQueries(ctx context.Context, texts []string) ([][]float32, error)
+	// GetDimension returns the dimension of the embeddings.
 	GetDimension(ctx context.Context) (int, error)
 }
 
+// EmbedderImpl wraps an Embedder with preprocessing and batching capabilities.
+// It adds support for query/document prefixes and batch processing.
 type EmbedderImpl struct {
 	client Embedder
 	opts   options
 }
 
+// ErrEmptyText is returned when an empty text is provided for embedding.
 var ErrEmptyText = errors.New("text cannot be empty")
 
+// NewEmbedder creates a new EmbedderImpl that wraps the given client.
+// It adds preprocessing (prefixes, newline stripping) and batching.
 func NewEmbedder(client Embedder, opts ...Option) (Embedder, error) {
 	embedderOpts := options{
 		StripNewLines:  true,
@@ -50,6 +64,7 @@ func NewEmbedder(client Embedder, opts ...Option) (Embedder, error) {
 	}, nil
 }
 
+// EmbedQuery generates an embedding for a single query with preprocessing.
 func (e *EmbedderImpl) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	if strings.TrimSpace(text) == "" {
 		return nil, ErrEmptyText
@@ -58,6 +73,7 @@ func (e *EmbedderImpl) EmbedQuery(ctx context.Context, text string) ([]float32, 
 	return e.client.EmbedQuery(ctx, processedText)
 }
 
+// EmbedQueries generates embeddings for multiple queries with batching.
 func (e *EmbedderImpl) EmbedQueries(ctx context.Context, texts []string) ([][]float32, error) {
 	if len(texts) == 0 {
 		return [][]float32{}, nil
@@ -92,6 +108,7 @@ func (e *EmbedderImpl) EmbedQueries(ctx context.Context, texts []string) ([][]fl
 	return allEmbeddings, nil
 }
 
+// EmbedDocuments generates embeddings for multiple documents with batching.
 func (e *EmbedderImpl) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error) {
 	if len(texts) == 0 {
 		return [][]float32{}, nil
@@ -132,6 +149,7 @@ func (e *EmbedderImpl) EmbedDocuments(ctx context.Context, texts []string) ([][]
 	return allEmbeddings, nil
 }
 
+// GetDimension returns the dimension of the embeddings.
 func (e *EmbedderImpl) GetDimension(ctx context.Context) (int, error) {
 	return e.client.GetDimension(ctx)
 }

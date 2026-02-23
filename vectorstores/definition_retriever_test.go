@@ -54,6 +54,15 @@ func (m *mockFilterStore) DeleteDocumentsByFilter(ctx context.Context, filters m
 	return nil
 }
 
+func TestNewDefinitionRetriever_Validation(t *testing.T) {
+	t.Run("nil store returns error", func(t *testing.T) {
+		retriever, err := vectorstores.NewDefinitionRetriever(nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "store cannot be nil")
+		assert.Nil(t, retriever)
+	})
+}
+
 func TestDefinitionRetriever_GetDefinition(t *testing.T) {
 	// Setup mock store with filtering
 	mockStore := &mockFilterStore{
@@ -88,7 +97,8 @@ func TestDefinitionRetriever_GetDefinition(t *testing.T) {
 		},
 	}
 
-	retriever := vectorstores.NewDefinitionRetriever(mockStore)
+	retriever, err := vectorstores.NewDefinitionRetriever(mockStore)
+	require.NoError(t, err)
 
 	t.Run("LookupExistingStruct", func(t *testing.T) {
 		docs, err := retriever.GetDefinition(context.Background(), "User")

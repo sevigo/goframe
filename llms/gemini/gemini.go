@@ -35,6 +35,7 @@ type LLM struct {
 	// dimension is cached after the first call to GetDimension
 	dimension int
 	dimOnce   sync.Once
+	dimMu     sync.Mutex // protects dimOnce reset
 }
 
 var _ llms.Model = (*LLM)(nil)
@@ -206,20 +207,37 @@ func (g *LLM) EmbedQueries(ctx context.Context, texts []string) ([][]float32, er
 }
 
 // GetDimension returns the embedding dimension of the model.
+// It caches the result after the first successful call. If the first call fails,
+// subsequent calls will retry until a successful result is obtained.
 func (g *LLM) GetDimension(ctx context.Context) (int, error) {
-	var err error
+	// Fast path: check if we already have a cached dimension
+	g.dimMu.Lock()
+	if g.dimension > 0 {
+		dim := g.dimension
+		g.dimMu.Unlock()
+		return dim, nil
+	}
+	g.dimMu.Unlock()
+
+	// Use sync.Once for the initial call
+	var onceErr error
 	g.dimOnce.Do(func() {
-		sampleEmbedding, doErr := g.EmbedQuery(ctx, "dimension")
-		if doErr != nil {
-			err = fmt.Errorf("failed to get dimension by embedding sample text: %w", doErr)
+		sampleEmbedding, err := g.EmbedQuery(ctx, "dimension")
+		if err != nil {
+			onceErr = fmt.Errorf("failed to get dimension by embedding sample text: %w", err)
 			return
 		}
+		g.dimMu.Lock()
 		g.dimension = len(sampleEmbedding)
+		g.dimMu.Unlock()
 	})
 
-	if err != nil {
+	if onceErr != nil {
+		// Allow retry by resetting sync.Once
+		g.dimMu.Lock()
 		g.dimOnce = sync.Once{}
-		return 0, err
+		g.dimMu.Unlock()
+		return 0, onceErr
 	}
 
 	return g.dimension, nil
