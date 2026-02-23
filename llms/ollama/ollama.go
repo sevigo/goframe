@@ -25,9 +25,17 @@ type authTransport struct {
 
 func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.apiKey != "" {
-		req.Header.Set("Authorization", t.apiKey)
+		req.Header.Set("Authorization", "Bearer "+t.apiKey)
 	}
 	return t.base.RoundTrip(req)
+}
+
+// maskAPIKey safely masks an API key for logging, showing only the first 4 characters.
+func maskAPIKey(key string) string {
+	if len(key) <= 4 {
+		return "****"
+	}
+	return key[:4] + "****"
 }
 
 type LLM struct {
@@ -53,7 +61,7 @@ func New(opts ...Option) (*LLM, error) {
 
 	defaultURL := "http://127.0.0.1:11434"
 	if o.apiKey != "" {
-		defaultURL = "https://ollama.com"
+		defaultURL = "https://ollama.com/api"
 	}
 
 	serverURL, _ := url.Parse(defaultURL)
@@ -84,7 +92,7 @@ func New(opts ...Option) (*LLM, error) {
 				at.base = newTransport
 			}
 		}
-		slog.Debug("Ollama client initialized with API key", "prefix", o.apiKey[:4]+"...")
+		slog.Debug("Ollama client initialized with API key", "prefix", maskAPIKey(o.apiKey))
 	} else if httpClient.Transport == nil {
 		// Optimize default transport if no API key but default client
 		if t, ok := http.DefaultTransport.(*http.Transport); ok {
