@@ -110,7 +110,7 @@ func TestLLMChain_Call(t *testing.T) {
 
 func TestLLMChain_GetPrompt(t *testing.T) {
 	tmpl := prompts.NewPromptTemplate("Analyze: {{.input}}")
-	
+
 	// Create a chain correctly so we can test GetPrompt
 	fakeLLM := fake.NewFakeLLM([]string{"some output"})
 	chain, err := chains.NewLLMChain[string](fakeLLM, tmpl)
