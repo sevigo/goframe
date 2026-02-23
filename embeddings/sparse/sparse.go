@@ -34,7 +34,7 @@ var (
 	provider   Provider
 )
 
-// RegisterProvider registers a sparse vector provider.
+// RegisterProvider registers a sparse vector provider, replacing the default.
 func RegisterProvider(p Provider) {
 	providerMu.Lock()
 	defer providerMu.Unlock()
@@ -42,17 +42,31 @@ func RegisterProvider(p Provider) {
 }
 
 // GenerateSparseVector builds a normalized sparse vector from text using the registered provider.
-// If no provider is registered, it returns an error.
+// If no provider is registered, it uses the default BoWProvider for backward compatibility.
 func GenerateSparseVector(ctx context.Context, text string) (*schema.SparseVector, error) {
+	p := getProvider()
+	return p.GenerateSparseVector(ctx, text)
+}
+
+// getProvider returns the registered provider, or creates a default BoWProvider if none is set.
+func getProvider() Provider {
 	providerMu.RLock()
 	p := provider
 	providerMu.RUnlock()
 
-	if p == nil {
-		return nil, errors.New("no sparse provider registered; call sparse.RegisterProvider first")
+	if p != nil {
+		return p
 	}
 
-	return p.GenerateSparseVector(ctx, text)
+	// Lazy initialization of default provider
+	providerMu.Lock()
+	defer providerMu.Unlock()
+
+	// Double-check after acquiring write lock
+	if provider == nil {
+		provider = NewBoWProvider()
+	}
+	return provider
 }
 
 // BoWProvider implements the Provider interface using a Bag-of-Words approach
