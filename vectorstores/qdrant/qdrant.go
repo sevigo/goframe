@@ -15,7 +15,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/qdrant/go-client/qdrant"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 
 	"github.com/sevigo/goframe/embeddings"
@@ -259,10 +261,18 @@ func (s *Store) isRetryableError(err error) bool {
 	errStr := err.Error()
 	retryableErrors := []string{
 		"Error 500",
+		"Error 503",
 		"Status: INTERNAL",
+		"Status: UNAVAILABLE",
+		"Status: RESOURCE_EXHAUSTED",
 		"Error 429",
 		"RESOURCE_EXHAUSTED",
 		"unexpected EOF",
+		"connection refused",
+		"connection reset",
+		"context deadline exceeded",
+		"transport is closing",
+		"client connection is closing",
 	}
 
 	for _, retryableErr := range retryableErrors {
@@ -270,7 +280,103 @@ func (s *Store) isRetryableError(err error) bool {
 			return true
 		}
 	}
+
+	// Check for gRPC status codes
+	if stat, ok := status.FromError(err); ok {
+		switch stat.Code() {
+		case codes.Unavailable, codes.ResourceExhausted, codes.DeadlineExceeded, codes.Internal:
+			return true
+		}
+	}
+
 	return false
+}
+
+// doWithRetry executes a function with retry logic for transient errors.
+func (s *Store) doWithRetry(ctx context.Context, operation string, fn func() error) error {
+	retryAttempts := s.options.retryAttempts
+	if retryAttempts == 0 {
+		retryAttempts = s.batchConfig.RetryAttempts
+	}
+
+	if retryAttempts == 0 {
+		return fn()
+	}
+
+	delay := s.options.retryDelay
+	if delay == 0 {
+		delay = s.batchConfig.RetryDelay
+	}
+
+	maxDelay := s.options.maxRetryDelay
+	if maxDelay == 0 {
+		maxDelay = s.batchConfig.MaxRetryDelay
+	}
+
+	jitter := s.options.retryJitter
+	if jitter == 0 {
+		jitter = s.batchConfig.RetryJitter
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= retryAttempts; attempt++ {
+		err := fn()
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+
+		// Check if we've exhausted our retries
+		if attempt >= retryAttempts {
+			break
+		}
+
+		// Only retry on transient errors
+		if !s.isRetryableError(err) {
+			break
+		}
+
+		// Wait before retrying
+		if retryErr := s.waitForRetryDelayWithJitter(ctx, delay, attempt+1, operation, err, jitter); retryErr != nil {
+			return retryErr
+		}
+
+		delay = s.calculateNextDelayWithMax(delay, maxDelay)
+	}
+
+	return fmt.Errorf("%s failed after %d attempts: %w", operation, retryAttempts+1, lastErr)
+}
+
+// waitForRetryDelayWithJitter waits for the specified delay with jitter.
+func (s *Store) waitForRetryDelayWithJitter(ctx context.Context, delay time.Duration, attempt int, operation string, err error, jitter time.Duration) error {
+	var jitterDur time.Duration
+	if jitter > 0 {
+		jitterDur = time.Duration(rand.IntN(int(jitter.Milliseconds()))) * time.Millisecond //nolint:gosec
+	}
+	totalDelay := delay + jitterDur
+
+	s.logger.WarnContext(ctx, "Retrying operation",
+		"operation", operation,
+		"attempt", fmt.Sprintf("%d/%d", attempt, s.options.retryAttempts),
+		"delay", totalDelay,
+		"error", err)
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(totalDelay):
+		return nil
+	}
+}
+
+// calculateNextDelayWithMax calculates the next retry delay with exponential backoff.
+func (s *Store) calculateNextDelayWithMax(delay, maxDelay time.Duration) time.Duration {
+	delay *= 2
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+	return delay
 }
 
 func (s *Store) createQdrantPoints(batchDocs []schema.Document, vectors [][]float32) ([]*qdrant.PointStruct, []string) {
@@ -485,9 +591,18 @@ func (s *Store) upsertWithRetry(ctx context.Context, collectionName string, poin
 }
 
 func createQdrantClient(opts options, logger *slog.Logger) (*qdrant.Client, error) {
+	// Build gRPC dial options with connection pooling and keepalive
+	grpcOpts := buildGrpcOptions(opts)
+
 	if opts.qdrantURL.Host == "" {
-		logger.Debug("Creating default Qdrant client")
-		client, err := qdrant.DefaultClient()
+		logger.Debug("Creating default Qdrant client with gRPC options",
+			"timeout", opts.timeout,
+			"keepalive_time", opts.keepaliveTime,
+			"keepalive_timeout", opts.keepaliveTimeout)
+
+		client, err := qdrant.NewClient(&qdrant.Config{
+			GrpcOptions: grpcOpts,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("default client creation failed: %w", err)
 		}
@@ -505,15 +620,24 @@ func createQdrantClient(opts options, logger *slog.Logger) (*qdrant.Client, erro
 	}
 
 	hostname := opts.qdrantURL.Hostname()
-	logger.Debug("Creating custom Qdrant client", "host", hostname, "port", port)
+	logger.Debug("Creating custom Qdrant client",
+		"host", hostname, "port", port,
+		"timeout", opts.timeout,
+		"keepalive_time", opts.keepaliveTime,
+		"keepalive_timeout", opts.keepaliveTimeout)
 
 	config := &qdrant.Config{
-		Host: hostname,
-		Port: port,
+		Host:        hostname,
+		Port:        port,
+		GrpcOptions: grpcOpts,
 	}
 
 	if opts.apiKey != "" {
 		config.APIKey = opts.apiKey
+	}
+
+	if opts.useTLS {
+		config.UseTLS = true
 	}
 
 	client, err := qdrant.NewClient(config)
@@ -522,6 +646,27 @@ func createQdrantClient(opts options, logger *slog.Logger) (*qdrant.Client, erro
 	}
 
 	return client, nil
+}
+
+// buildGrpcOptions creates gRPC dial options for connection management.
+func buildGrpcOptions(opts options) []grpc.DialOption {
+	kaParams := keepalive.ClientParameters{
+		Time:                opts.keepaliveTime,
+		Timeout:             opts.keepaliveTimeout,
+		PermitWithoutStream: true,
+	}
+
+	grpcOpts := []grpc.DialOption{
+		grpc.WithKeepaliveParams(kaParams),
+		grpc.WithDefaultServiceConfig(fmt.Sprintf(`{"loadBalancingConfig": [{"round_robin":{}}], "methodConfig": [{"name": [{"service": ""}], "timeout": "%s"}]}`, opts.timeout)),
+	}
+
+	// Append any custom gRPC options
+	if len(opts.grpcOptions) > 0 {
+		grpcOpts = append(grpcOpts, opts.grpcOptions...)
+	}
+
+	return grpcOpts
 }
 
 // executeSearch is the shared search implementation used by both SimilaritySearch
@@ -591,28 +736,46 @@ func (s *Store) executeSearch(
 			ScoreThreshold: &opts.ScoreThreshold,
 		}
 
-		queryResult, err := s.client.GetPointsClient().Query(ctx, queryPoints)
+		err = s.doWithRetry(ctx, "hybrid_query", func() error {
+			var retryErr error
+			queryResult, retryErr := s.client.GetPointsClient().Query(ctx, queryPoints)
+			if retryErr != nil {
+				return retryErr
+			}
+			results = queryResult.GetResult()
+			return nil
+		})
 		if err != nil {
 			return nil, collectionName, fmt.Errorf("qdrant hybrid query failed: %w", err)
 		}
-		results = queryResult.GetResult()
 
 		s.logger.DebugContext(ctx, "Hybrid search executed",
 			"fusion", "RRF", "results", len(results),
 			"duration", time.Since(searchStart))
 	} else {
-		searchResult, err := s.client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
-			CollectionName: collectionName,
-			Vector:         queryVector,
-			Limit:          limit,
-			WithPayload: &qdrant.WithPayloadSelector{
-				SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
-			},
-			ScoreThreshold: &opts.ScoreThreshold,
-			Filter:         filter,
+		err = s.doWithRetry(ctx, "similarity_search", func() error {
+			searchResult, retryErr := s.client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
+				CollectionName: collectionName,
+				Vector:         queryVector,
+				Limit:          limit,
+				WithPayload: &qdrant.WithPayloadSelector{
+					SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
+				},
+				ScoreThreshold: &opts.ScoreThreshold,
+				Filter:         filter,
+			})
+			if retryErr != nil {
+				// Check for non-retryable NotFound error
+				if stat, ok := status.FromError(retryErr); ok && stat.Code() == codes.NotFound {
+					return fmt.Errorf("%w: %w", vectorstores.ErrCollectionNotFound, retryErr)
+				}
+				return retryErr
+			}
+			results = searchResult.GetResult()
+			return nil
 		})
 		if err != nil {
-			if stat, ok := status.FromError(err); ok && stat.Code() == codes.NotFound {
+			if errors.Is(err, vectorstores.ErrCollectionNotFound) {
 				s.logger.WarnContext(ctx, "Collection not found during search", "collection", collectionName)
 				return nil, collectionName, vectorstores.ErrCollectionNotFound
 			}
@@ -620,7 +783,6 @@ func (s *Store) executeSearch(
 				"error", err, "collection", collectionName, "duration", time.Since(searchStart))
 			return nil, collectionName, fmt.Errorf("qdrant search failed: %w", err)
 		}
-		results = searchResult.GetResult()
 
 		s.logger.DebugContext(ctx, "Dense search executed",
 			"results", len(results), "duration", time.Since(searchStart))
@@ -742,14 +904,17 @@ func (s *Store) DeleteDocuments(ctx context.Context, ids []string, options ...ve
 	}
 
 	wait := true
-	_, err := s.client.GetPointsClient().Delete(ctx, &qdrant.DeletePoints{
-		CollectionName: collectionName,
-		Wait:           &wait,
-		Points: &qdrant.PointsSelector{
-			PointsSelectorOneOf: &qdrant.PointsSelector_Points{
-				Points: &qdrant.PointsIdsList{Ids: pointIds},
+	err := s.doWithRetry(ctx, "delete_documents", func() error {
+		_, retryErr := s.client.GetPointsClient().Delete(ctx, &qdrant.DeletePoints{
+			CollectionName: collectionName,
+			Wait:           &wait,
+			Points: &qdrant.PointsSelector{
+				PointsSelectorOneOf: &qdrant.PointsSelector_Points{
+					Points: &qdrant.PointsIdsList{Ids: pointIds},
+				},
 			},
-		},
+		})
+		return retryErr
 	})
 
 	duration := time.Since(start)

@@ -6,14 +6,22 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/sevigo/goframe/embeddings"
+	"google.golang.org/grpc"
 )
 
 const (
 	defaultContentKey = "content"
 	defaultHost       = "localhost"
 	defaultPort       = 6334
+
+	// Default gRPC connection settings.
+	defaultTimeout          = 30 * time.Second
+	defaultKeepaliveTime    = 10 * time.Second
+	defaultKeepaliveTimeout = 2 * time.Second
+	defaultPoolSize         = 10
 )
 
 var ErrInvalidOptions = errors.New("qdrant: invalid options provided")
@@ -26,13 +34,22 @@ type options struct {
 	contentKey         string
 	logger             *slog.Logger
 	useTLS             bool
-	timeout            int
+	timeout            time.Duration
 	retryAttempts      int
+	retryDelay         time.Duration
+	maxRetryDelay      time.Duration
+	retryJitter        time.Duration
 	batchSize          int
 	batchConfig        *BatchConfig
 	binaryQuantization bool
 	payloadIndexes     []string
 	sparseVectors      []string
+
+	// gRPC connection settings.
+	keepaliveTime    time.Duration
+	keepaliveTimeout time.Duration
+	poolSize         int
+	grpcOptions      []grpc.DialOption
 }
 
 // Option defines a function type for configuring Qdrant store options.
@@ -122,11 +139,11 @@ func WithTLS(useTLS bool) Option {
 	}
 }
 
-// WithTimeout sets the connection timeout in seconds.
-func WithTimeout(timeoutSeconds int) Option {
+// WithTimeout sets the connection timeout.
+func WithTimeout(timeout time.Duration) Option {
 	return func(opts *options) {
-		if timeoutSeconds > 0 {
-			opts.timeout = timeoutSeconds
+		if timeout > 0 {
+			opts.timeout = timeout
 		}
 	}
 }
@@ -137,6 +154,70 @@ func WithRetryAttempts(attempts int) Option {
 		if attempts >= 0 {
 			opts.retryAttempts = attempts
 		}
+	}
+}
+
+// WithRetryDelay sets the initial delay between retry attempts.
+func WithRetryDelay(delay time.Duration) Option {
+	return func(opts *options) {
+		if delay > 0 {
+			opts.retryDelay = delay
+		}
+	}
+}
+
+// WithMaxRetryDelay sets the maximum delay between retry attempts.
+func WithMaxRetryDelay(delay time.Duration) Option {
+	return func(opts *options) {
+		if delay > 0 {
+			opts.maxRetryDelay = delay
+		}
+	}
+}
+
+// WithRetryJitter sets the random jitter added to retry delays.
+func WithRetryJitter(jitter time.Duration) Option {
+	return func(opts *options) {
+		if jitter >= 0 {
+			opts.retryJitter = jitter
+		}
+	}
+}
+
+// WithKeepaliveTime sets the interval between keepalive pings.
+// This helps maintain connection health in long-running scenarios.
+func WithKeepaliveTime(d time.Duration) Option {
+	return func(opts *options) {
+		if d > 0 {
+			opts.keepaliveTime = d
+		}
+	}
+}
+
+// WithKeepaliveTimeout sets the timeout for keepalive ping responses.
+func WithKeepaliveTimeout(d time.Duration) Option {
+	return func(opts *options) {
+		if d > 0 {
+			opts.keepaliveTimeout = d
+		}
+	}
+}
+
+// WithPoolSize sets the gRPC connection pool size.
+// A larger pool can handle more concurrent requests.
+func WithPoolSize(size int) Option {
+	return func(opts *options) {
+		if size > 0 {
+			opts.poolSize = size
+		}
+	}
+}
+
+// WithGrpcOptions sets custom gRPC dial options for advanced configuration.
+// These are appended to the default dial options.
+func WithGrpcOptions(opts ...grpc.DialOption) Option {
+	return func(o *options) {
+		o.grpcOptions = append(o.grpcOptions, opts...)
 	}
 }
 
@@ -180,15 +261,39 @@ func applyDefaults(opts *options) {
 	}
 
 	if opts.timeout == 0 {
-		opts.timeout = 30
+		opts.timeout = defaultTimeout
 	}
 
 	if opts.retryAttempts == 0 {
 		opts.retryAttempts = 3
 	}
 
+	if opts.retryDelay == 0 {
+		opts.retryDelay = 2 * time.Second
+	}
+
+	if opts.maxRetryDelay == 0 {
+		opts.maxRetryDelay = 30 * time.Second
+	}
+
+	if opts.retryJitter == 0 {
+		opts.retryJitter = 1 * time.Second
+	}
+
 	if opts.batchSize == 0 {
 		opts.batchSize = 100
+	}
+
+	if opts.keepaliveTime == 0 {
+		opts.keepaliveTime = defaultKeepaliveTime
+	}
+
+	if opts.keepaliveTimeout == 0 {
+		opts.keepaliveTimeout = defaultKeepaliveTimeout
+	}
+
+	if opts.poolSize == 0 {
+		opts.poolSize = defaultPoolSize
 	}
 
 	if opts.qdrantURL.Host == "" {
@@ -276,10 +381,17 @@ func (opts *options) Clone() options {
 		useTLS:             opts.useTLS,
 		timeout:            opts.timeout,
 		retryAttempts:      opts.retryAttempts,
+		retryDelay:         opts.retryDelay,
+		maxRetryDelay:      opts.maxRetryDelay,
+		retryJitter:        opts.retryJitter,
 		batchSize:          opts.batchSize,
 		batchConfig:        opts.batchConfig,
 		binaryQuantization: opts.binaryQuantization,
 		payloadIndexes:     append([]string{}, opts.payloadIndexes...),
 		sparseVectors:      append([]string{}, opts.sparseVectors...),
+		keepaliveTime:      opts.keepaliveTime,
+		keepaliveTimeout:   opts.keepaliveTimeout,
+		poolSize:           opts.poolSize,
+		grpcOptions:        append([]grpc.DialOption{}, opts.grpcOptions...),
 	}
 }

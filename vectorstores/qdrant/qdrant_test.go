@@ -3,6 +3,7 @@ package qdrant
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -602,3 +603,188 @@ func TestStoreGetEmbedder(t *testing.T) {
 
 // These are defined in the vectorstores package, not qdrant
 // TestNewDependencyRetriever and TestContextNetwork would be in vectorstores_test.go
+
+func TestWithTimeout(t *testing.T) {
+	opt := WithTimeout(60 * time.Second)
+	opts := options{}
+	opt(&opts)
+	assert.Equal(t, 60*time.Second, opts.timeout)
+
+	// Zero timeout should be ignored
+	opt = WithTimeout(0)
+	opts = options{}
+	opt(&opts)
+	assert.Equal(t, time.Duration(0), opts.timeout)
+}
+
+func TestWithRetryDelay(t *testing.T) {
+	opt := WithRetryDelay(5 * time.Second)
+	opts := options{}
+	opt(&opts)
+	assert.Equal(t, 5*time.Second, opts.retryDelay)
+}
+
+func TestWithMaxRetryDelay(t *testing.T) {
+	opt := WithMaxRetryDelay(60 * time.Second)
+	opts := options{}
+	opt(&opts)
+	assert.Equal(t, 60*time.Second, opts.maxRetryDelay)
+}
+
+func TestWithRetryJitter(t *testing.T) {
+	opt := WithRetryJitter(2 * time.Second)
+	opts := options{}
+	opt(&opts)
+	assert.Equal(t, 2*time.Second, opts.retryJitter)
+}
+
+func TestWithKeepaliveTime(t *testing.T) {
+	opt := WithKeepaliveTime(15 * time.Second)
+	opts := options{}
+	opt(&opts)
+	assert.Equal(t, 15*time.Second, opts.keepaliveTime)
+}
+
+func TestWithKeepaliveTimeout(t *testing.T) {
+	opt := WithKeepaliveTimeout(5 * time.Second)
+	opts := options{}
+	opt(&opts)
+	assert.Equal(t, 5*time.Second, opts.keepaliveTimeout)
+}
+
+func TestWithPoolSize(t *testing.T) {
+	opt := WithPoolSize(20)
+	opts := options{}
+	opt(&opts)
+	assert.Equal(t, 20, opts.poolSize)
+}
+
+func TestApplyDefaultsConnectionSettings(t *testing.T) {
+	opts := options{}
+	applyDefaults(&opts)
+
+	assert.Equal(t, defaultTimeout, opts.timeout)
+	assert.Equal(t, defaultKeepaliveTime, opts.keepaliveTime)
+	assert.Equal(t, defaultKeepaliveTimeout, opts.keepaliveTimeout)
+	assert.Equal(t, defaultPoolSize, opts.poolSize)
+	assert.Equal(t, 2*time.Second, opts.retryDelay)
+	assert.Equal(t, 30*time.Second, opts.maxRetryDelay)
+	assert.Equal(t, 1*time.Second, opts.retryJitter)
+}
+
+func TestStoreIsRetryableErrorExtended(t *testing.T) {
+	store := &Store{batchConfig: BatchConfig{MaxRetryDelay: 30 * time.Second}}
+
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{"connection refused", fmt.Errorf("connection refused"), true},
+		{"connection reset", fmt.Errorf("connection reset by peer"), true},
+		{"transport closing", fmt.Errorf("transport is closing"), true},
+		{"client closing", fmt.Errorf("client connection is closing"), true},
+		{"deadline exceeded", fmt.Errorf("context deadline exceeded"), true},
+		{"error 503", fmt.Errorf("Error 503: service unavailable"), true},
+		{"non-retryable", fmt.Errorf("invalid parameter"), false},
+		{"not found", fmt.Errorf("collection not found"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := store.isRetryableError(tt.err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestStoreDoWithRetry(t *testing.T) {
+	logger := slog.Default()
+	store := &Store{
+		options: options{
+			retryAttempts:  2,
+			retryDelay:     10 * time.Millisecond,
+			maxRetryDelay:  100 * time.Millisecond,
+			retryJitter:    5 * time.Millisecond,
+			logger:         logger,
+		},
+		batchConfig: BatchConfig{MaxRetryDelay: 100 * time.Millisecond},
+		logger:      logger,
+	}
+
+	t.Run("success on first try", func(t *testing.T) {
+		callCount := 0
+		err := store.doWithRetry(context.Background(), "test_op", func() error {
+			callCount++
+			return nil
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, callCount)
+	})
+
+	t.Run("success after retry", func(t *testing.T) {
+		callCount := 0
+		err := store.doWithRetry(context.Background(), "test_op", func() error {
+			callCount++
+			if callCount < 2 {
+				return fmt.Errorf("Error 500: internal error")
+			}
+			return nil
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, 2, callCount)
+	})
+
+	t.Run("non-retryable error", func(t *testing.T) {
+		callCount := 0
+		err := store.doWithRetry(context.Background(), "test_op", func() error {
+			callCount++
+			return fmt.Errorf("invalid parameter")
+		})
+		assert.Error(t, err)
+		assert.Equal(t, 1, callCount)
+	})
+
+	t.Run("exhausted retries", func(t *testing.T) {
+		callCount := 0
+		err := store.doWithRetry(context.Background(), "test_op", func() error {
+			callCount++
+			return fmt.Errorf("connection refused")
+		})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "test_op failed after 3 attempts")
+		assert.Equal(t, 3, callCount) // initial + 2 retries
+	})
+}
+
+func TestOptionsCloneWithNewFields(t *testing.T) {
+	original := options{
+		collectionName:     "test",
+		timeout:            60 * time.Second,
+		retryDelay:         3 * time.Second,
+		maxRetryDelay:      30 * time.Second,
+		retryJitter:        500 * time.Millisecond,
+		keepaliveTime:      15 * time.Second,
+		keepaliveTimeout:   5 * time.Second,
+		poolSize:           20,
+		grpcOptions:        nil,
+		payloadIndexes:     []string{"source", "package"},
+		sparseVectors:      []string{"bow"},
+	}
+
+	cloned := original.Clone()
+
+	assert.Equal(t, original.timeout, cloned.timeout)
+	assert.Equal(t, original.retryDelay, cloned.retryDelay)
+	assert.Equal(t, original.maxRetryDelay, cloned.maxRetryDelay)
+	assert.Equal(t, original.retryJitter, cloned.retryJitter)
+	assert.Equal(t, original.keepaliveTime, cloned.keepaliveTime)
+	assert.Equal(t, original.keepaliveTimeout, cloned.keepaliveTimeout)
+	assert.Equal(t, original.poolSize, cloned.poolSize)
+	assert.Equal(t, original.payloadIndexes, cloned.payloadIndexes)
+	assert.Equal(t, original.sparseVectors, cloned.sparseVectors)
+
+	// Verify it's a copy, not a reference
+	cloned.payloadIndexes[0] = "modified"
+	assert.Equal(t, "source", original.payloadIndexes[0])
+}
