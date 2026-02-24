@@ -3,6 +3,7 @@ package ollama
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strings"
@@ -17,6 +18,17 @@ import (
 	"github.com/sevigo/goframe/llms"
 	"github.com/sevigo/goframe/schema"
 )
+
+// defaultHTTPClient provides a properly configured HTTP client with sensible defaults.
+var defaultHTTPClient = &http.Client{
+	Timeout: DefaultTimeout,
+	Transport: &http.Transport{
+		MaxIdleConns:        DefaultMaxIdleConns,
+		MaxIdleConnsPerHost: DefaultMaxIdleConnsHost,
+		IdleConnTimeout:     DefaultIdleConnTimeout,
+		TLSHandshakeTimeout: DefaultTLSHandshakeTimeout,
+	},
+}
 
 type authTransport struct {
 	base   http.RoundTripper
@@ -71,7 +83,7 @@ func New(opts ...Option) (*LLM, error) {
 
 	httpClient := o.httpClient
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = defaultHTTPClient
 	}
 
 	if o.apiKey != "" {
@@ -185,7 +197,12 @@ func (o *LLM) GenerateContent(
 		return nil
 	}
 
-	err := o.client.Chat(ctx, req, fn)
+	err := o.doWithRetry(ctx, func() error {
+		fullResponse.Reset()
+		finalResp = api.ChatResponse{}
+		return o.client.Chat(ctx, req, fn)
+	})
+
 	duration := time.Since(start)
 
 	if err != nil {
@@ -235,7 +252,12 @@ func (o *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, 
 		Input: texts,
 	}
 
-	resp, err := o.client.Embed(ctx, req)
+	var resp *api.EmbedResponse
+	err := o.doWithRetry(ctx, func() error {
+		var err error
+		resp, err = o.client.Embed(ctx, req)
+		return err
+	})
 	if err != nil {
 		return nil, fmt.Errorf("ollama embed failing: %w", err)
 	}
@@ -249,7 +271,12 @@ func (o *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 		Input: text,
 	}
 
-	resp, err := o.client.Embed(ctx, req)
+	var resp *api.EmbedResponse
+	err := o.doWithRetry(ctx, func() error {
+		var err error
+		resp, err = o.client.Embed(ctx, req)
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -318,7 +345,10 @@ func (o *LLM) CountTokens(ctx context.Context, text string) (int, error) {
 		return nil
 	}
 
-	err := o.client.Generate(ctx, req, fn)
+	err := o.doWithRetry(ctx, func() error {
+		tokenCount = 0
+		return o.client.Generate(ctx, req, fn)
+	})
 	if err != nil {
 		return 0, fmt.Errorf("token counting via generation failed: %w", err)
 	}
@@ -365,4 +395,104 @@ func (o *LLM) HasModel(ctx context.Context, name string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// retryableErrorPatterns contains error patterns that indicate a transient failure.
+var retryableErrorPatterns = []string{
+	"context deadline exceeded",
+	"context canceled",
+	"http2: server sent GOAWAY",
+	"connection reset by peer",
+	"connection refused",
+	"unexpected EOF",
+	"io: read/write on closed pipe",
+	"network is unreachable",
+	"no such host",
+	"timeout",
+	"ECONNRESET",
+	"ECONNREFUSED",
+	"ETIMEDOUT",
+}
+
+// isRetryableError determines if an error is transient and should be retried.
+func (o *LLM) isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := strings.ToLower(err.Error())
+	for _, pattern := range retryableErrorPatterns {
+		if strings.Contains(errStr, strings.ToLower(pattern)) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// calculateNextDelay calculates the next retry delay with exponential backoff.
+func (o *LLM) calculateNextDelay(delay time.Duration) time.Duration {
+	delay *= 2
+	if delay > o.options.maxRetryDelay {
+		delay = o.options.maxRetryDelay
+	}
+	return delay
+}
+
+// waitForRetryDelay waits for the specified delay with jitter, respecting context cancellation.
+func (o *LLM) waitForRetryDelay(ctx context.Context, delay time.Duration, attempt int, err error) error {
+	var jitter time.Duration
+	if o.options.retryJitter > 0 {
+		jitter = time.Duration(rand.IntN(int(o.options.retryJitter.Milliseconds()))) * time.Millisecond //nolint:gosec // rand.IntN is sufficient for retry jitter
+	}
+	totalDelay := delay + jitter
+
+	o.logger.WarnContext(ctx, "Retrying Ollama API call",
+		"attempt", fmt.Sprintf("%d/%d", attempt, o.options.retryAttempts),
+		"delay", totalDelay,
+		"error", err)
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(totalDelay):
+		return nil
+	}
+}
+
+// doWithRetry executes a function with retry logic for transient errors.
+func (o *LLM) doWithRetry(ctx context.Context, fn func() error) error {
+	if o.options.retryAttempts == 0 {
+		return fn()
+	}
+
+	var lastErr error
+	delay := o.options.retryDelay
+
+	for attempt := 0; attempt <= o.options.retryAttempts; attempt++ {
+		err := fn()
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+
+		// Check if we've exhausted our retries
+		if attempt >= o.options.retryAttempts {
+			break
+		}
+
+		// Only retry on transient errors
+		if !o.isRetryableError(err) {
+			break
+		}
+
+		// Wait before retrying
+		if retryErr := o.waitForRetryDelay(ctx, delay, attempt+1, err); retryErr != nil {
+			return retryErr
+		}
+		delay = o.calculateNextDelay(delay)
+	}
+
+	return lastErr
 }
