@@ -352,7 +352,7 @@ func (s *Store) doWithRetry(ctx context.Context, operation string, fn func() err
 func (s *Store) waitForRetryDelayWithJitter(ctx context.Context, delay time.Duration, attempt int, operation string, err error, jitter time.Duration) error {
 	var jitterDur time.Duration
 	if jitter > 0 {
-		jitterDur = time.Duration(rand.IntN(int(jitter.Milliseconds()))) * time.Millisecond //nolint:gosec
+		jitterDur = time.Duration(rand.IntN(int(jitter.Milliseconds()))) * time.Millisecond //nolint:gosec // rand.IntN is sufficient for retry jitter
 	}
 	totalDelay := delay + jitterDur
 

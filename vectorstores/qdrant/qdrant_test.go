@@ -702,11 +702,11 @@ func TestStoreDoWithRetry(t *testing.T) {
 	logger := slog.Default()
 	store := &Store{
 		options: options{
-			retryAttempts:  2,
-			retryDelay:     10 * time.Millisecond,
-			maxRetryDelay:  100 * time.Millisecond,
-			retryJitter:    5 * time.Millisecond,
-			logger:         logger,
+			retryAttempts: 2,
+			retryDelay:    10 * time.Millisecond,
+			maxRetryDelay: 100 * time.Millisecond,
+			retryJitter:   5 * time.Millisecond,
+			logger:        logger,
 		},
 		batchConfig: BatchConfig{MaxRetryDelay: 100 * time.Millisecond},
 		logger:      logger,
@@ -759,17 +759,17 @@ func TestStoreDoWithRetry(t *testing.T) {
 
 func TestOptionsCloneWithNewFields(t *testing.T) {
 	original := options{
-		collectionName:     "test",
-		timeout:            60 * time.Second,
-		retryDelay:         3 * time.Second,
-		maxRetryDelay:      30 * time.Second,
-		retryJitter:        500 * time.Millisecond,
-		keepaliveTime:      15 * time.Second,
-		keepaliveTimeout:   5 * time.Second,
-		poolSize:           20,
-		grpcOptions:        nil,
-		payloadIndexes:     []string{"source", "package"},
-		sparseVectors:      []string{"bow"},
+		collectionName:   "test",
+		timeout:          60 * time.Second,
+		retryDelay:       3 * time.Second,
+		maxRetryDelay:    30 * time.Second,
+		retryJitter:      500 * time.Millisecond,
+		keepaliveTime:    15 * time.Second,
+		keepaliveTimeout: 5 * time.Second,
+		poolSize:         20,
+		grpcOptions:      nil,
+		payloadIndexes:   []string{"source", "package"},
+		sparseVectors:    []string{"bow"},
 	}
 
 	cloned := original.Clone()
