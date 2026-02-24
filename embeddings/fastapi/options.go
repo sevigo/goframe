@@ -3,7 +3,8 @@ package fastapi
 import (
 	"log/slog"
 	"net/http"
-	"time"
+
+	"github.com/sevigo/goframe/httpclient"
 )
 
 type options struct {
@@ -18,7 +19,7 @@ type Option func(*options)
 
 func defaultOptions() *options {
 	return &options{
-		httpClient: &http.Client{Timeout: 60 * time.Second},
+		httpClient: httpclient.DefaultClient,
 		logger:     slog.Default(),
 		task:       "search_document",
 		apiKey:     "",
