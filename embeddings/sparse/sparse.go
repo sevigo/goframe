@@ -16,11 +16,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/sugarme/tokenizer"
 	"github.com/sugarme/tokenizer/pretrained"
 
+	"github.com/sevigo/goframe/httpclient"
 	"github.com/sevigo/goframe/schema"
 )
 
@@ -198,9 +198,8 @@ func EnsureModelDownloaded(ctx context.Context) (string, error) {
 }
 
 func downloadAndExtract(ctx context.Context, url, destination string) error {
-	client := &http.Client{
-		Timeout: 5 * time.Minute,
-	}
+	// Use shared download client optimized for large file transfers
+	client := httpclient.DownloadClient()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
