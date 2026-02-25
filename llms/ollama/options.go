@@ -30,6 +30,7 @@ type options struct {
 	thinking        *bool
 	reasoningEffort string
 	apiKey          string
+	keepAlive       time.Duration
 
 	// Retry configuration.
 	retryAttempts int
@@ -141,5 +142,25 @@ func WithRetryJitter(jitter time.Duration) Option {
 		if jitter >= 0 {
 			opts.retryJitter = jitter
 		}
+	}
+}
+
+// WithKeepAlive sets how long the model stays loaded in memory after a request.
+// Examples: "5m", "10m", "1h", "0" to unload immediately.
+func WithKeepAlive(keepAlive string) Option {
+	return func(opts *options) {
+		if keepAlive == "" {
+			return
+		}
+		if keepAlive == "0" {
+			opts.keepAlive = 0
+			return
+		}
+		d, err := time.ParseDuration(keepAlive)
+		if err != nil {
+			slog.Warn("Failed to parse keep_alive duration", "keep_alive", keepAlive, "error", err)
+			return
+		}
+		opts.keepAlive = d
 	}
 }
