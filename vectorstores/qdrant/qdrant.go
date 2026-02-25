@@ -658,7 +658,7 @@ func buildGrpcOptions(opts options) []grpc.DialOption {
 
 	grpcOpts := []grpc.DialOption{
 		grpc.WithKeepaliveParams(kaParams),
-		grpc.WithDefaultServiceConfig(fmt.Sprintf(`{"loadBalancingConfig": [{"round_robin":{}}], "methodConfig": [{"name": [{"service": ""}], "timeout": "%s"}]}`, opts.timeout)),
+		grpc.WithDefaultServiceConfig(fmt.Sprintf(`{"loadBalancingConfig": [{"round_robin":{}}], "methodConfig": [{"name": [{"service": ""}], "timeout": "%.9fs"}]}`, opts.timeout.Seconds())),
 	}
 
 	// Append any custom gRPC options
