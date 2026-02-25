@@ -285,9 +285,11 @@ func (o *LLM) buildChatRequest(model string, messages []schema.MessageContent, o
 	// Handle thinking/reasoning mode
 	o.applyThinkOption(req, opts)
 
-	// Handle keep_alive
+	// Handle keep_alive - prefer call option, fall back to initialization option
 	if opts.KeepAlive != "" {
 		req.KeepAlive = &api.Duration{Duration: parseKeepAlive(opts.KeepAlive)}
+	} else if o.options.keepAlive > 0 {
+		req.KeepAlive = &api.Duration{Duration: o.options.keepAlive}
 	}
 
 	// Handle structured output format
