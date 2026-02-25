@@ -195,6 +195,15 @@ func WithRetryJitter(jitter time.Duration) Option {
 	}
 }
 
+// WithResponseHeaderTimeout sets the timeout for response headers.
+func WithResponseHeaderTimeout(timeout time.Duration) Option {
+	return func(cfg *Config) {
+		if timeout > 0 {
+			cfg.ResponseHeaderTimeout = timeout
+		}
+	}
+}
+
 // NewClient creates a new HTTP client with the given configuration.
 func NewClient(cfg *Config) *http.Client {
 	if cfg == nil {
