@@ -36,6 +36,7 @@ go.work.sum
 .agent/
 *.log
 *.txt
-# Qdrant local storage
 qdrant_storage/
 .claude/
+CLAUDE.md
+concat_context.js
