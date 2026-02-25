@@ -22,6 +22,24 @@ type Embedder interface {
 	GetDimension(ctx context.Context) (int, error)
 }
 
+// EmbedderWithOptions is an optional interface that embedders can implement
+// to support additional embedding options like truncate and dimensions.
+type EmbedderWithOptions interface {
+	Embedder
+	// EmbedDocumentsWithOpts generates embeddings with additional options.
+	EmbedDocumentsWithOpts(ctx context.Context, texts []string, opts EmbeddingOptions) ([][]float32, error)
+	// EmbedQueryWithOpts generates an embedding with additional options.
+	EmbedQueryWithOpts(ctx context.Context, text string, opts EmbeddingOptions) ([]float32, error)
+}
+
+// EmbeddingOptions contains options for embedding requests.
+type EmbeddingOptions struct {
+	// Truncate truncates the input to fit the model's max sequence length.
+	Truncate bool
+	// Dimensions truncates the output embedding to the specified dimension.
+	Dimensions int
+}
+
 // EmbedderImpl wraps an Embedder with preprocessing and batching capabilities.
 // It adds support for query/document prefixes and batch processing.
 type EmbedderImpl struct {

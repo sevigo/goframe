@@ -19,12 +19,27 @@ type CallOptions struct {
 	TopP float64 `json:"top_p"`
 	// TopK limits sampling to top K tokens.
 	TopK int `json:"top_k"`
+	// MinP sets minimum probability threshold for token selection.
+	MinP float64 `json:"min_p"`
 	// Seed sets a deterministic seed for reproducible outputs.
 	Seed int `json:"seed"`
 	// Metadata contains additional provider-specific options.
 	Metadata map[string]any `json:"metadata,omitempty"`
 	// StreamingFunc is called for each chunk when streaming is enabled.
 	StreamingFunc func(ctx context.Context, chunk []byte) error `json:"-"`
+	// JSONMode enables JSON output format.
+	JSONMode bool `json:"json_mode"`
+	// JSONSchema specifies a JSON schema for structured output.
+	JSONSchema any `json:"json_schema,omitempty"`
+	// Tools specifies function tools the model may call.
+	Tools []ToolDefinition `json:"tools,omitempty"`
+	// Think enables thinking/reasoning output for supported models.
+	// Can be true/false or "high"/"medium"/"low" for some models.
+	Think any `json:"think,omitempty"`
+	// KeepAlive controls how long the model stays loaded in memory.
+	KeepAlive string `json:"keep_alive,omitempty"`
+	// ContextLength sets the context window size in tokens.
+	ContextLength int `json:"context_length,omitempty"`
 }
 
 // WithStreamingFunc specifies the streaming function to use.
@@ -84,4 +99,87 @@ func WithModel(model string) CallOption {
 	return func(o *CallOptions) {
 		o.Model = model
 	}
+}
+
+// WithMinP specifies the minimum probability threshold for token selection.
+func WithMinP(minP float64) CallOption {
+	return func(o *CallOptions) {
+		o.MinP = minP
+	}
+}
+
+// WithJSONMode enables JSON output format.
+func WithJSONMode(enabled bool) CallOption {
+	return func(o *CallOptions) {
+		o.JSONMode = enabled
+	}
+}
+
+// WithJSONSchema specifies a JSON schema for structured output.
+func WithJSONSchema(schema any) CallOption {
+	return func(o *CallOptions) {
+		o.JSONSchema = schema
+	}
+}
+
+// WithTools specifies function tools the model may call.
+func WithTools(tools []ToolDefinition) CallOption {
+	return func(o *CallOptions) {
+		o.Tools = tools
+	}
+}
+
+// WithThink enables thinking/reasoning output for supported models.
+// Pass true/false for standard models, or "high"/"medium"/"low" for GPT-OSS.
+func WithThink(think any) CallOption {
+	return func(o *CallOptions) {
+		o.Think = think
+	}
+}
+
+// WithKeepAlive controls how long the model stays loaded in memory.
+// Examples: "5m", "10m", "0" to unload immediately.
+func WithKeepAlive(keepAlive string) CallOption {
+	return func(o *CallOptions) {
+		o.KeepAlive = keepAlive
+	}
+}
+
+// WithContextLength sets the context window size in tokens.
+func WithContextLength(length int) CallOption {
+	return func(o *CallOptions) {
+		o.ContextLength = length
+	}
+}
+
+// ToolDefinition defines a function tool the model may call.
+type ToolDefinition struct {
+	// Type is always "function".
+	Type string `json:"type"`
+	// Function contains the function definition.
+	Function FunctionDefinition `json:"function"`
+}
+
+// FunctionDefinition describes a function that can be called by the model.
+type FunctionDefinition struct {
+	// Name is the function name.
+	Name string `json:"name"`
+	// Description explains what the function does.
+	Description string `json:"description,omitempty"`
+	// Parameters is a JSON Schema for the function parameters.
+	Parameters any `json:"parameters"`
+}
+
+// ToolCall represents a tool call request from the model.
+type ToolCall struct {
+	// Function contains the function call details.
+	Function FunctionCall `json:"function"`
+}
+
+// FunctionCall contains the details of a function call.
+type FunctionCall struct {
+	// Name is the name of the function to call.
+	Name string `json:"name"`
+	// Arguments is the JSON object of arguments to pass.
+	Arguments map[string]any `json:"arguments"`
 }

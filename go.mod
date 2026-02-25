@@ -8,7 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/hcl/v2 v2.23.0
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
-	github.com/ollama/ollama v0.15.4
+	github.com/ollama/ollama v0.17.0
 	github.com/qdrant/go-client v1.16.0
 	github.com/stretchr/testify v1.11.1
 	github.com/sugarme/tokenizer v0.3.0
