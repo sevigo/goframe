@@ -12,10 +12,9 @@ The following items are particularly valuable for the Code-Warden project:
 
 | Section | Item | Why Important |
 |---------|------|---------------|
-| §11.2 | **PR Overlay System** | Core feature - PR changes without corrupting main index |
-| §11.4 | **Smart Incremental Indexing** | Performance - git diff tracking with PostgreSQL |
-| §11.5 | **Token-Aware Context Packing** | "Zero-Hallucination" goal - strict token budgets |
-| §11.10 | **Structured Output Parsing** | JSON/XML parsing for review comments (✅ Core Parsers Implemented) |
+| §10.2 | **PR Overlay System** | Core feature - PR changes without corrupting main index |
+| §10.4 | **Smart Incremental Indexing** | Performance - git diff tracking with PostgreSQL |
+| §10.5 | **Token-Aware Context Packing** | "Zero-Hallucination" goal - strict token budgets |
 | §2.2 | **Count API** | Progress tracking during indexing |
 | §2.3 | **Groups API** | Group results by file (avoid over-representation) |
 
@@ -23,23 +22,21 @@ The following items are particularly valuable for the Code-Warden project:
 
 | Section | Item | Why Important |
 |---------|------|---------------|
-| §11.1 | **Multi-Stage Retrieval** | 5-stage pipeline support |
-| §11.3 | **Consensus Review** | Multi-model review synthesis |
-| §11.6 | **Chunk Splicing** | Continuous logic flows |
-| §11.7 | **Reverse HyDE** | Better query-code alignment |
-| §10.2 | **Call Graph Integration** | Impact analysis |
-| §10.3 | **Code-Aware Reranking** | Exact match boosting |
+| §10.1 | **Multi-Stage Retrieval** | 5-stage pipeline support |
+| §10.3 | **Consensus Review** | Multi-model review synthesis |
+| §10.6 | **Chunk Splicing** | Continuous logic flows |
+| §10.7 | **Reverse HyDE** | Better query-code alignment |
+| §9.2 | **Call Graph Integration** | Impact analysis |
+| §9.3 | **Code-Aware Reranking** | Exact match boosting |
 
 ### Supporting Features
 
 | Section | Item | Why Important |
 |---------|------|---------------|
-| §11.8 | **GitHub Integration** | PR diff parsing, API helpers |
-| §11.9 | **Hallucination Detection** | Zero-hallucination verification |
-| §10.4 | **Query Understanding** | Parse code-related queries |
-| §10.7 | **Code Review Pipeline** | Automated review workflow |
-| §3.1 | **List Models/Model Info** | Model selection for consensus |
-| §3.2 | **JSON Mode** | Reliable structured output |
+| §10.8 | **GitHub Integration** | PR diff parsing, API helpers |
+| §10.9 | **Hallucination Detection** | Zero-hallucination verification |
+| §9.4 | **Query Understanding** | Parse code-related queries |
+| §9.7 | **Code Review Pipeline** | Automated review workflow |
 
 ---
 
@@ -47,13 +44,14 @@ The following items are particularly valuable for the Code-Warden project:
 
 1. [Architecture Improvements](#1-architecture-improvements)
 2. [Qdrant Vector Store Features](#2-qdrant-vector-store-features)
-3. [Ollama LLM Features](#3-ollama-llm-features)
-4. [Testing & Quality](#4-testing--quality)
-5. [Observability & Monitoring](#5-observability--monitoring)
-6. [Performance Optimizations](#6-performance-optimizations)
-7. [Developer Experience](#7-developer-experience)
-8. [Documentation](#8-documentation)
-9. [Future Considerations](#9-future-considerations)
+3. [Testing & Quality](#3-testing--quality)
+4. [Observability & Monitoring](#4-observability--monitoring)
+5. [Performance Optimizations](#5-performance-optimizations)
+6. [Developer Experience](#6-developer-experience)
+7. [Documentation](#7-documentation)
+8. [Future Considerations](#8-future-considerations)
+9. [Advanced RAG Techniques for Code](#9-advanced-rag-techniques-for-code)
+10. [Code-Warden Specific Enhancements](#10-code-warden-specific-enhancements)
 
 ---
 
@@ -452,281 +450,11 @@ func (s *Store) DeleteSnapshot(ctx context.Context, snapshotID string) error
 
 ---
 
-## 3. Ollama LLM Features
+## 3. Testing & Quality
 
-### 3.1 List Models & Model Info
+### 3.1 Integration Tests with Docker
 
-**Priority:** High | **Effort:** Low
-
-Query available models and their details.
-
-```go
-// Proposed API in llms/ollama
-
-type ModelInfo struct {
-    Name          string
-    Size          int64
-    Digest        string
-    ModifiedAt    time.Time
-    Family        string
-    ParameterSize string
-    Quantization  string
-    Format        string
-}
-
-func (l *LLM) ListModels(ctx context.Context) ([]ModelInfo, error)
-func (l *LLM) ShowModel(ctx context.Context, name string) (*ModelInfo, error)
-func (l *LLM) DeleteModel(ctx context.Context, name string) error
-
-// Usage
-models, err := llm.ListModels(ctx)
-// [{Name: "llama3:70b", Size: 42GB, Family: "llama", ...}]
-
-info, err := llm.ShowModel(ctx, "llama3:70b")
-// {Family: "llama", Parameters: "70B", Quantization: "Q4_0", ...}
-```
-
-**Use Cases:**
-- Model selection UI
-- Validation before use
-- Display model capabilities
-
-**Tasks:**
-- [x] Implement `ListModels()` using `GET /api/tags`
-- [x] Implement `ShowModel()` using `GET /api/show`
-- [x] Implement `DeleteModel()` using `DELETE /api/delete`
-- [ ] Add tests with mock server
-- [ ] Document model management
-
-### 3.2 JSON Mode
-
-**Priority:** High | **Effort:** Low**
-
-Guaranteed valid JSON output.
-
-```go
-// Proposed API
-func WithJSONMode(enabled bool) CallOption
-
-// Usage
-var result struct {
-    Summary string   `json:"summary"`
-    Issues  []string `json:"issues"`
-}
-resp, err := llm.Call(ctx, prompt, llms.WithJSONMode(true))
-json.Unmarshal([]byte(resp), &result)
-```
-
-**Use Cases:**
-- Structured output parsing
-- Function calling preparation
-- Reliable data extraction
-
-**Tasks:**
-- [ ] Add `WithJSONMode()` option
-- [ ] Add `format: "json"` to request body
-- [ ] Add tests
-- [ ] Document JSON mode usage
-
-### 3.3 Vision/Multimodal Support
-
-**Priority:** High | **Effort:** Medium**
-
-Support image inputs for vision models.
-
-```go
-// Proposed schema additions
-type ImageContent struct {
-    Data        []byte // Raw image bytes
-    URL         string // Or URL to image
-    MediaType   string // "image/jpeg", "image/png", etc.
-}
-
-// Usage
-resp, err := llm.GenerateContent(ctx, []schema.MessageContent{
-    {
-        Role: schema.ChatMessageTypeHuman,
-        Parts: []schema.ContentPart{
-            schema.ImageContent{Data: imageData, MediaType: "image/png"},
-            schema.TextContent{Text: "Explain this architecture diagram"},
-        },
-    },
-})
-```
-
-**Use Cases:**
-- Analyze code screenshots
-- Read architecture diagrams
-- Process UI mockups
-
-**Tasks:**
-- [ ] Add `ImageContent` type to schema package
-- [ ] Update Ollama to encode images in base64
-- [ ] Update Gemini to handle images
-- [ ] Add tests with sample images
-- [ ] Document vision capabilities
-
-### 3.4 Keep Alive Configuration
-
-**Priority:** Medium | **Effort:** Low**
-
-Control model memory retention.
-
-```go
-// Proposed API
-func WithKeepAlive(duration time.Duration) Option
-
-// Usage
-// Keep model loaded for 30 minutes after last request
-resp, err := llm.Call(ctx, prompt, ollama.WithKeepAlive(30*time.Minute))
-
-// Unload immediately after request
-resp, err := llm.Call(ctx, prompt, ollama.WithKeepAlive(0))
-```
-
-**Use Cases:**
-- Reduce latency for frequent requests
-- Free GPU memory when done
-- Cost optimization
-
-**Tasks:**
-- [ ] Add `WithKeepAlive()` option
-- [ ] Add `keep_alive` to request body
-- [ ] Add tests
-- [ ] Document keep-alive tuning
-
-### 3.5 Running Models Management
-
-**Priority:** Medium | **Effort:** Low**
-
-See and manage loaded models.
-
-```go
-// Proposed API
-type RunningModel struct {
-    Name       string
-    Model      string
-    Size       int64
-    Digest     string
-    ExpiresAt  time.Time
-}
-
-func (l *LLM) ListRunningModels(ctx context.Context) ([]RunningModel, error)
-
-// Usage
-running, err := llm.ListRunningModels(ctx)
-// [{Name: "llama3:70b", Size: 42GB, ExpiresAt: ...}]
-```
-
-**Use Cases:**
-- Check GPU memory usage
-- Debug model loading issues
-- Monitor system resources
-
-**Tasks:**
-- [x] Implement `ListRunningModels()` using `GET /api/ps`
-- [ ] Add tests
-- [ ] Document running model management
-
-### 3.6 Native Function Calling (Tools)
-
-**Priority:** Medium | **Effort:** Medium**
-
-Support for Ollama's native tool calling.
-
-```go
-// Proposed API
-type Tool struct {
-    Type     string       `json:"type"`
-    Function FunctionSpec `json:"function"`
-}
-
-type FunctionSpec struct {
-    Name        string                 `json:"name"`
-    Description string                 `json:"description"`
-    Parameters  map[string]any         `json:"parameters"`
-}
-
-func WithTools(tools []Tool) CallOption
-func WithToolChoice(choice string) CallOption // "auto", "none", or specific tool
-
-// Usage
-tools := []Tool{{
-    Type: "function",
-    Function: FunctionSpec{
-        Name:        "search_code",
-        Description: "Search for code in the repository",
-        Parameters:  map[string]any{...},
-    },
-}}
-
-resp, err := llm.Call(ctx, prompt, ollama.WithTools(tools))
-```
-
-**Use Cases:**
-- Agent workflows
-- Code execution
-- External API integration
-
-**Tasks:**
-- [ ] Define `Tool` and `FunctionSpec` types
-- [ ] Add `WithTools()` and `WithToolChoice()` options
-- [ ] Parse tool call responses
-- [ ] Add tests
-- [ ] Document tool calling
-
-### 3.7 Raw Mode
-
-**Priority:** Low | **Effort:** Low**
-
-Bypass template formatting.
-
-```go
-// Proposed API
-func WithRawMode(enabled bool) Option
-
-// Usage - send raw prompt without template processing
-resp, err := llm.Call(ctx, rawPrompt, ollama.WithRawMode(true))
-```
-
-**Use Cases:**
-- Custom prompt templates
-- Fine-grained control
-- Advanced users
-
-**Tasks:**
-- [ ] Add `WithRawMode()` option
-- [ ] Add tests
-- [ ] Document usage
-
----
-
-## 4. Testing & Quality
-
-### 4.1 Unit Tests for Error Paths
-
-**Priority:** High | **Effort:** Low**
-
-Add tests for newly added error validation.
-
-```
-Files needing tests:
-- chains/llm_chain_test.go: Test nil LLM, empty prompt
-- chains/retrieval_qa_test.go: Test nil retriever, nil LLM
-- vectorstores/dependency_retriever_test.go: Test nil store
-- vectorstores/definition_retriever_test.go: Test nil store
-```
-
-**Tasks:**
-- [x] Add tests for `NewLLMChain` with nil parameters
-- [x] Add tests for `NewRetrievalQA` with nil parameters
-- [x] Add tests for `NewDependencyRetriever` with nil store
-- [x] Add tests for `NewDefinitionRetriever` with nil store
-- [x] Add tests for `WithConcurrency` with invalid values
-
-### 4.2 Integration Tests with Docker
-
-**Priority:** High | **Effort:** Medium**
+**Priority:** High | **Effort:** Medium
 
 Add integration tests that run against real services.
 
@@ -760,7 +488,7 @@ func TestQdrantIntegration(t *testing.T) {
 - [ ] Add GitHub Actions workflow for integration tests
 - [ ] Document how to run integration tests
 
-### 4.3 Benchmark Tests
+### 3.3 Benchmark Tests
 
 **Priority:** Medium | **Effort:** Low**
 
@@ -801,9 +529,9 @@ func FuzzFilterBuilding(f *testing.F)
 
 ---
 
-## 5. Observability & Monitoring
+## 4. Observability & Monitoring
 
-### 5.1 Metrics Collection
+### 4.1 Metrics Collection
 
 **Priority:** High | **Effort:** Medium**
 
@@ -855,7 +583,7 @@ var (
 - [ ] Add metrics to embeddings
 - [ ] Document metrics exposure
 
-### 5.2 Structured Logging
+### 4.2 Structured Logging
 
 **Priority:** Medium | **Effort:** Low**
 
@@ -883,7 +611,7 @@ const (
 - [ ] Add request ID tracking
 - [ ] Document logging conventions
 
-### 5.3 Tracing Support
+### 4.3 Tracing Support
 
 **Priority:** Low | **Effort:** Medium**
 
@@ -913,9 +641,9 @@ func (s *Store) SimilaritySearch(ctx context.Context, query string, numDocuments
 
 ---
 
-## 6. Performance Optimizations
+## 5. Performance Optimizations
 
-### 6.1 Regex Pattern Pre-compilation
+### 5.1 Regex Pattern Pre-compilation
 
 **Priority:** High | **Effort:** Low**
 
@@ -934,7 +662,7 @@ Files affected:
 - [ ] Pre-compile regex in `parsers/text/chunker.go`
 - [ ] Add benchmarks to verify improvement
 
-### 6.2 Slice Pre-allocation
+### 5.2 Slice Pre-allocation
 
 **Priority:** Medium | **Effort:** Low**
 
@@ -952,7 +680,7 @@ Files affected:
 - [ ] Pre-allocate in `payloadToDocument()`
 - [ ] Review and fix other hot paths
 
-### 6.3 Binary Extensions Map Optimization
+### 5.3 Binary Extensions Map Optimization
 
 **Priority:** Medium | **Effort:** Low**
 
@@ -962,7 +690,7 @@ Move `binaryExts` map to package level in `documentloaders/git.go`.
 - [ ] Move `binaryExts` map to package-level variable
 - [ ] Benchmark improvement
 
-### 6.4 TypeScript Parser JavaScript Runtime
+### 5.4 TypeScript Parser JavaScript Runtime
 
 **Priority:** Low | **Effort:** Low**
 
@@ -972,7 +700,7 @@ Use `sync.Once` for JavaScript runtime initialization.
 - [ ] Add `sync.Once` for JS runtime in TypeScript parser
 - [ ] Add test for concurrent initialization
 
-### 6.5 Embedding Cache
+### 5.5 Embedding Cache
 
 **Priority:** Medium | **Effort:** Medium**
 
@@ -1004,9 +732,9 @@ type Cache interface {
 
 ---
 
-## 7. Developer Experience
+## 6. Developer Experience
 
-### 7.1 Builder Pattern for Complex Objects
+### 6.1 Builder Pattern for Complex Objects
 
 **Priority:** Medium | **Effort:** Medium**
 
@@ -1033,7 +761,7 @@ store := qdrant.NewStoreBuilder().
 - [ ] Add `ChainBuilder` for RAG chains
 - [ ] Document builder pattern usage
 
-### 7.2 Configuration from Environment
+### 6.2 Configuration from Environment
 
 **Priority:** Medium | **Effort:** Low**
 
@@ -1054,7 +782,7 @@ llm, err := ollama.NewFromEnv("OLLAMA_")
 - [ ] Add `NewFromEnv()` to Gemini
 - [ ] Document environment variables
 
-### 7.3 Example Applications
+### 6.3 Example Applications
 
 **Priority:** Medium | **Effort:** Low**
 
@@ -1079,7 +807,7 @@ examples/
 - [ ] Ensure all examples are runnable
 - [ ] Add README to each example
 
-### 7.4 Error Messages Improvement
+### 6.4 Error Messages Improvement
 
 **Priority:** Medium | **Effort:** Low**
 
@@ -1108,9 +836,9 @@ return nil, &FrameworkError{
 
 ---
 
-## 8. Documentation
+## 7. Documentation
 
-### 8.1 API Reference
+### 7.1 API Reference
 
 **Priority:** High | **Effort:** Ongoing**
 
@@ -1144,7 +872,7 @@ Packages needing documentation:
 - [ ] Complete godoc for LLM packages
 - [ ] Ensure pkg.go.dev renders correctly
 
-### 8.2 README Enhancement
+### 7.2 README Enhancement
 
 **Priority:** High | **Effort:** Low**
 
@@ -1169,7 +897,7 @@ Add:
 - [ ] Add error handling section
 - [ ] Add thread safety documentation
 
-### 8.3 Architecture Decision Records
+### 7.3 Architecture Decision Records
 
 **Priority:** Medium | **Effort:** Medium**
 
@@ -1191,7 +919,7 @@ docs/adr/
 - [ ] Write ADR for parser plugin system
 - [ ] Write ADR for hybrid search design
 
-### 8.4 Performance Guide
+### 7.4 Performance Guide
 
 **Priority:** Medium | **Effort:** Medium**
 
@@ -1214,9 +942,9 @@ docs/performance.md:
 
 ---
 
-## 9. Future Considerations
+## 8. Future Considerations
 
-### 9.1 Streaming RAG
+### 8.1 Streaming RAG
 
 **Priority:** Medium | **Effort:** Medium**
 
@@ -1233,7 +961,7 @@ func (c *RetrievalQA) CallStream(ctx context.Context, query string, callback fun
 - [ ] Add tests
 - [ ] Document streaming usage
 
-### 9.2 Multi-Vector Store Support
+### 8.2 Multi-Vector Store Support
 
 **Priority:** Low | **Effort:** High**
 
@@ -1255,7 +983,7 @@ func (m *MultiStore) SimilaritySearch(ctx context.Context, query string, numDocu
 - [ ] Add tests
 - [ ] Document usage
 
-### 9.3 Reranking Improvements
+### 8.3 Reranking Improvements
 
 **Priority:** Medium | **Effort:** Medium**
 
@@ -1274,7 +1002,7 @@ type HybridReranker struct { ... }         // Combine multiple rerankers
 - [ ] Add tests
 - [ ] Document reranking options
 
-### 9.4 Evaluation Framework
+### 8.4 Evaluation Framework
 
 **Priority:** Medium | **Effort:** High**
 
@@ -1300,7 +1028,7 @@ type EvaluationReport struct {
 - [ ] Add tests
 - [ ] Document evaluation process
 
-### 9.5 Vector Store Abstraction
+### 8.5 Vector Store Abstraction
 
 **Priority:** Low | **Effort:** High**
 
@@ -1321,11 +1049,11 @@ Potential additions:
 
 ---
 
-## 10. Advanced RAG Techniques for Code
+## 9. Advanced RAG Techniques for Code
 
 This section covers advanced techniques specifically designed for code understanding, code reviews, and code FAQ systems.
 
-### 10.1 Multi-Granularity Code Indexing
+### 9.1 Multi-Granularity Code Indexing
 
 **Priority:** High | **Effort:** Medium**
 
@@ -1370,7 +1098,7 @@ type CodeDocument struct {
 - [ ] Update search to use hierarchy
 - [ ] Add tests
 
-### 10.2 Call Graph and Dependency Graph Integration
+### 9.2 Call Graph and Dependency Graph Integration
 
 **Priority:** High | **Effort:** High**
 
@@ -1425,7 +1153,7 @@ func (g *CodeGraph) GetContextWindow(nodeID string, depth int) []*CodeNode
 - [ ] Integrate with vector search for hybrid retrieval
 - [ ] Add tests
 
-### 10.3 Code-Aware Reranking
+### 9.3 Code-Aware Reranking
 
 **Priority:** High | **Effort:** Medium**
 
@@ -1470,7 +1198,7 @@ func (r *CodeReranker) scoreGitRecency(doc CodeDocument) float32
 - [ ] Add language-specific boosting
 - [ ] Add tests
 
-### 10.4 Query Understanding for Code
+### 9.4 Query Understanding for Code
 
 **Priority:** Medium | **Effort:** Medium**
 
@@ -1527,7 +1255,7 @@ func (p *CodeQueryParser) Parse(ctx context.Context, query string) (*ParsedCodeQ
 - [ ] Integrate with retrieval pipeline
 - [ ] Add tests
 
-### 10.5 Code Context Expansion
+### 9.5 Code Context Expansion
 
 **Priority:** Medium | **Effort:** Medium**
 
@@ -1579,7 +1307,7 @@ type ExpandedContext struct {
 - [ ] Add token budget management
 - [ ] Add tests
 
-### 10.6 Self-Querying RAG for Code
+### 9.6 Self-Querying RAG for Code
 
 **Priority:** Medium | **Effort:** High**
 
@@ -1634,7 +1362,7 @@ func (r *SelfQueryingRetriever) Execute(ctx context.Context, plan *QueryPlan) ([
 - [ ] Implement result synthesis
 - [ ] Add tests
 
-### 10.7 Code Review Assistant
+### 9.7 Code Review Assistant
 
 **Priority:** High | **Effort:** High**
 
@@ -1700,7 +1428,7 @@ func (p *CodeReviewPipeline) generateSuggestions(ctx context.Context, comments [
 - [ ] Implement suggestion generation
 - [ ] Add tests with real PRs
 
-### 10.8 Semantic Code Search with Filters
+### 9.8 Semantic Code Search with Filters
 
 **Priority:** Medium | **Effort:** Low**
 
@@ -1749,7 +1477,7 @@ results, err := store.SemanticCodeSearch(ctx,
 - [ ] Implement git-based filters
 - [ ] Add tests
 
-### 10.9 Code FAQ System
+### 9.9 Code FAQ System
 
 **Priority:** High | **Effort:** Medium**
 
@@ -1812,7 +1540,7 @@ type FAQAnswer struct {
 - [ ] Implement learning from feedback
 - [ ] Add tests
 
-### 10.10 Incremental Indexing
+### 9.10 Incremental Indexing
 
 **Priority:** Medium | **Effort:** Medium**
 
@@ -1873,7 +1601,7 @@ type IndexStats struct {
 - [ ] Implement deletion handling
 - [ ] Add tests
 
-### 10.11 Code Embedding Strategies
+### 9.11 Code Embedding Strategies
 
 **Priority:** Medium | **Effort:** Medium**
 
@@ -1935,7 +1663,7 @@ type ContrastiveEmbedder struct {
 - [ ] Add embedding evaluation
 - [ ] Add tests
 
-### 10.12 Code Generation from Context
+### 9.12 Code Generation from Context
 
 **Priority:** Low | **Effort:** High**
 
@@ -1992,11 +1720,11 @@ func (g *CodeGenerator) gatherGenerationContext(ctx context.Context, query strin
 
 ---
 
-## 11. Code-Warden Specific Enhancements
+## 10. Code-Warden Specific Enhancements
 
 Features specifically designed for the Code-Warden GitHub review agent and RAG-based code assistant.
 
-### 11.1 Multi-Stage Retrieval Pipeline Support
+### 10.1 Multi-Stage Retrieval Pipeline Support
 
 **Priority:** High | **Effort:** Medium**
 
@@ -2042,7 +1770,7 @@ type MultiStageResult struct {
 - [ ] Add result fusion/merging strategies
 - [ ] Add tests
 
-### 11.2 PR Overlay System
+### 10.2 PR Overlay System
 
 **Priority:** High | **Effort:** High**
 
@@ -2100,7 +1828,7 @@ func (s *PROverlayStore) RefreshOverlay(ctx context.Context, prNumber int, opts 
 - [ ] Add concurrent access safety
 - [ ] Add tests
 
-### 11.3 Consensus Review Pipeline
+### 10.3 Consensus Review Pipeline
 
 **Priority:** High | **Effort:** Medium**
 
@@ -2151,7 +1879,7 @@ type HybridReducer struct{}          // Vote + LLM synthesis
 - [ ] Add parallel model execution
 - [ ] Add tests
 
-### 11.4 Smart Incremental Indexing
+### 10.4 Smart Incremental Indexing
 
 **Priority:** High | **Effort:** Medium**
 
@@ -2206,7 +1934,7 @@ type SyncResult struct {
 - [ ] Implement file hash tracking
 - [ ] Add tests with real git repos
 
-### 11.5 Token-Aware Context Packing
+### 10.5 Token-Aware Context Packing
 
 **Priority:** High | **Effort:** Medium**
 
@@ -2259,7 +1987,7 @@ func (p *TemplatePacker) PackForPrompt(ctx context.Context, docs []ScoredDocumen
 - [ ] Add token counting utilities
 - [ ] Add tests
 
-### 11.6 Contiguous Chunk Splicing
+### 10.6 Contiguous Chunk Splicing
 
 **Priority:** Medium | **Effort:** Medium**
 
@@ -2296,7 +2024,7 @@ func mergeChunks(doc1, doc2 schema.Document, overlap string) schema.Document
 - [ ] Handle multi-file chunks
 - [ ] Add tests
 
-### 11.7 Reverse HyDE (Synthetic Questions)
+### 10.7 Reverse HyDE (Synthetic Questions)
 
 **Priority:** Medium | **Effort:** Medium**
 
@@ -2342,7 +2070,7 @@ func (r *ReverseHyDERetriever) Retrieve(ctx context.Context, query string, numDo
 - [ ] Implement retrieval logic
 - [ ] Add tests
 
-### 11.8 GitHub Integration Helpers
+### 10.8 GitHub Integration Helpers
 
 **Priority:** Medium | **Effort:** Low**
 
@@ -2398,7 +2126,7 @@ func (c *GitHubClient) ResolveComment(ctx context.Context, owner, repo string, c
 - [ ] Implement GitHub API client
 - [ ] Add tests
 
-### 11.9 Hallucination Detection
+### 10.9 Hallucination Detection
 
 **Priority:** Low | **Effort:** Medium**
 
@@ -2436,7 +2164,7 @@ func (d *HallucinationDetector) verifyWithRetrieval(ctx context.Context, stateme
 - [ ] Add confidence scoring
 - [ ] Add tests
 
-### 11.10 Structured Output Parsing
+### 10.10 Structured Output Parsing
 
 **Priority:** High | **Effort:** Low**
 
@@ -2490,23 +2218,20 @@ func WithStrictValidation() ParseOption
 ## Quick Start Guide for Contributors
 
 ### High Priority, Low Effort (Start Here!)
-1. Add tests for error paths (#4.1)
-2. Pre-compile regex patterns (#6.1)
-3. Implement Qdrant Count API (#2.2)
-4. Implement Qdrant Scroll API (#2.1)
-5. Implement Ollama List Models (#3.1)
+1. Pre-compile regex patterns (#5.1)
+2. Implement Qdrant Count API (#2.2)
+3. Implement Qdrant Scroll API (#2.1)
 
 ### Medium Priority, Medium Effort
-6. Add metrics collection (#5.1)
-7. Implement Qdrant Groups API (#2.3)
-8. Add Ollama JSON Mode (#3.2)
-9. Create integration tests (#4.2)
+4. Add metrics collection (#4.1)
+5. Implement Qdrant Groups API (#2.3)
+6. Create integration tests (#3.1)
 
 ### Documentation Tasks (Always Welcome)
-10. Complete godoc for remaining packages (#8.1)
-11. Improve README (#8.2)
-12. Add more examples (#7.3)
+7. Complete godoc for remaining packages (#7.1)
+8. Improve README (#7.2)
+9. Add more examples (#6.3)
 
 ---
 
-*Last updated: 2026-02-23*
+*Last updated: 2026-02-25*
