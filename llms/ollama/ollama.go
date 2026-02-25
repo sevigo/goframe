@@ -2,6 +2,7 @@ package ollama
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"net/http"
@@ -59,9 +60,10 @@ type LLM struct {
 }
 
 var (
-	_ llms.Model          = (*LLM)(nil)
-	_ embeddings.Embedder = (*LLM)(nil)
-	_ llms.Tokenizer      = (*LLM)(nil)
+	_ llms.Model                     = (*LLM)(nil)
+	_ embeddings.Embedder            = (*LLM)(nil)
+	_ embeddings.EmbedderWithOptions = (*LLM)(nil)
+	_ llms.Tokenizer                 = (*LLM)(nil)
 )
 
 func New(opts ...Option) (*LLM, error) {
@@ -131,28 +133,29 @@ func (o *LLM) Call(ctx context.Context, prompt string, options ...llms.CallOptio
 	return llms.GenerateFromSinglePrompt(ctx, o, prompt, options...)
 }
 
-func (o *LLM) GenerateContent(
-	ctx context.Context,
-	messages []schema.MessageContent,
-	options ...llms.CallOption,
-) (*schema.ContentResponse, error) {
-	start := time.Now()
-
-	opts := llms.CallOptions{}
-	for _, opt := range options {
-		opt(&opts)
-	}
-	model := o.determineModel(opts)
-
+// buildChatMessages converts schema messages to API messages.
+func buildChatMessages(messages []schema.MessageContent) []api.Message {
 	chatMsgs := make([]api.Message, 0, len(messages))
 	for _, mc := range messages {
 		msg := api.Message{
 			Role:    typeToRole(mc.Role),
 			Content: mc.String(),
 		}
+		// Add images if present
+		images := mc.GetImages()
+		if len(images) > 0 {
+			msg.Images = make([]api.ImageData, 0, len(images))
+			for _, img := range images {
+				msg.Images = append(msg.Images, api.ImageData(img.Data))
+			}
+		}
 		chatMsgs = append(chatMsgs, msg)
 	}
+	return chatMsgs
+}
 
+// buildOllamaOptions converts CallOptions to Ollama options map.
+func buildOllamaOptions(opts llms.CallOptions) map[string]any {
 	ollamaOpts := map[string]any{}
 	if opts.Temperature > 0 {
 		ollamaOpts["temperature"] = float32(opts.Temperature)
@@ -169,64 +172,175 @@ func (o *LLM) GenerateContent(
 	if opts.TopK > 0 {
 		ollamaOpts["top_k"] = opts.TopK
 	}
+	if opts.MinP > 0 {
+		ollamaOpts["min_p"] = float32(opts.MinP)
+	}
 	if opts.Seed > 0 {
 		ollamaOpts["seed"] = opts.Seed
 	}
-
-	req := &api.ChatRequest{
-		Model:    model,
-		Messages: chatMsgs,
-		Options:  ollamaOpts,
-		Stream:   new(bool),
+	if opts.ContextLength > 0 {
+		ollamaOpts["num_ctx"] = opts.ContextLength
 	}
-	*req.Stream = opts.StreamingFunc != nil
+	return ollamaOpts
+}
 
-	var fullResponse strings.Builder
-	var finalResp api.ChatResponse
+// chatResponseHandler handles streaming chat responses.
+type chatResponseHandler struct {
+	fullResponse strings.Builder
+	thinking     strings.Builder
+	toolCalls    []llms.ToolCall
+	finalResp    api.ChatResponse
+	streamingFn  func(ctx context.Context, chunk []byte) error
+}
 
-	fn := func(response api.ChatResponse) error {
-		fullResponse.WriteString(response.Message.Content)
-		if opts.StreamingFunc != nil && response.Message.Content != "" {
-			if errStream := opts.StreamingFunc(ctx, []byte(response.Message.Content)); errStream != nil {
-				return fmt.Errorf("streaming function returned an error: %w", errStream)
-			}
-		}
-		if response.Done {
-			finalResp = response
-		}
-		return nil
+func (h *chatResponseHandler) handle(ctx context.Context, response api.ChatResponse) error {
+	h.fullResponse.WriteString(response.Message.Content)
+	if response.Message.Thinking != "" {
+		h.thinking.WriteString(response.Message.Thinking)
 	}
+	// Handle tool calls
+	if len(response.Message.ToolCalls) > 0 {
+		for _, tc := range response.Message.ToolCalls {
+			args := tc.Function.Arguments.ToMap()
+			h.toolCalls = append(h.toolCalls, llms.ToolCall{
+				Function: llms.FunctionCall{
+					Name:      tc.Function.Name,
+					Arguments: args,
+				},
+			})
+		}
+	}
+	if h.streamingFn != nil && response.Message.Content != "" {
+		if err := h.streamingFn(ctx, []byte(response.Message.Content)); err != nil {
+			return fmt.Errorf("streaming function returned an error: %w", err)
+		}
+	}
+	if response.Done {
+		h.finalResp = response
+	}
+	return nil
+}
 
+func (h *chatResponseHandler) reset() {
+	h.fullResponse.Reset()
+	h.thinking.Reset()
+	h.toolCalls = nil
+	h.finalResp = api.ChatResponse{}
+}
+
+func (o *LLM) GenerateContent(
+	ctx context.Context,
+	messages []schema.MessageContent,
+	options ...llms.CallOption,
+) (*schema.ContentResponse, error) {
+	start := time.Now()
+
+	opts := llms.CallOptions{}
+	for _, opt := range options {
+		opt(&opts)
+	}
+	model := o.determineModel(opts)
+
+	req := o.buildChatRequest(model, messages, opts)
+
+	handler := &chatResponseHandler{streamingFn: opts.StreamingFunc}
 	err := o.doWithRetry(ctx, func() error {
-		fullResponse.Reset()
-		finalResp = api.ChatResponse{}
-		return o.client.Chat(ctx, req, fn)
+		handler.reset()
+		return o.client.Chat(ctx, req, func(response api.ChatResponse) error {
+			return handler.handle(ctx, response)
+		})
 	})
 
 	duration := time.Since(start)
-
 	if err != nil {
 		o.logger.ErrorContext(ctx, "Ollama chat failed", "error", err, "duration", duration)
 		return nil, err
 	}
 
+	genInfo := o.buildGenerationInfo(handler, finalResp(handler), model, duration)
 	response := &schema.ContentResponse{
 		Choices: []*schema.ContentChoice{
-			{
-				Content: fullResponse.String(),
-				GenerationInfo: map[string]any{
-					"CompletionTokens": finalResp.EvalCount,
-					"PromptTokens":     finalResp.PromptEvalCount,
-					"TotalTokens":      finalResp.EvalCount + finalResp.PromptEvalCount,
-					"Duration":         duration,
-					"Model":            model,
-				},
-			},
+			{Content: handler.fullResponse.String(), GenerationInfo: genInfo},
 		},
 	}
 
 	o.logger.InfoContext(ctx, "Content generation completed", "duration", duration)
 	return response, nil
+}
+
+func finalResp(h *chatResponseHandler) api.ChatResponse {
+	return h.finalResp
+}
+
+// buildChatRequest creates a ChatRequest from the given parameters.
+func (o *LLM) buildChatRequest(model string, messages []schema.MessageContent, opts llms.CallOptions) *api.ChatRequest {
+	req := &api.ChatRequest{
+		Model:    model,
+		Messages: buildChatMessages(messages),
+		Options:  buildOllamaOptions(opts),
+		Stream:   new(bool),
+	}
+	*req.Stream = opts.StreamingFunc != nil
+
+	// Handle thinking/reasoning mode
+	o.applyThinkOption(req, opts)
+
+	// Handle keep_alive
+	if opts.KeepAlive != "" {
+		req.KeepAlive = &api.Duration{Duration: parseKeepAlive(opts.KeepAlive)}
+	}
+
+	// Handle structured output format
+	o.applyFormatOption(req, opts)
+
+	// Handle tools
+	if len(opts.Tools) > 0 {
+		req.Tools = convertToolsToAPI(opts.Tools)
+	}
+
+	return req
+}
+
+// applyThinkOption applies the thinking/reasoning option to the request.
+func (o *LLM) applyThinkOption(req *api.ChatRequest, opts llms.CallOptions) {
+	if opts.Think != nil {
+		req.Think = toThinkValue(opts.Think)
+	} else if o.options.thinking != nil && *o.options.thinking {
+		req.Think = &api.ThinkValue{Value: true}
+		if o.options.reasoningEffort != "" {
+			req.Think = &api.ThinkValue{Value: o.options.reasoningEffort}
+		}
+	}
+}
+
+// applyFormatOption applies the format option for structured outputs.
+func (o *LLM) applyFormatOption(req *api.ChatRequest, opts llms.CallOptions) {
+	if opts.JSONMode {
+		req.Format = json.RawMessage(`"json"`)
+	} else if opts.JSONSchema != nil {
+		schemaBytes, err := json.Marshal(opts.JSONSchema)
+		if err == nil {
+			req.Format = schemaBytes
+		}
+	}
+}
+
+// buildGenerationInfo creates the generation info map from the response.
+func (o *LLM) buildGenerationInfo(handler *chatResponseHandler, finalResp api.ChatResponse, model string, duration time.Duration) map[string]any {
+	genInfo := map[string]any{
+		"CompletionTokens": finalResp.EvalCount,
+		"PromptTokens":     finalResp.PromptEvalCount,
+		"TotalTokens":      finalResp.EvalCount + finalResp.PromptEvalCount,
+		"Duration":         duration,
+		"Model":            model,
+	}
+	if handler.thinking.Len() > 0 {
+		genInfo["Thinking"] = handler.thinking.String()
+	}
+	if len(handler.toolCalls) > 0 {
+		genInfo["ToolCalls"] = handler.toolCalls
+	}
+	return genInfo
 }
 
 func typeToRole(typ schema.ChatMessageType) string {
@@ -237,19 +351,150 @@ func typeToRole(typ schema.ChatMessageType) string {
 		return "assistant"
 	case schema.ChatMessageTypeHuman, schema.ChatMessageTypeGeneric:
 		return "user"
+	case schema.ChatMessageTypeTool:
+		return "tool"
 	default:
 		return "user"
 	}
 }
 
+// toThinkValue converts an any value to *api.ThinkValue.
+func toThinkValue(v any) *api.ThinkValue {
+	switch val := v.(type) {
+	case bool:
+		return &api.ThinkValue{Value: val}
+	case string:
+		return &api.ThinkValue{Value: val}
+	default:
+		return nil
+	}
+}
+
+// convertToolsToAPI converts llms.ToolDefinition to api.Tool definitions.
+func convertToolsToAPI(tools []llms.ToolDefinition) []api.Tool {
+	result := make([]api.Tool, 0, len(tools))
+	for _, t := range tools {
+		tool := api.Tool{
+			Type: t.Type,
+			Function: api.ToolFunction{
+				Name:        t.Function.Name,
+				Description: t.Function.Description,
+			},
+		}
+		// Convert parameters if provided
+		if t.Function.Parameters != nil {
+			if params, ok := t.Function.Parameters.(map[string]any); ok {
+				tool.Function.Parameters = convertToToolFunctionParameters(params)
+			}
+		}
+		result = append(result, tool)
+	}
+	return result
+}
+
+// convertToToolFunctionParameters converts a map to api.ToolFunctionParameters.
+func convertToToolFunctionParameters(params map[string]any) api.ToolFunctionParameters {
+	result := api.ToolFunctionParameters{
+		Required:   getStringSlice(params, "required"),
+		Properties: api.NewToolPropertiesMap(),
+	}
+	if t, ok := params["type"].(string); ok {
+		result.Type = t
+	}
+	if items, ok := params["items"]; ok {
+		result.Items = items
+	}
+	if props, ok := params["properties"].(map[string]any); ok {
+		for k, v := range props {
+			if prop, ok := v.(map[string]any); ok {
+				tp := convertToToolProperty(prop)
+				result.Properties.Set(k, tp)
+			}
+		}
+	}
+	return result
+}
+
+// convertToToolProperty converts a map to api.ToolProperty.
+func convertToToolProperty(m map[string]any) api.ToolProperty {
+	tp := api.ToolProperty{}
+	if t, ok := m["type"].(string); ok {
+		tp.Type = api.PropertyType([]string{t})
+	}
+	if d, ok := m["description"].(string); ok {
+		tp.Description = d
+	}
+	if items, ok := m["items"]; ok {
+		tp.Items = items
+	}
+	if enum, ok := m["enum"].([]any); ok {
+		tp.Enum = enum
+	}
+	if props, ok := m["properties"].(map[string]any); ok {
+		tp.Properties = api.NewToolPropertiesMap()
+		for k, v := range props {
+			if p, ok := v.(map[string]any); ok {
+				tp.Properties.Set(k, convertToToolProperty(p))
+			}
+		}
+	}
+	return tp
+}
+
+// getStringSlice extracts a []string from a map.
+func getStringSlice(m map[string]any, key string) []string {
+	if v, ok := m[key].([]string); ok {
+		return v
+	}
+	if v, ok := m[key].([]any); ok {
+		result := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	}
+	return nil
+}
+
+// parseKeepAlive parses a keep_alive duration string (e.g., "5m", "10m", "0").
+func parseKeepAlive(s string) time.Duration {
+	if s == "0" {
+		return 0
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 5 * time.Minute // default
+	}
+	return d
+}
+
 func (o *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error) {
+	return o.EmbedDocumentsWithOpts(ctx, texts, embeddings.EmbeddingOptions{Truncate: true})
+}
+
+func (o *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	return o.EmbedQueryWithOpts(ctx, text, embeddings.EmbeddingOptions{Truncate: true})
+}
+
+func (o *LLM) EmbedQueries(ctx context.Context, texts []string) ([][]float32, error) {
+	return o.EmbedDocumentsWithOpts(ctx, texts, embeddings.EmbeddingOptions{Truncate: true})
+}
+
+// EmbedDocumentsWithOpts generates embeddings with additional options.
+func (o *LLM) EmbedDocumentsWithOpts(ctx context.Context, texts []string, opts embeddings.EmbeddingOptions) ([][]float32, error) {
 	if len(texts) == 0 {
 		return [][]float32{}, nil
 	}
 
 	req := &api.EmbedRequest{
-		Model: o.options.model,
-		Input: texts,
+		Model:    o.options.model,
+		Input:    texts,
+		Truncate: &opts.Truncate,
+	}
+	if opts.Dimensions > 0 {
+		req.Dimensions = opts.Dimensions
 	}
 
 	var resp *api.EmbedResponse
@@ -265,10 +510,15 @@ func (o *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, 
 	return resp.Embeddings, nil
 }
 
-func (o *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+// EmbedQueryWithOpts generates an embedding with additional options.
+func (o *LLM) EmbedQueryWithOpts(ctx context.Context, text string, opts embeddings.EmbeddingOptions) ([]float32, error) {
 	req := &api.EmbedRequest{
-		Model: o.options.model,
-		Input: text,
+		Model:    o.options.model,
+		Input:    text,
+		Truncate: &opts.Truncate,
+	}
+	if opts.Dimensions > 0 {
+		req.Dimensions = opts.Dimensions
 	}
 
 	var resp *api.EmbedResponse
@@ -286,10 +536,6 @@ func (o *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	}
 
 	return resp.Embeddings[0], nil
-}
-
-func (o *LLM) EmbedQueries(ctx context.Context, texts []string) ([][]float32, error) {
-	return o.EmbedDocuments(ctx, texts)
 }
 
 func (o *LLM) GetModelDetails(ctx context.Context) (*schema.ModelDetails, error) {
@@ -395,6 +641,92 @@ func (o *LLM) HasModel(ctx context.Context, name string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// ListModels returns all locally available models.
+func (o *LLM) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	list, err := o.client.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	models := make([]ModelInfo, 0, len(list.Models))
+	for _, m := range list.Models {
+		models = append(models, ModelInfo{
+			Name:       m.Name,
+			Model:      m.Model,
+			ModifiedAt: m.ModifiedAt,
+			Size:       m.Size,
+			Digest:     m.Digest,
+		})
+	}
+	return models, nil
+}
+
+// RunningModel represents a model currently loaded in memory.
+type RunningModel struct {
+	Name          string
+	Model         string
+	Size          int64
+	SizeVRAM      int64
+	Digest        string
+	ExpiresAt     time.Time
+	ContextLength int
+}
+
+// ListRunningModels returns all models currently loaded in memory.
+func (o *LLM) ListRunningModels(ctx context.Context) ([]RunningModel, error) {
+	ps, err := o.client.ListRunning(ctx)
+	if err != nil {
+		return nil, err
+	}
+	models := make([]RunningModel, 0, len(ps.Models))
+	for _, m := range ps.Models {
+		models = append(models, RunningModel{
+			Name:          m.Name,
+			Model:         m.Model,
+			Size:          m.Size,
+			SizeVRAM:      m.SizeVRAM,
+			Digest:        m.Digest,
+			ExpiresAt:     m.ExpiresAt,
+			ContextLength: m.ContextLength,
+		})
+	}
+	return models, nil
+}
+
+// DeleteModel removes a model from local storage.
+func (o *LLM) DeleteModel(ctx context.Context, name string) error {
+	o.logger.Info("Deleting model", "model", name)
+	return o.client.Delete(ctx, &api.DeleteRequest{Name: name})
+}
+
+// CopyModel creates a copy of a model with a new name.
+func (o *LLM) CopyModel(ctx context.Context, source, destination string) error {
+	o.logger.Info("Copying model", "source", source, "destination", destination)
+	return o.client.Copy(ctx, &api.CopyRequest{Source: source, Destination: destination})
+}
+
+// ModelInfo represents information about a locally available model.
+type ModelInfo struct {
+	Name       string
+	Model      string
+	ModifiedAt time.Time
+	Size       int64
+	Digest     string
+}
+
+// VersionInfo contains Ollama server version information.
+type VersionInfo struct {
+	Version string
+}
+
+// GetVersion returns the Ollama server version.
+func (o *LLM) GetVersion(ctx context.Context) (*VersionInfo, error) {
+	version, err := o.client.Version(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &VersionInfo{Version: version}, nil
 }
 
 // retryableErrorPatterns contains error patterns that indicate a transient failure.

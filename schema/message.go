@@ -15,6 +15,8 @@ const (
 	ChatMessageTypeAI ChatMessageType = "ai"
 	// ChatMessageTypeGeneric represents a generic message type.
 	ChatMessageTypeGeneric ChatMessageType = "generic"
+	// ChatMessageTypeTool represents a tool result message.
+	ChatMessageTypeTool ChatMessageType = "tool"
 )
 
 // ContentPart represents a part of a message content.
@@ -37,6 +39,41 @@ func (tc TextContent) String() string {
 
 // isPart marks TextContent as implementing ContentPart.
 func (TextContent) isPart() {}
+
+// ImageContent represents image content in a message (base64-encoded).
+type ImageContent struct {
+	// Data is the base64-encoded image data.
+	Data string
+	// MimeType is the MIME type of the image (e.g., "image/png", "image/jpeg").
+	MimeType string
+}
+
+// String returns a placeholder for image content.
+func (ic ImageContent) String() string {
+	if ic.MimeType != "" {
+		return "[image:" + ic.MimeType + "]"
+	}
+	return "[image]"
+}
+
+// isPart marks ImageContent as implementing ContentPart.
+func (ImageContent) isPart() {}
+
+// ToolResultContent represents a tool execution result in a message.
+type ToolResultContent struct {
+	// ToolName is the name of the tool that was executed.
+	ToolName string
+	// Content is the result of the tool execution.
+	Content string
+}
+
+// String returns the tool result content.
+func (trc ToolResultContent) String() string {
+	return trc.Content
+}
+
+// isPart marks ToolResultContent as implementing ContentPart.
+func (ToolResultContent) isPart() {}
 
 // MessageContent represents a message in a conversation with a role and content parts.
 type MessageContent struct {
@@ -67,6 +104,39 @@ func NewHumanMessage(text string) MessageContent {
 // NewAIMessage creates a new AI/assistant message with the given text.
 func NewAIMessage(text string) MessageContent {
 	return NewTextMessage(ChatMessageTypeAI, text)
+}
+
+// NewToolResultMessage creates a tool result message with the given tool name and content.
+func NewToolResultMessage(toolName, content string) MessageContent {
+	return MessageContent{
+		Role: ChatMessageTypeTool,
+		Parts: []ContentPart{ToolResultContent{
+			ToolName: toolName,
+			Content:  content,
+		}},
+	}
+}
+
+// NewHumanMessageWithImage creates a human message with text and an image.
+func NewHumanMessageWithImage(text string, imageData, mimeType string) MessageContent {
+	return MessageContent{
+		Role: ChatMessageTypeHuman,
+		Parts: []ContentPart{
+			TextContent{Text: text},
+			ImageContent{Data: imageData, MimeType: mimeType},
+		},
+	}
+}
+
+// GetImages extracts all images from the message parts.
+func (mc MessageContent) GetImages() []ImageContent {
+	var images []ImageContent
+	for _, part := range mc.Parts {
+		if img, ok := part.(ImageContent); ok {
+			images = append(images, img)
+		}
+	}
+	return images
 }
 
 // String returns the concatenated text of all content parts.
