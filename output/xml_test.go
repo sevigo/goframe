@@ -57,6 +57,11 @@ func TestXMLParser_Parse(t *testing.T) {
 			input:   "<other><name>Grace</name></other>",
 			wantErr: true,
 		},
+		{
+			name: "invalid xml (no root tag)",
+			input: `<comment>this is a comment with "1 < 2"</comment>`,
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

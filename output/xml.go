@@ -10,10 +10,18 @@ import (
 	"strings"
 )
 
-// tokenArtifactRegex safely fixes common LLM spacing artifacts in closing tags (e.g., "</ review>").
-var tokenArtifactRegex = regexp.MustCompile(`</\s+([a-zA-Z])`)
+var (
+	// strayLtRegex matches '<' followed by a character that is NOT a valid tag start.
+	// Valid tag starts: letters, _, /, !, or ? (for processing instructions like <?xml)
+	strayLtRegex = regexp.MustCompile(`(<)([^a-zA-Z_/!?])`)
 
-// XMLParser implements schema.OutputParser[T] for any XML-tagged LLM output.
+	// entityRegex matches existing XML entities to avoid double-escaping.
+	entityRegex = regexp.MustCompile(`&(?:amp|lt|gt|quot|apos|#\d+|#x[a-fA-F0-9]+);`)
+
+	// tokenArtifactRegex safely fixes common LLM spacing artifacts in closing tags
+	tokenArtifactRegex = regexp.MustCompile(`</\s+([a-zA-Z])`)
+)
+
 type XMLParser[T any] struct {
 	RootTag string
 }
@@ -25,27 +33,42 @@ func NewXMLParser[T any](rootTag string) *XMLParser[T] {
 func (p *XMLParser[T]) Parse(ctx context.Context, text string) (T, error) {
 	var result T
 
-	// 1. Basic Cleaning
+	// basic cleaning
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 
-	// Fix common LLM tokenization artifacts safely using regex
+	// fix common LLM tokenization artifacts safely
 	text = tokenArtifactRegex.ReplaceAllString(text, "</$1")
 
-	// 2. Strip Markdown Fences (Memory Safe & Preamble Safe)
-	text = stripMarkdownFence(text)
+	// strip markdown fences (memory safe & preamble safe)
+	// only strip if the fence appears BEFORE the root tag.
+	// this ensures we strip wrapping fences, but not fences inside content strings.
+	startFenceIdx := strings.Index(text, "```")
 
-	// 3. Truncation Recovery (Case-Insensitive Best Effort)
-	lowerText := strings.ToLower(text)
-	lowerRoot := strings.ToLower(p.RootTag)
-	openTag := "<" + lowerRoot + ">"
-	closeTag := "</" + lowerRoot + ">"
+	// look for the specific root tag to be safer against preambles containing math (x < y)
+	// We use EqualFold-style logic by lowercase comparison for the check
+	rootTagLower := strings.ToLower(p.RootTag)
+	textLower := strings.ToLower(text)
+	rootTagIdx := strings.Index(textLower, "<"+rootTagLower)
 
-	// If we find the open tag but lack the close tag, append it
-	if strings.Contains(lowerText, openTag) && !strings.Contains(lowerText, closeTag) {
+	// If we found a fence, and (we didn't find a root tag OR the fence is before the root tag)
+	if startFenceIdx != -1 && (rootTagIdx == -1 || startFenceIdx < rootTagIdx) {
+		text = stripMarkdownFence(text)
+	}
+
+	// LLM-specific XML sanitization
+	// fix unescaped characters like "if a < b" -> "if a &lt; b"
+	text = sanitizeLLMXML(text)
+
+	// truncation recovery
+	// Re-calculate lowercase text after sanitization changes
+	textLower = strings.ToLower(text)
+	openTag := "<" + rootTagLower + ">"
+	closeTag := "</" + rootTagLower + ">"
+
+	if strings.Contains(textLower, openTag) && !strings.Contains(textLower, closeTag) {
 		text += "</" + p.RootTag + ">"
 	}
 
-	// 4. Decoding
 	decoder := xml.NewDecoder(strings.NewReader(text))
 	decoder.Strict = false
 	decoder.AutoClose = xml.HTMLAutoClose
@@ -64,11 +87,10 @@ func (p *XMLParser[T]) Parse(ctx context.Context, text string) (T, error) {
 		}
 
 		if se, ok := t.(xml.StartElement); ok {
-			// XML standard is case-sensitive, but LLMs aren't.
 			if strings.EqualFold(se.Name.Local, p.RootTag) {
 				err := decoder.DecodeElement(&result, &se)
 				if err != nil {
-					// Return partial result alongside the error (crucial for truncated LLM responses)
+					// Return partial result on truncation/error
 					return result, fmt.Errorf("xml unmarshal error (possible truncation): %w", err)
 				}
 				return result, nil
@@ -79,41 +101,44 @@ func (p *XMLParser[T]) Parse(ctx context.Context, text string) (T, error) {
 	return result, fmt.Errorf("root XML tag '%s' not found in LLM output", p.RootTag)
 }
 
+// sanitizeLLMXML fixes common unescaped characters in LLM-generated XML.
+func sanitizeLLMXML(text string) string {
+	// fix stray '<' (not followed by a valid tag start character)
+	text = strayLtRegex.ReplaceAllString(text, "&lt;$2")
+
+	// fix stray ampersands while preserving existing entities.
+	text = strings.ReplaceAll(text, "&", "&amp;")
+	text = entityRegex.ReplaceAllStringFunc(text, func(entity string) string {
+		// "Un-escape" valid entities that got double-escaped
+		// e.g. "&amp;lt;" -> "&lt;"
+		return strings.Replace(entity, "&amp;", "&", 1)
+	})
+
+	return text
+}
+
 // stripMarkdownFence extracts content from markdown fences without allocating a slice of lines.
-// It is immune to LLM conversational preambles.
 func stripMarkdownFence(s string) string {
 	s = strings.TrimSpace(s)
-
-	// Find the FIRST markdown fence (ignoring preamble text before it)
-	startIdx := strings.Index(s, "```")
-	if startIdx == -1 {
+	if !strings.HasPrefix(s, "```") {
 		return s
 	}
 
-	// Find the end of the fence header line (e.g., after ```xml)
-	newlineIdx := strings.Index(s[startIdx:], "\n")
+	newlineIdx := strings.Index(s, "\n")
 	if newlineIdx == -1 {
-		// It's a one-liner like ```xml<root/>```
-		// Check if it ends with ```
 		if strings.HasSuffix(s, "```") {
-			return strings.TrimSpace(s[startIdx+3 : len(s)-3])
+			return strings.TrimSpace(s[3 : len(s)-3])
 		}
-		// Unclosed one-liner
-		return strings.TrimSpace(s[startIdx+3:])
+		return strings.TrimSpace(s[3:])
 	}
 
-	// Content starts after the newline following the opening backticks
-	contentStart := startIdx + newlineIdx + 1
-
-	// Find the NEXT closing fence in the remainder of the string
+	contentStart := newlineIdx + 1
 	remainder := s[contentStart:]
 	closingFence := strings.Index(remainder, "```")
 
 	if closingFence == -1 {
-		// Unclosed fence, return everything after the header
 		return strings.TrimSpace(remainder)
 	}
 
-	// Closed fence, return content strictly between the fences
 	return strings.TrimSpace(remainder[:closingFence])
 }
