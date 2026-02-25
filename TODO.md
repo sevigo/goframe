@@ -15,7 +15,7 @@ The following items are particularly valuable for the Code-Warden project:
 | §11.2 | **PR Overlay System** | Core feature - PR changes without corrupting main index |
 | §11.4 | **Smart Incremental Indexing** | Performance - git diff tracking with PostgreSQL |
 | §11.5 | **Token-Aware Context Packing** | "Zero-Hallucination" goal - strict token budgets |
-| §11.10 | **Structured Output Parsing** | JSON/XML parsing for review comments |
+| §11.10 | **Structured Output Parsing** | JSON/XML parsing for review comments (✅ Core Parsers Implemented) |
 | §2.2 | **Count API** | Progress tracking during indexing |
 | §2.3 | **Groups API** | Group results by file (avoid over-representation) |
 
@@ -492,9 +492,9 @@ info, err := llm.ShowModel(ctx, "llama3:70b")
 - Display model capabilities
 
 **Tasks:**
-- [ ] Implement `ListModels()` using `GET /api/tags`
-- [ ] Implement `ShowModel()` using `GET /api/show`
-- [ ] Implement `DeleteModel()` using `DELETE /api/delete`
+- [x] Implement `ListModels()` using `GET /api/tags`
+- [x] Implement `ShowModel()` using `GET /api/show`
+- [x] Implement `DeleteModel()` using `DELETE /api/delete`
 - [ ] Add tests with mock server
 - [ ] Document model management
 
@@ -624,7 +624,7 @@ running, err := llm.ListRunningModels(ctx)
 - Monitor system resources
 
 **Tasks:**
-- [ ] Implement `ListRunningModels()` using `GET /api/ps`
+- [x] Implement `ListRunningModels()` using `GET /api/ps`
 - [ ] Add tests
 - [ ] Document running model management
 
