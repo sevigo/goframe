@@ -15,7 +15,7 @@ The following items are particularly valuable for the Code-Warden project:
 | §11.2 | **PR Overlay System** | Core feature - PR changes without corrupting main index |
 | §11.4 | **Smart Incremental Indexing** | Performance - git diff tracking with PostgreSQL |
 | §11.5 | **Token-Aware Context Packing** | "Zero-Hallucination" goal - strict token budgets |
-| §11.10 | **Structured Output Parsing** | JSON/XML parsing for review comments |
+| §11.10 | **Structured Output Parsing** | JSON/XML parsing for review comments (✅ Core Parsers Implemented) |
 | §2.2 | **Count API** | Progress tracking during indexing |
 | §2.3 | **Groups API** | Group results by file (avoid over-representation) |
 
@@ -51,7 +51,7 @@ The following items are particularly valuable for the Code-Warden project:
 4. [Testing & Quality](#4-testing--quality)
 5. [Observability & Monitoring](#5-observability--monitoring)
 6. [Performance Optimizations](#6-performance-optimizations)
-7. [Developer Experience](#7-developer-experience)
+7.[Developer Experience](#7-developer-experience)
 8. [Documentation](#8-documentation)
 9. [Future Considerations](#9-future-considerations)
 
@@ -81,7 +81,7 @@ type Closer interface {
 **Tasks:**
 - [ ] Add `Close()` to `ollama.LLM` - cleanup HTTP connections
 - [ ] Add `Close()` to `gemini.LLM` - cleanup gRPC connection
-- [ ] Add `Close()` to `fastapi.Embedder` - cleanup HTTP client
+-[ ] Add `Close()` to `fastapi.Embedder` - cleanup HTTP client
 - [ ] Document lifecycle management in README
 
 ### 1.2 Context Timeout Configuration
@@ -211,7 +211,7 @@ Create mock implementations for easier testing.
 - [ ] Add `MockReranker` with configurable scores
 - [ ] Add `MockParser` for testing chunking
 - [ ] Add `MockTokenizer` for testing token counting
-- [ ] Create test utilities package `testing/testutil`
+-[ ] Create test utilities package `testing/testutil`
 
 ---
 
@@ -227,7 +227,7 @@ Enable pagination through all points in a collection.
 // Proposed API
 type ScrollResult struct {
     Points   []schema.Document
-    NextPage []byte // Opaque cursor for next page
+    NextPage[]byte // Opaque cursor for next page
 }
 
 func (s *Store) Scroll(ctx context.Context, opts ...Option) (*ScrollResult, error)
@@ -294,7 +294,7 @@ Group search results by a metadata field.
 // Proposed API
 type GroupedResult struct {
     GroupKey string              // e.g., "main.go"
-    Hits     []schema.Document   // Documents in this group
+    Hits[]schema.Document   // Documents in this group
     Score    float32             // Best score in group
 }
 
@@ -328,11 +328,11 @@ Retrieve documents by their ID directly.
 ```go
 // Proposed API
 func (s *Store) GetByID(ctx context.Context, id string, opts ...Option) (*schema.Document, error)
-func (s *Store) GetByIDs(ctx context.Context, ids []string, opts ...Option) ([]schema.Document, error)
+func (s *Store) GetByIDs(ctx context.Context, ids[]string, opts ...Option) ([]schema.Document, error)
 
 // Usage
 doc, err := store.GetByID(ctx, "doc-uuid-123")
-docs, err := store.GetByIDs(ctx, []string{"id1", "id2", "id3"})
+docs, err := store.GetByIDs(ctx,[]string{"id1", "id2", "id3"})
 ```
 
 **Use Cases:**
@@ -342,7 +342,7 @@ docs, err := store.GetByIDs(ctx, []string{"id1", "id2", "id3"})
 
 **Tasks:**
 - [ ] Implement `GetByID()` method
-- [ ] Implement `GetByIDs()` batch method
+-[ ] Implement `GetByIDs()` batch method
 - [ ] Add tests
 - [ ] Document usage
 
@@ -358,12 +358,10 @@ func (s *Store) Recommend(ctx context.Context, positiveIDs []string, negativeIDs
 
 // Usage
 // "More like this document"
-similar, err := store.Recommend(ctx, []string{"doc-123"}, nil, 10)
+similar, err := store.Recommend(ctx,[]string{"doc-123"}, nil, 10)
 
 // "More like this but NOT like that"
-refined, err := store.Recommend(ctx,
-    []string{"good-doc-1", "good-doc-2"},  // Positive examples
-    []string{"bad-doc-1"},                  // Negative examples
+refined, err := store.Recommend(ctx,[]string{"good-doc-1", "good-doc-2"},  // Positive examples[]string{"bad-doc-1"},                  // Negative examples
     10,
 )
 ```
@@ -480,7 +478,7 @@ func (l *LLM) DeleteModel(ctx context.Context, name string) error
 
 // Usage
 models, err := llm.ListModels(ctx)
-// [{Name: "llama3:70b", Size: 42GB, Family: "llama", ...}]
+//[{Name: "llama3:70b", Size: 42GB, Family: "llama", ...}]
 
 info, err := llm.ShowModel(ctx, "llama3:70b")
 // {Family: "llama", Parameters: "70B", Quantization: "Q4_0", ...}
@@ -511,7 +509,7 @@ func WithJSONMode(enabled bool) CallOption
 // Usage
 var result struct {
     Summary string   `json:"summary"`
-    Issues  []string `json:"issues"`
+    Issues[]string `json:"issues"`
 }
 resp, err := llm.Call(ctx, prompt, llms.WithJSONMode(true))
 json.Unmarshal([]byte(resp), &result)
@@ -525,7 +523,7 @@ json.Unmarshal([]byte(resp), &result)
 **Tasks:**
 - [ ] Add `WithJSONMode()` option
 - [ ] Add `format: "json"` to request body
-- [ ] Add tests
+-[ ] Add tests
 - [ ] Document JSON mode usage
 
 ### 3.3 Vision/Multimodal Support
@@ -537,16 +535,16 @@ Support image inputs for vision models.
 ```go
 // Proposed schema additions
 type ImageContent struct {
-    Data        []byte // Raw image bytes
+    Data[]byte // Raw image bytes
     URL         string // Or URL to image
     MediaType   string // "image/jpeg", "image/png", etc.
 }
 
 // Usage
-resp, err := llm.GenerateContent(ctx, []schema.MessageContent{
+resp, err := llm.GenerateContent(ctx,[]schema.MessageContent{
     {
         Role: schema.ChatMessageTypeHuman,
-        Parts: []schema.ContentPart{
+        Parts:[]schema.ContentPart{
             schema.ImageContent{Data: imageData, MediaType: "image/png"},
             schema.TextContent{Text: "Explain this architecture diagram"},
         },
@@ -615,7 +613,7 @@ func (l *LLM) ListRunningModels(ctx context.Context) ([]RunningModel, error)
 
 // Usage
 running, err := llm.ListRunningModels(ctx)
-// [{Name: "llama3:70b", Size: 42GB, ExpiresAt: ...}]
+//[{Name: "llama3:70b", Size: 42GB, ExpiresAt: ...}]
 ```
 
 **Use Cases:**
@@ -647,11 +645,11 @@ type FunctionSpec struct {
     Parameters  map[string]any         `json:"parameters"`
 }
 
-func WithTools(tools []Tool) CallOption
+func WithTools(tools[]Tool) CallOption
 func WithToolChoice(choice string) CallOption // "auto", "none", or specific tool
 
 // Usage
-tools := []Tool{{
+tools :=[]Tool{{
     Type: "function",
     Function: FunctionSpec{
         Name:        "search_code",
@@ -816,34 +814,34 @@ var (
     embeddingLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{
         Name: "goframe_embedding_latency_seconds",
         Help: "Embedding generation latency",
-    }, []string{"model"})
+    },[]string{"model"})
 
     searchLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{
         Name: "goframe_search_latency_seconds",
         Help: "Vector search latency",
-    }, []string{"collection"})
+    },[]string{"collection"})
 
     llmLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{
         Name: "goframe_llm_latency_seconds",
         Help: "LLM generation latency",
-    }, []string{"model", "streaming"})
+    },[]string{"model", "streaming"})
 
     // Counters
     documentsIndexed = promauto.NewCounterVec(prometheus.CounterOpts{
         Name: "goframe_documents_indexed_total",
         Help: "Total documents indexed",
-    }, []string{"collection"})
+    },[]string{"collection"})
 
     searchRequests = promauto.NewCounterVec(prometheus.CounterOpts{
         Name: "goframe_search_requests_total",
         Help: "Total search requests",
-    }, []string{"collection"})
+    },[]string{"collection"})
 
     // Error counters
     errors = promauto.NewCounterVec(prometheus.CounterOpts{
         Name: "goframe_errors_total",
         Help: "Total errors",
-    }, []string{"component", "operation"})
+    },[]string{"component", "operation"})
 )
 ```
 
@@ -990,7 +988,7 @@ func NewCachedEmbedder(embedder Embedder, cache Cache) *CachedEmbedder
 // Cache interface
 type Cache interface {
     Get(ctx context.Context, key string) ([]float32, bool)
-    Set(ctx context.Context, key string, value []float32, ttl time.Duration)
+    Set(ctx context.Context, key string, value[]float32, ttl time.Duration)
 }
 ```
 
@@ -1073,9 +1071,9 @@ examples/
 ```
 
 **Tasks:**
-- [ ] Create `examples/basic-rag/`
+-[ ] Create `examples/basic-rag/`
 - [ ] Create `examples/agents/`
-- [ ] Create `examples/production/`
+-[ ] Create `examples/production/`
 - [ ] Ensure all examples are runnable
 - [ ] Add README to each example
 
@@ -1228,7 +1226,7 @@ func (c *RetrievalQA) CallStream(ctx context.Context, query string, callback fun
 ```
 
 **Tasks:**
-- [ ] Implement streaming in RetrievalQA
+-[ ] Implement streaming in RetrievalQA
 - [ ] Implement streaming in LLMChain
 - [ ] Add tests
 - [ ] Document streaming usage
@@ -1242,7 +1240,7 @@ Support multiple vector stores simultaneously.
 ```go
 // Proposed API
 type MultiStore struct {
-    stores []VectorStore
+    stores[]VectorStore
     strategy RoutingStrategy
 }
 
@@ -1284,7 +1282,7 @@ Built-in RAG evaluation.
 // Proposed API
 type RAGEvaluator struct { ... }
 
-func (e *RAGEvaluator) Evaluate(ctx context.Context, testCases []TestCase) EvaluationReport
+func (e *RAGEvaluator) Evaluate(ctx context.Context, testCases[]TestCase) EvaluationReport
 
 type EvaluationReport struct {
     RetrievalMetrics  RetrievalMetrics  // Precision, Recall, MRR
@@ -1348,12 +1346,12 @@ type CodeDocument struct {
     Content         string
     Granularity     GranularityLevel // function, class, file, package
     ParentID        string            // ID of containing entity
-    ChildrenIDs     []string          // IDs of contained entities
+    ChildrenIDs[]string          // IDs of contained entities
     Dependencies    []string          // Import dependencies
-    CallGraph       []string          // Function calls
+    CallGraph[]string          // Function calls
     Signature       string            // Function signature
     DocComment      string            // Documentation
-    CodeEmbedding   []float32         // Dense embedding
+    CodeEmbedding[]float32         // Dense embedding
     SparseVector    *SparseVector     // Sparse embedding (keywords)
 }
 ```
@@ -1380,7 +1378,7 @@ Build and query code relationship graphs.
 // Proposed API
 type CodeGraph struct {
     nodes map[string]*CodeNode
-    edges []CodeEdge
+    edges[]CodeEdge
 }
 
 type CodeNode struct {
@@ -1390,7 +1388,7 @@ type CodeNode struct {
     File         string
     StartLine    int
     EndLine      int
-    Embedding    []float32
+    Embedding[]float32
 }
 
 type CodeEdge struct {
@@ -1401,13 +1399,13 @@ type CodeEdge struct {
 }
 
 // Graph queries
-func (g *CodeGraph) GetCallers(functionID string) []*CodeNode
+func (g *CodeGraph) GetCallers(functionID string)[]*CodeNode
 func (g *CodeGraph) GetCallees(functionID string) []*CodeNode
-func (g *CodeGraph) GetDependencies(fileID string) []*CodeNode
-func (g *CodeGraph) GetDependents(fileID string) []*CodeNode
-func (g *CodeGraph) GetImplementations(interfaceID string) []*CodeNode
-func (g *CodeGraph) FindPath(from, to string) []*CodeEdge
-func (g *CodeGraph) GetContextWindow(nodeID string, depth int) []*CodeNode
+func (g *CodeGraph) GetDependencies(fileID string)[]*CodeNode
+func (g *CodeGraph) GetDependents(fileID string)[]*CodeNode
+func (g *CodeGraph) GetImplementations(interfaceID string)[]*CodeNode
+func (g *CodeGraph) FindPath(from, to string)[]*CodeEdge
+func (g *CodeGraph) GetContextWindow(nodeID string, depth int)[]*CodeNode
 ```
 
 **Use Cases:**
@@ -1422,7 +1420,7 @@ func (g *CodeGraph) GetContextWindow(nodeID string, depth int) []*CodeNode
 - [ ] Implement dependency graph extraction
 - [ ] Add graph storage layer
 - [ ] Implement graph queries
-- [ ] Integrate with vector search for hybrid retrieval
+-[ ] Integrate with vector search for hybrid retrieval
 - [ ] Add tests
 
 ### 10.3 Code-Aware Reranking
@@ -1485,11 +1483,11 @@ type CodeQueryParser struct {
 type ParsedCodeQuery struct {
     OriginalQuery     string
     QueryType         QueryType      // definition, usage, example, explanation
-    Entities          []CodeEntity   // Mentioned functions, classes, packages
-    Languages         []string       // Mentioned or inferred languages
+    Entities[]CodeEntity   // Mentioned functions, classes, packages
+    Languages[]string       // Mentioned or inferred languages
     Intent            QueryIntent    // find, understand, fix, improve
-    Constraints       []Constraint   // "in Go", "in tests", "recent"
-    ExpandedQueries   []string       // Query expansions for better recall
+    Constraints[]Constraint   // "in Go", "in tests", "recent"
+    ExpandedQueries[]string       // Query expansions for better recall
 }
 
 type CodeEntity struct {
@@ -1521,7 +1519,7 @@ func (p *CodeQueryParser) Parse(ctx context.Context, query string) (*ParsedCodeQ
 
 **Tasks:**
 - [ ] Design query parsing schema
-- [ ] Implement entity extraction
+-[ ] Implement entity extraction
 - [ ] Implement intent classification
 - [ ] Add query expansion
 - [ ] Integrate with retrieval pipeline
@@ -1557,10 +1555,10 @@ func (e *ContextExpander) Expand(ctx context.Context, doc CodeDocument, config E
 type ExpandedContext struct {
     Primary         string     // Original code
     Imports         string     // Import statements
-    Definitions     []string   // Referenced definitions
+    Definitions[]string   // Referenced definitions
     Context         string     // Surrounding context
     Tests           []string   // Related tests
-    RelatedFiles    []string   // Related files
+    RelatedFiles[]string   // Related files
     TotalTokens     int        // Total token count
 }
 ```
@@ -1595,7 +1593,7 @@ type SelfQueryingRetriever struct {
 
 type QueryPlan struct {
     OriginalQuery    string
-    SubQueries       []SubQuery
+    SubQueries[]SubQuery
     SynthesisPlan    SynthesisPlan
 }
 
@@ -1651,10 +1649,10 @@ type CodeReviewPipeline struct {
 type ReviewContext struct {
     PR              PullRequest
     ChangedFiles    []ChangedFile
-    HistoricalPRs   []PullRequest      // Similar past PRs
+    HistoricalPRs[]PullRequest      // Similar past PRs
     RelatedCode     []CodeDocument     // Related code in codebase
-    AuthorHistory   []Commit           // Author's past changes
-    BlameInfo       []BlameLine        // Git blame for context
+    AuthorHistory[]Commit           // Author's past changes
+    BlameInfo[]BlameLine        // Git blame for context
 }
 
 type ReviewComment struct {
@@ -1665,14 +1663,14 @@ type ReviewComment struct {
     Message       string
     Suggestion    string      // Code suggestion
     Confidence    float32
-    References    []string    // Supporting references
+    References[]string    // Supporting references
 }
 
 type ReviewResult struct {
     Summary       string
-    Comments      []ReviewComment
+    Comments[]ReviewComment
     OverallScore  float32
-    Checklist     []ChecklistItem
+    Checklist[]ChecklistItem
 }
 
 func (p *CodeReviewPipeline) Review(ctx context.Context, pr PullRequest) (*ReviewResult, error)
@@ -1681,7 +1679,7 @@ func (p *CodeReviewPipeline) Review(ctx context.Context, pr PullRequest) (*Revie
 func (p *CodeReviewPipeline) gatherContext(ctx context.Context, pr PullRequest) (*ReviewContext, error)
 func (p *CodeReviewPipeline) detectIssues(ctx context.Context, diff string, context *ReviewContext) ([]ReviewComment, error)
 func (p *CodeReviewPipeline) findSimilarPRs(ctx context.Context, pr PullRequest) ([]PullRequest, error)
-func (p *CodeReviewPipeline) generateSuggestions(ctx context.Context, comments []ReviewComment) error
+func (p *CodeReviewPipeline) generateSuggestions(ctx context.Context, comments[]ReviewComment) error
 ```
 
 **Use Cases:**
@@ -1709,16 +1707,16 @@ Enhanced search with semantic code filters.
 ```go
 // Proposed API
 type SemanticCodeFilter struct {
-    Languages       []string   // Go, TypeScript, Python
+    Languages[]string   // Go, TypeScript, Python
     FilePatterns    []string   // Glob patterns
-    Authors         []string   // Git authors
+    Authors[]string   // Git authors
     DateRange       DateRange  // Commit date range
-    CodeTypes       []string   // function, class, interface, test
-    Visibility      []string   // public, private
+    CodeTypes[]string   // function, class, interface, test
+    Visibility[]string   // public, private
     MinComplexity   int        // Cyclomatic complexity
     HasTests        *bool      // Has associated tests
     HasComments     *bool      // Has doc comments
-    ModifiedIn      []string   // Branch names
+    ModifiedIn[]string   // Branch names
 }
 
 func (s *Store) SemanticCodeSearch(ctx context.Context, query string, filters SemanticCodeFilter, numResults int) ([]CodeDocument, error)
@@ -1727,9 +1725,9 @@ func (s *Store) SemanticCodeSearch(ctx context.Context, query string, filters Se
 results, err := store.SemanticCodeSearch(ctx,
     "error handling pattern",
     SemanticCodeFilter{
-        Languages:   []string{"go"},
+        Languages:[]string{"go"},
         CodeTypes:   []string{"function"},
-        Visibility:  []string{"public"},
+        Visibility:[]string{"public"},
         HasComments: boolPtr(true),
     },
     10,
@@ -1768,7 +1766,7 @@ type FAQEntry struct {
     Question        string
     Answer          string
     CodeReferences  []CodeReference
-    Tags            []string
+    Tags[]string
     Confidence      float32
     Source          string      // "user", "generated", "curated"
     LastUpdated     time.Time
@@ -1785,14 +1783,14 @@ type CodeReference struct {
 }
 
 func (f *CodeFAQSystem) Ask(ctx context.Context, question string) (*FAQAnswer, error)
-func (f *CodeFAQSystem) Learn(ctx context.Context, question, answer string, refs []CodeReference) error
+func (f *CodeFAQSystem) Learn(ctx context.Context, question, answer string, refs[]CodeReference) error
 func (f *CodeFAQSystem) GenerateFAQs(ctx context.Context, codebase []CodeDocument) ([]FAQEntry, error)
 func (f *CodeFAQSystem) FindSimilarFAQs(ctx context.Context, question string) ([]FAQEntry, error)
 
 type FAQAnswer struct {
     Answer          string
     CodeReferences  []CodeReference
-    RelatedFAQs     []FAQEntry
+    RelatedFAQs[]FAQEntry
     Confidence      float32
     WasFromCache    bool
 }
@@ -1837,20 +1835,20 @@ type FileState struct {
     Path         string
     Hash         string    // Content hash
     LastModified time.Time
-    ChunkIDs     []string  // Stored chunk IDs
+    ChunkIDs[]string  // Stored chunk IDs
 }
 
 type IndexDiff struct {
     Added    []string
     Modified []string
-    Deleted  []string
+    Deleted[]string
 }
 
 func (i *IncrementalIndexer) Sync(ctx context.Context, repoPath string) (*IndexStats, error)
 func (i *IncrementalIndexer) GetDiff(ctx context.Context, repoPath string) (*IndexDiff, error)
 func (i *IncrementalIndexer) IndexCommit(ctx context.Context, commitHash string) error
-func (i *IncrementalIndexer) IndexFiles(ctx context.Context, files []string) error
-func (i *IncrementalIndexer) RemoveFiles(ctx context.Context, files []string) error
+func (i *IncrementalIndexer) IndexFiles(ctx context.Context, files[]string) error
+func (i *IncrementalIndexer) RemoveFiles(ctx context.Context, files[]string) error
 
 type IndexStats struct {
     FilesProcessed   int
@@ -1883,14 +1881,14 @@ Multiple embedding strategies optimized for code.
 // Proposed API
 type CodeEmbeddingStrategy interface {
     Embed(ctx context.Context, code CodeDocument) (*EmbeddingResult, error)
-    EmbedBatch(ctx context.Context, codes []CodeDocument) ([]EmbeddingResult, error)
+    EmbedBatch(ctx context.Context, codes[]CodeDocument) ([]EmbeddingResult, error)
 }
 
 type EmbeddingResult struct {
-    Dense          []float32       // Dense embedding
+    Dense[]float32       // Dense embedding
     Sparse         *SparseVector   // Sparse embedding (keywords)
-    Structural     []float32       // Structural embedding (AST)
-    Semantic       []float32       // Semantic embedding
+    Structural[]float32       // Structural embedding (AST)
+    Semantic[]float32       // Semantic embedding
 }
 
 // Strategy 1: Code-specific models
@@ -1911,7 +1909,7 @@ type StructuralOptions struct {
 
 // Strategy 3: Multi-vector embedding
 type MultiVectorEmbedder struct {
-    strategies []CodeEmbeddingStrategy
+    strategies[]CodeEmbeddingStrategy
 }
 // Creates multiple embeddings per code chunk for different aspects
 
@@ -1952,18 +1950,18 @@ type GenerationContext struct {
     Query           string
     Language        string
     StyleGuide      string
-    RelatedCode     []CodeDocument
+    RelatedCode[]CodeDocument
     Imports         []string
     TypeContext     []TypeDefinition
-    TestExamples    []string
+    TestExamples[]string
 }
 
 type CodeSuggestion struct {
     Code            string
     Explanation     string
     Confidence      float32
-    References      []CodeReference
-    AlternativeCode []string    // Alternative implementations
+    References[]CodeReference
+    AlternativeCode[]string    // Alternative implementations
 }
 
 func (g *CodeGenerator) GenerateFunction(ctx context.Context, spec FunctionSpec) (*CodeSuggestion, error)
@@ -1986,7 +1984,7 @@ func (g *CodeGenerator) gatherGenerationContext(ctx context.Context, query strin
 - [ ] Design generation pipeline
 - [ ] Implement context gathering
 - [ ] Implement function generation
-- [ ] Implement test generation
+-[ ] Implement test generation
 - [ ] Implement doc generation
 - [ ] Add tests
 
@@ -2006,7 +2004,7 @@ Built-in support for Code-Warden's 5-stage retrieval pipeline.
 // Proposed API
 type MultiStageRetriever struct {
     store       VectorStore
-    stages      []RetrievalStage
+    stages[]RetrievalStage
     merger      ResultMerger
 }
 
@@ -2036,7 +2034,7 @@ type MultiStageResult struct {
 **Tasks:**
 - [ ] Implement `MultiStageRetriever`
 - [ ] Implement HyDE retriever stage
-- [ ] Implement Impact Analysis stage
+-[ ] Implement Impact Analysis stage
 - [ ] Implement MultiQuery retriever stage
 - [ ] Implement Symbol Definition stage (Graph-RAG Lite)
 - [ ] Add result fusion/merging strategies
@@ -2060,15 +2058,15 @@ type OverlayLayer struct {
     PRNumber    int
     BaseSHA     string
     Added       []schema.Document
-    Modified    []schema.Document    // New versions
-    Deleted     []string             // IDs to exclude
+    Modified[]schema.Document    // New versions
+    Deleted[]string             // IDs to exclude
     CreatedAt   time.Time
 }
 
 type PROptions struct {
     PRNumber    int
     BaseSHA     string
-    Changes     []FileChange
+    Changes[]FileChange
 }
 
 type FileChange struct {
@@ -2109,33 +2107,33 @@ Built-in support for multi-model consensus reviews.
 ```go
 // Proposed API
 type ConsensusReviewer struct {
-    models      []llms.Model
+    models[]llms.Model
     prompt      string
     reducer     ConsensusReducer
     maxParallel int
 }
 
 type ConsensusReducer interface {
-    Reduce(ctx context.Context, reviews []Review) (*ConsensusReview, error)
+    Reduce(ctx context.Context, reviews[]Review) (*ConsensusReview, error)
 }
 
 type Review struct {
     Model       string
-    Comments    []ReviewComment
+    Comments[]ReviewComment
     Confidence  float32
     RawOutput   string
 }
 
 type ConsensusReview struct {
-    AgreedComments   []ReviewComment    // Issues found by multiple models
-    UniqueComments   []ReviewComment    // Issues found by single model
+    AgreedComments[]ReviewComment    // Issues found by multiple models
+    UniqueComments[]ReviewComment    // Issues found by single model
     Confidence       float32
     Agreement        float32            // Agreement ratio
     Synthesis        string             // LLM-generated summary
 }
 
-func NewConsensusReviewer(models []llms.Model, reducer ConsensusReducer) *ConsensusReviewer
-func (c *ConsensusReviewer) Review(ctx context.Context, diff string, context []schema.Document) (*ConsensusReview, error)
+func NewConsensusReviewer(models[]llms.Model, reducer ConsensusReducer) *ConsensusReviewer
+func (c *ConsensusReviewer) Review(ctx context.Context, diff string, context[]schema.Document) (*ConsensusReview, error)
 
 // Built-in reducers
 type VotingReducer struct{}          // Vote on each issue
@@ -2182,7 +2180,7 @@ type PostgreSQLStateStore struct {
 type IndexerOptions struct {
     BatchSize       int
     ExcludePatterns []string
-    IncludePatterns []string
+    IncludePatterns[]string
     OnProgress      func(processed, total int)
 }
 
@@ -2195,7 +2193,7 @@ type SyncResult struct {
     Deleted     int
     Skipped     int
     Duration    time.Duration
-    Errors      []error
+    Errors[]error
 }
 ```
 
@@ -2229,7 +2227,7 @@ const (
 )
 
 type PackedContext struct {
-    Documents   []schema.Document
+    Documents[]schema.Document
     Tokens      int
     Budget      int
     Utilization float32
@@ -2237,8 +2235,8 @@ type PackedContext struct {
 }
 
 func NewTokenAwarePacker(tokenizer Tokenizer, maxTokens int, strategy PackingStrategy) *TokenAwarePacker
-func (p *TokenAwarePacker) Pack(ctx context.Context, docs []ScoredDocument) (*PackedContext, error)
-func (p *TokenAwarePacker) PackWithTemplate(ctx context.Context, docs []ScoredDocument, template string) (*PackedContext, error)
+func (p *TokenAwarePacker) Pack(ctx context.Context, docs[]ScoredDocument) (*PackedContext, error)
+func (p *TokenAwarePacker) PackWithTemplate(ctx context.Context, docs[]ScoredDocument, template string) (*PackedContext, error)
 
 // Template-aware packing
 type TemplatePacker struct {
@@ -2248,13 +2246,13 @@ type TemplatePacker struct {
 }
 
 func (p *TemplatePacker) EstimateAvailableTokens() int
-func (p *TemplatePacker) PackForPrompt(ctx context.Context, docs []ScoredDocument) (string, *PackedContext, error)
+func (p *TemplatePacker) PackForPrompt(ctx context.Context, docs[]ScoredDocument) (string, *PackedContext, error)
 ```
 
 **Tasks:**
 - [ ] Implement `TokenAwarePacker`
 - [ ] Implement importance-based strategy
-- [ ] Implement diversity-based strategy
+-[ ] Implement diversity-based strategy
 - [ ] Implement template-aware packing
 - [ ] Add token counting utilities
 - [ ] Add tests
@@ -2273,14 +2271,14 @@ type ChunkSplicer struct {
 }
 
 type SplicedChunk struct {
-    Documents    []schema.Document  // Original chunks
+    Documents[]schema.Document  // Original chunks
     Spliced      string             // Merged content
     LineRanges   [][2]int           // Line ranges in original files
-    Files        []string           // Source files
+    Files[]string           // Source files
 }
 
 func NewChunkSplicer(overlapThreshold float32, maxGap int) *ChunkSplicer
-func (s *ChunkSplicer) Splice(docs []schema.Document) []SplicedChunk
+func (s *ChunkSplicer) Splice(docs []schema.Document)[]SplicedChunk
 func (s *ChunkSplicer) CanSplice(doc1, doc2 schema.Document) bool
 
 // Detect overlap
@@ -2318,10 +2316,10 @@ type SyntheticDocument struct {
 
 func NewSyntheticQuestionGenerator(llm llms.Model, questionsPerDoc int) *SyntheticQuestionGenerator
 func (g *SyntheticQuestionGenerator) Generate(ctx context.Context, doc schema.Document) (*SyntheticDocument, error)
-func (g *SyntheticQuestionGenerator) GenerateBatch(ctx context.Context, docs []schema.Document) ([]SyntheticDocument, error)
+func (g *SyntheticQuestionGenerator) GenerateBatch(ctx context.Context, docs[]schema.Document) ([]SyntheticDocument, error)
 
 // During indexing
-func (s *SyntheticDocument) ToDocuments() []schema.Document {
+func (s *SyntheticDocument) ToDocuments()[]schema.Document {
     // Returns original + synthetic question documents
     // Questions embed more naturally with user queries
 }
@@ -2339,7 +2337,7 @@ func (r *ReverseHyDERetriever) Retrieve(ctx context.Context, query string, numDo
 - [ ] Implement question generation prompts
 - [ ] Implement `SyntheticQuestionGenerator`
 - [ ] Implement storage format
-- [ ] Implement retrieval logic
+-[ ] Implement retrieval logic
 - [ ] Add tests
 
 ### 11.8 GitHub Integration Helpers
@@ -2356,7 +2354,7 @@ type PRDiff struct {
     Number      int
     Title       string
     Description string
-    Files       []FileDiff
+    Files[]FileDiff
     BaseSHA     string
     HeadSHA     string
 }
@@ -2366,7 +2364,7 @@ type FileDiff struct {
     Status      string    // "added", "modified", "deleted", "renamed"
     OldContent  string
     NewContent  string
-    Hunks       []Hunk
+    Hunks[]Hunk
 }
 
 type Hunk struct {
@@ -2378,8 +2376,8 @@ type Hunk struct {
 }
 
 func ParsePRDiff(diffText string) (*PRDiff, error)
-func ExtractChangedLines(file *FileDiff) []LineRange
-func ToDocuments(diff *PRDiff) []schema.Document
+func ExtractChangedLines(file *FileDiff)[]LineRange
+func ToDocuments(diff *PRDiff)[]schema.Document
 
 // GitHub API helpers
 type GitHubClient struct {
@@ -2387,7 +2385,7 @@ type GitHubClient struct {
 }
 
 func (c *GitHubClient) GetPR(ctx context.Context, owner, repo string, number int) (*PRDiff, error)
-func (c *GitHubClient) PostReviewComments(ctx context.Context, owner, repo string, number int, comments []ReviewComment) error
+func (c *GitHubClient) PostReviewComments(ctx context.Context, owner, repo string, number int, comments[]ReviewComment) error
 func (c *GitHubClient) ResolveComment(ctx context.Context, owner, repo string, commentID int64) error
 ```
 
@@ -2416,16 +2414,16 @@ type HallucinationCheck struct {
     Statement   string
     Confidence  float32
     Verified    bool
-    Sources     []schema.Document
+    Sources[]schema.Document
     Reason      string
 }
 
 func NewHallucinationDetector(store VectorStore, llm llms.Model, threshold float32) *HallucinationDetector
-func (d *HallucinationDetector) Check(ctx context.Context, statement string, context []schema.Document) (*HallucinationCheck, error)
+func (d *HallucinationDetector) Check(ctx context.Context, statement string, context[]schema.Document) (*HallucinationCheck, error)
 func (d *HallucinationDetector) CheckBatch(ctx context.Context, statements []string, context []schema.Document) ([]HallucinationCheck, error)
 
 // Verification strategies
-func (d *HallucinationDetector) verifyAgainstSources(statement string, sources []schema.Document) bool
+func (d *HallucinationDetector) verifyAgainstSources(statement string, sources[]schema.Document) bool
 func (d *HallucinationDetector) verifyWithRetrieval(ctx context.Context, statement string) ([]schema.Document, bool)
 ```
 
@@ -2467,7 +2465,7 @@ type ReviewComment struct {
 
 type ReviewOutput struct {
     Summary     string           `json:"summary"`
-    Comments    []ReviewComment  `json:"comments"`
+    Comments[]ReviewComment  `json:"comments"`
     Score       float32          `json:"score"`
 }
 
@@ -2478,10 +2476,10 @@ func WithStrictValidation() ParseOption
 ```
 
 **Tasks:**
-- [ ] Implement `StructuredParser`
+- [x] Implement `StructuredParser` (Generic JSON and XML parsers added)
 - [ ] Implement retry logic
 - [ ] Add JSON schema validation
-- [ ] Add XML parsing support
+- [x] Add XML parsing support (Added with truncation recovery)
 - [ ] Add pre-built review parsers
 - [ ] Add tests
 
@@ -2509,4 +2507,4 @@ func WithStrictValidation() ParseOption
 
 ---
 
-*Last updated: 2026-02-23*
+*Last updated: 2026-02-25*
