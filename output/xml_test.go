@@ -53,13 +53,13 @@ func TestXMLParser_Parse(t *testing.T) {
 			want:  testXMLData{Name: "Frank", Age: 50},
 		},
 		{
-			name:    "invalid xml (no root tag)",
+			name:    "invalid xml no root tag",
 			input:   "<other><name>Grace</name></other>",
 			wantErr: true,
 		},
 		{
-			name: "invalid xml (no root tag)",
-			input: `<comment>this is a comment with "1 < 2"</comment>`,
+			name:    "not escaped xml",
+			input:   `<comment>this is a comment with "1 < 2"</comment>`,
 			wantErr: true,
 		},
 	}
