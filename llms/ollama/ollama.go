@@ -581,7 +581,7 @@ func (o *LLM) CountTokens(ctx context.Context, text string) (int, error) {
 		Prompt: text,
 		Stream: new(bool), // Defaults to false
 		Options: map[string]any{
-			"num_predict": 0, // Just count tokens, don't generate
+			"num_predict": 1, // Generate 1 token to get prompt eval count (Ollama rejects 0)
 		},
 	}
 
