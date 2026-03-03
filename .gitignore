@@ -38,5 +38,6 @@ go.work.sum
 *.txt
 qdrant_storage/
 .claude/
+ideas/
 CLAUDE.md
 concat_context.js

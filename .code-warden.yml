@@ -28,14 +28,13 @@ exclude_exts:
 # Specific files to exclude from indexing by their relative path.
 exclude_files:
   - "typescript.js"
-  - ".code-warden.yml" # The config itself
-  - ".golangci.yaml"   
+  - ".code-warden.yml"
+  - ".golangci.yaml"
   - ".gitignore"
-  - "go.mod"           # Build metadata
-  - ".golangci.yml"    # Linter config
   - "Dockerfile"
   - "docker-compose.yml"
   - "Makefile"
   - "concat_context.js"
   - "LICENSE"
   - ".env"
+  - "ideas/"
