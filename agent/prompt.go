@@ -178,10 +178,11 @@ func (p *FilePart) GetContent() ([]byte, error) {
 }
 
 type SymbolPart struct {
-	path    string
-	name    string
-	kind    int
-	content []byte
+	path       string
+	name       string
+	kind       int
+	content    []byte
+	workingDir string
 }
 
 func Symbol(path string, name string, kind int) PromptPart {
@@ -201,11 +202,28 @@ func SymbolFromContent(path string, name string, kind int, content []byte) Promp
 	}
 }
 
+func SymbolWithWorkingDir(path string, name string, kind int, workingDir string) PromptPart {
+	return &SymbolPart{
+		path:       path,
+		name:       name,
+		kind:       kind,
+		workingDir: workingDir,
+	}
+}
+
 func (p *SymbolPart) ToInput() (opencode.SessionPromptParamsPartUnion, error) {
 	content := p.content
 	var err error
 	if content == nil && p.path != "" {
-		content, err = os.ReadFile(p.path)
+		cleanPath := filepath.Clean(p.path)
+		if p.workingDir != "" {
+			absPath, verr := ValidatePath(cleanPath, p.workingDir)
+			if verr != nil {
+				return nil, verr
+			}
+			cleanPath = absPath
+		}
+		content, err = os.ReadFile(cleanPath)
 		if err != nil {
 			return nil, err
 		}

@@ -27,18 +27,6 @@ func (s *Session) Close() error {
 	return s.Abort(context.Background())
 }
 
-type SessionManager struct {
-	client *opencode.Client
-	logger *slog.Logger
-}
-
-func NewSessionManager(client *opencode.Client, logger *slog.Logger) *SessionManager {
-	return &SessionManager{
-		client: client,
-		logger: logger,
-	}
-}
-
 func (s *Session) Prompt(ctx context.Context, prompt string, opts ...PromptOption) (*Response, error) {
 	config := &PromptConfig{}
 	for _, opt := range opts {

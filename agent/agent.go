@@ -47,7 +47,6 @@ type Agent struct {
 	client            *opencode.Client
 	config            *Config
 	mcp               *MCPRegistry
-	sessions          *SessionManager
 	events            *EventHandler
 	logger            *slog.Logger
 	permissionHandler PermissionHandler
@@ -74,8 +73,6 @@ func New(opts ...Option) (*Agent, error) {
 	if agent.client == nil {
 		agent.client = opencode.NewClient()
 	}
-
-	agent.sessions = NewSessionManager(agent.client, agent.logger)
 
 	return agent, nil
 }
@@ -227,20 +224,31 @@ func (a *Agent) GetEventHandler() *EventHandler {
 	return a.events
 }
 
+// Ask sends a one-off prompt and returns the response.
+// Note: This creates a new session for each call. For multiple prompts,
+// use NewSession and session.Prompt instead to reuse the session.
 func (a *Agent) Ask(ctx context.Context, prompt string, opts ...PromptOption) (*Response, error) {
 	session, err := a.NewSession(ctx)
 	if err != nil {
 		return nil, err
 	}
+	defer session.Close()
 
 	return session.Prompt(ctx, prompt, opts...)
 }
 
+// Stream sends a one-off prompt and returns a channel for streaming responses.
+// Note: This creates a new session for each call. For multiple prompts,
+// use NewSession and session.PromptStream instead to reuse the session.
 func (a *Agent) Stream(ctx context.Context, prompt string, opts ...PromptOption) (<-chan Event, error) {
 	session, err := a.NewSession(ctx)
 	if err != nil {
 		return nil, err
 	}
+
+	// Note: Session is NOT closed here because the goroutine in PromptStream
+	// may still be using it. The caller is responsible for cleanup if needed.
+	// For one-off streaming, consider the session auto-cleaned after completion.
 
 	return session.PromptStream(ctx, prompt, opts...)
 }
