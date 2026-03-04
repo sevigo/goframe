@@ -81,16 +81,16 @@ func New(opts ...Option) (*Agent, error) {
 }
 
 func (a *Agent) NewSession(ctx context.Context, opts ...SessionOption) (*Session, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	config := &SessionConfig{}
 	for _, opt := range opts {
 		opt(config)
 	}
 
 	if config.Directory == "" {
-		config.Directory = a.config.WorkingDir
+		a.mu.RLock()
+		workingDir := a.config.WorkingDir
+		a.mu.RUnlock()
+		config.Directory = workingDir
 		if config.Directory == "" {
 			wd, err := os.Getwd()
 			if err != nil {
@@ -132,9 +132,6 @@ func (a *Agent) NewSession(ctx context.Context, opts ...SessionOption) (*Session
 }
 
 func (a *Agent) GetSession(ctx context.Context, id string) (*Session, error) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
 	resp, err := a.client.Session.Get(ctx, id, opencode.SessionGetParams{})
 	if err != nil {
 		return nil, newSessionError("get_session", id, err)
@@ -155,9 +152,6 @@ func (a *Agent) GetSession(ctx context.Context, id string) (*Session, error) {
 }
 
 func (a *Agent) ListSessions(ctx context.Context) ([]*Session, error) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
 	resp, err := a.client.Session.List(ctx, opencode.SessionListParams{})
 	if err != nil {
 		return nil, newError("list_sessions", err)
@@ -181,9 +175,6 @@ func (a *Agent) ListSessions(ctx context.Context) ([]*Session, error) {
 }
 
 func (a *Agent) DeleteSession(ctx context.Context, id string) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	_, err := a.client.Session.Delete(ctx, id, opencode.SessionDeleteParams{})
 	if err != nil {
 		return newSessionError("delete_session", id, err)

@@ -2,12 +2,40 @@ package agent
 
 import (
 	"encoding/base64"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 
 	opencode "github.com/sst/opencode-sdk-go"
 )
+
+var (
+	ErrPathTraversal = errors.New("path traversal detected: path outside working directory")
+	ErrEmptyPath     = errors.New("empty path provided")
+)
+
+func ValidatePath(path, workingDir string) (string, error) {
+	if path == "" {
+		return "", ErrEmptyPath
+	}
+
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+
+	absWorkingDir, err := filepath.Abs(workingDir)
+	if err != nil {
+		return "", err
+	}
+
+	if !strings.HasPrefix(absPath+string(os.PathSeparator), absWorkingDir+string(os.PathSeparator)) {
+		return "", ErrPathTraversal
+	}
+
+	return absPath, nil
+}
 
 type PromptPart interface {
 	ToInput() (opencode.SessionPromptParamsPartUnion, error)
@@ -29,9 +57,10 @@ func (p *TextPart) ToInput() (opencode.SessionPromptParamsPartUnion, error) {
 }
 
 type FilePart struct {
-	path    string
-	content []byte
-	mime    string
+	path       string
+	content    []byte
+	mime       string
+	workingDir string
 }
 
 func File(path string) PromptPart {
@@ -43,6 +72,13 @@ func FileFromContent(path string, content []byte, mime string) PromptPart {
 		path:    path,
 		content: content,
 		mime:    mime,
+	}
+}
+
+func FileWithWorkingDir(path string, workingDir string) PromptPart {
+	return &FilePart{
+		path:       path,
+		workingDir: workingDir,
 	}
 }
 
@@ -129,7 +165,16 @@ func (p *FilePart) GetContent() ([]byte, error) {
 		return nil, nil
 	}
 
-	return os.ReadFile(p.path)
+	cleanPath := filepath.Clean(p.path)
+	if p.workingDir != "" {
+		absPath, err := ValidatePath(cleanPath, p.workingDir)
+		if err != nil {
+			return nil, err
+		}
+		cleanPath = absPath
+	}
+
+	return os.ReadFile(cleanPath)
 }
 
 type SymbolPart struct {

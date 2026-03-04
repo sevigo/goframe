@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"time"
 
@@ -18,6 +19,12 @@ type Session struct {
 	Updated   float64
 	client    *opencode.Client
 	logger    *slog.Logger
+}
+
+var _ io.Closer = (*Session)(nil)
+
+func (s *Session) Close() error {
+	return s.Abort(context.Background())
 }
 
 type SessionManager struct {
@@ -89,19 +96,25 @@ func (s *Session) PromptStream(ctx context.Context, prompt string, opts ...Promp
 
 		resp, err := s.Prompt(ctx, prompt, opts...)
 		if err != nil {
-			events <- Event{
+			select {
+			case events <- Event{
 				Type:      EventTypeError,
 				SessionID: s.ID,
 				Error:     err,
+			}:
+			case <-ctx.Done():
 			}
 			return
 		}
 
-		events <- Event{
+		select {
+		case events <- Event{
 			Type:      EventTypeComplete,
 			SessionID: s.ID,
 			MessageID: resp.MessageID,
 			Data:      *resp,
+		}:
+		case <-ctx.Done():
 		}
 	}()
 

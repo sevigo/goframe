@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 var (
@@ -148,26 +149,31 @@ func (fl *FeedbackLoop) ImplementWithReview(ctx context.Context, req ImplementRe
 }
 
 func (fl *FeedbackLoop) buildImplementationPrompt(req ImplementRequest, lastReview *ReviewResult) string {
-	prompt := req.Task
+	var builder strings.Builder
+
+	builder.WriteString(req.Task)
 
 	if req.Context != "" {
-		prompt = "Context:\n" + req.Context + "\n\n" + prompt
+		builder.WriteString("\n\nContext:\n")
+		builder.WriteString(req.Context)
 	}
 
 	if len(req.Constraints) > 0 {
-		prompt += "\n\nConstraints:\n"
+		builder.WriteString("\n\nConstraints:\n")
 		for _, c := range req.Constraints {
-			prompt += "- " + c + "\n"
+			builder.WriteString("- ")
+			builder.WriteString(c)
+			builder.WriteString("\n")
 		}
 	}
 
 	if lastReview != nil && !lastReview.Approved {
-		prompt += "\n\nPrevious implementation received the following feedback:\n"
-		prompt += lastReview.Feedback
-		prompt += "\n\nPlease address this feedback and improve the implementation."
+		builder.WriteString("\n\nPrevious implementation received the following feedback:\n")
+		builder.WriteString(lastReview.Feedback)
+		builder.WriteString("\n\nPlease address this feedback and improve the implementation.")
 	}
 
-	return prompt
+	return builder.String()
 }
 
 func (fl *FeedbackLoop) runReviewTool(ctx context.Context, implementation string) (*ReviewResult, error) {
@@ -225,33 +231,5 @@ func (fl *FeedbackLoop) defaultReview(implementation string) *ReviewResult {
 }
 
 func containsIgnoreCase(s, substr string) bool {
-	sLower := make([]byte, len(s))
-	substrLower := make([]byte, len(substr))
-
-	for i := range len(s) {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 32
-		}
-		sLower[i] = c
-	}
-
-	for i := range len(substr) {
-		c := substr[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 32
-		}
-		substrLower[i] = c
-	}
-
-	return contains(string(sLower), string(substrLower))
-}
-
-func contains(s, substr string) bool {
-	for i := range len(s) - len(substr) + 1 {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
