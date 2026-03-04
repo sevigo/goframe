@@ -216,6 +216,13 @@ func (a *Agent) GetConfig() *Config {
 		permCopy := *a.config.Permissions
 		config.Permissions = &permCopy
 	}
+	if a.config.agents != nil {
+		agentsCopy := make(map[string]AgentConfig, len(a.config.agents))
+		for k, v := range a.config.agents {
+			agentsCopy[k] = v
+		}
+		config.agents = agentsCopy
+	}
 
 	return &config
 }

@@ -121,6 +121,10 @@ func (s *Session) Messages(ctx context.Context) ([]Message, error) {
 		if timeMap, ok := m.Info.Time.(map[string]interface{}); ok {
 			if created, ok := timeMap["created"].(float64); ok {
 				createdAt = int64(created)
+			} else if createdInt, ok := timeMap["created"].(int64); ok {
+				createdAt = createdInt
+			} else if createdInt, ok := timeMap["created"].(int); ok {
+				createdAt = int64(createdInt)
 			}
 		}
 
