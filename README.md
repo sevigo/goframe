@@ -21,6 +21,11 @@ The framework is built around a set of core interfaces for LLMs, Embedders, and 
     -   **Impact Analysis**: Find downstream dependents ("who uses this code?").
     -   **Dependency Verification**: Trace upstream dependencies ("what does this use?").
     -   **Multi-Language Support**: Automatic metadata extraction for **Go** and **TypeScript/TSX**.
+-   **Agent Framework**: Programmatic control of AI agents through OpenCode SDK.
+    -   **MCP Server Management**: Configure local (stdio) and remote (HTTP/SSE) MCP servers.
+    -   **Session Management**: Create, manage, and interact with agent sessions.
+    -   **Permission System**: Fine-grained control over agent capabilities.
+    -   **Event Streaming**: Real-time response handling.
 -   **Pluggable Architecture**:
     -   **LLMs**: Clean interfaces for Ollama (local) and cloud providers.
     -   **Vector Stores**: Robust Qdrant implementation with metadata filtering.
@@ -186,6 +191,56 @@ results, _ := store.SimilaritySearch(ctx, query, 5,
 )
 ```
 
+### 4. Agent Framework with MCP Servers
+
+Create AI agents with MCP (Model Context Protocol) server configuration for tool access.
+
+```go
+import "github.com/sevigo/goframe/agent"
+
+// Configure MCP servers
+mcpRegistry := agent.NewMCPRegistry(
+    // Local MCP server (stdio transport)
+    agent.LocalMCPServer("filesystem",
+        []string{"mcp-filesystem", "/path/to/repo"},
+        agent.WithEnv(map[string]string{"LOG_LEVEL": "debug"}),
+        agent.WithEnabled(true),
+    ),
+    // Remote MCP server (HTTP/SSE transport)
+    agent.RemoteMCPServer("brave-search",
+        "https://mcp.brave.com/search",
+        agent.WithHeaders(map[string]string{"Authorization": "Bearer token"}),
+        agent.WithEnabled(true),
+    ),
+)
+
+// Configure permissions
+permissions := agent.NewPermissions().
+    AllowBash("go test", "go build").
+    AllowEdit().
+    DenyWebfetch().
+    Build()
+
+// Create agent
+ag, _ := agent.New(
+    agent.WithModel("anthropic/claude-3-5-sonnet"),
+    agent.WithMCPRegistry(mcpRegistry),
+    agent.WithPermissions(permissions),
+)
+
+// Create session and interact
+session, _ := ag.NewSession(ctx, agent.WithTitle("Code Review"))
+response, _ := session.Prompt(ctx, "Explain this code")
+
+// Stream responses
+events, _ := ag.Stream(ctx, "Write a haiku")
+for event := range events {
+    if event.Type == agent.EventTypeComplete {
+        fmt.Println(event.Data.(agent.Response).Content)
+    }
+}
+```
+
 ## Running the Ultimate RAG Demo
 
 The `examples/qdrant-ultimate-rag` is a production-grade demonstration featuring:
@@ -209,6 +264,7 @@ go run ./examples/qdrant-ultimate-rag/main.go
 -   **`/llms`**: Contains interfaces and implementations for LLM clients. The `ollama` package provides a full-featured client.
 -   **`/embeddings`**: Provides the `Embedder` interface and a default implementation that wraps an LLM client to perform embedding tasks.
 -   **`/vectorstores`**: Contains interfaces and implementations for vector stores. The `qdrant` package provides a robust client.
+-   **`/agent`**: Provides the Agent framework for programmatic control of AI agents through OpenCode SDK. Features MCP server management, session handling, permissions, and event streaming.
 -   **`/parsers`**: Home to the language parser plugin system. Each sub-directory (`/golang`, `/markdown`, etc.) contains a plugin for a specific file type. See `Plugins.md` for more details.
 -   **`/textsplitter`**: Provides the `CodeAwareTextSplitter`, which uses the parser plugins to perform intelligent, semantic chunking of documents.
 
@@ -227,6 +283,7 @@ Contributions are welcome! Whether it's a bug fix, a new feature, or documentati
 -   **New LLM Clients**: Add support for providers like OpenAI, Anthropic, or Hugging Face.
 -   **New Vector Stores**: Implement the `VectorStore` interface for ChromaDB, Pinecone, Weaviate, etc.
 -   **New Parser Plugins**: Add support for more languages like Python, Java, C++, or Rust.
+-   **Enhance Agent Framework**: Add new MCP server types, improve permission handling, or add more event types.
 -   **Enhance RAG Components**: Implement advanced retrieval strategies like re-rankers or query transformers.
 
 ## License
