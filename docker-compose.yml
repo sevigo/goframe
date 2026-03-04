@@ -8,3 +8,51 @@ services:
     volumes:
       - ./qdrant_storage:/qdrant/storage
     restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_ORIGINS=*
+      - OLLAMA_HOST=0.0.0.0
+    restart: unless-stopped
+    # Uncomment to use GPU (requires nvidia-container-toolkit)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  opencode:
+    image: ghcr.io/anomalyco/opencode:latest
+    container_name: opencode
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app/workspace
+      - opencode_config:/root/.opencode
+    environment:
+      - OPENCODE_WORKING_DIR=/app/workspace
+      - OPENCODE_API_KEY=${OPENCODE_API_KEY:-}
+      - OPENCODE_MODEL=${OPENCODE_MODEL:-ollama/glm-5:cloud}
+      - OPENCODE_LOG_LEVEL=${OPENCODE_LOG_LEVEL:-info}
+      # For local Ollama (when using ollama/* models locally)
+      - OLLAMA_HOST=ollama:11434
+    working_dir: /app/workspace
+    command: ["opencode", "serve"]
+    restart: unless-stopped
+    depends_on:
+      - qdrant
+      - ollama
+
+volumes:
+  ollama_data:
+    driver: local
+  opencode_config:
+    driver: local
