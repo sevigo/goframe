@@ -45,7 +45,7 @@ services:
       # For local Ollama (when using ollama/* models locally)
       - OLLAMA_HOST=ollama:11434
     working_dir: /app/workspace
-    command: ["opencode", "serve"]
+    command: ["serve", "--port", "3000", "--hostname", "0.0.0.0"]
     restart: unless-stopped
     depends_on:
       - qdrant

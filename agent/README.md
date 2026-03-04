@@ -312,7 +312,7 @@ ag.DeleteSession(ctx, session.ID)
 // Using prompt builder
 builder := agent.NewPromptBuilder().
     AddText("Review this file:\n").
-    AddFile("main.go").
+    AddFileFromContent("main.go", content, "text/x-go").
     AddText("\nFocus on error handling.")
 
 config := builder.Build(
@@ -325,10 +325,135 @@ response, _ := session.Prompt(ctx, "", agent.WithParts(config.Parts...))
 // Using prompt options directly
 response, _ := session.Prompt(ctx,
     "Analyze these files",
-    agent.WithFiles("main.go", "utils.go"),
+    agent.WithParts(
+        agent.FileFromContent("main.go", content1, "text/x-go"),
+        agent.FileFromContent("utils.go", content2, "text/x-go"),
+    ),
     agent.WithContext("Focus on performance"),
 )
 ```
+
+### Feedback Loop
+
+The feedback loop enables iterative implementation with automated code review:
+
+#### Basic Usage
+
+```go
+fl := agent.NewFeedbackLoop(ag, session,
+    agent.WithMaxRetries(3),
+)
+
+result, err := fl.ImplementWithReview(ctx, agent.ImplementRequest{
+    Task: "Write a function that validates email addresses",
+    Context: "This is for a user registration API",
+    Constraints: []string{
+        "Handle edge cases",
+        "Include documentation",
+        "Follow Go naming conventions",
+    },
+})
+
+if err != nil {
+    // Could be ErrMaxRetries or other error
+    fmt.Printf("Implementation failed: %v\n", err)
+} else {
+    fmt.Printf("Implementation: %s\n", result.Implementation)
+}
+```
+
+#### Custom Review Handler
+
+```go
+reviewHandler := func(ctx context.Context, session *agent.Session, implementation string) (*agent.ReviewResult, error) {
+    // Custom review logic
+    score := calculateScore(implementation)
+    
+    var feedback strings.Builder
+    if !hasErrorHandling(implementation) {
+        feedback.WriteString("- Missing error handling\n")
+        score -= 20
+    }
+    if !hasDocumentation(implementation) {
+        feedback.WriteString("- Missing documentation\n")
+        score -= 15
+    }
+    
+    return &agent.ReviewResult{
+        Approved: score >= 70,
+        Feedback: feedback.String(),
+        Score:    float64(score),
+    }, nil
+}
+
+fl := agent.NewFeedbackLoop(ag, session,
+    agent.WithMaxRetries(3),
+    agent.WithReviewHandler(reviewHandler),
+)
+```
+
+#### MCP-Based Code Review and PR Creation
+
+```go
+// Review using MCP tools
+reviewHandler := func(ctx context.Context, session *agent.Session, implementation string) (*agent.ReviewResult, error) {
+    reviewPrompt := fmt.Sprintf(
+        "Use the code_review MCP tool to analyze:\n\n%s\n\n"+
+            "Check for quality, security, and best practices.\n"+
+            "Return APPROVE if score >= 70, otherwise REJECT with feedback.",
+        implementation,
+    )
+    
+    response, err := session.Prompt(ctx, reviewPrompt)
+    if err != nil {
+        return nil, err
+    }
+    
+    approved := strings.Contains(strings.ToUpper(response.Content), "APPROVE")
+    return &agent.ReviewResult{
+        Approved: approved,
+        Feedback: response.Content,
+        Score:    score,
+    }, nil
+}
+
+// Create PR on approval
+prHandler := func(ctx context.Context, session *agent.Session, implementation string, review *agent.ReviewResult) error {
+    if !review.Approved {
+        return nil
+    }
+    
+    prPrompt := fmt.Sprintf(
+        "Use the github MCP tool to create a pull request:\n"+
+            "Title: Implement user validation\n"+
+            "Branch: feature/user-validation\n\n%s",
+        implementation,
+    )
+    
+    _, err := session.Prompt(ctx, prPrompt)
+    return err
+}
+
+fl := agent.NewFeedbackLoop(ag, session,
+    agent.WithMaxRetries(3),
+    agent.WithReviewHandler(reviewHandler),
+    agent.WithPRHandler(prHandler),
+)
+```
+
+#### Available Options
+
+```go
+fl := agent.NewFeedbackLoop(ag, session,
+    agent.WithMaxRetries(5),                    // Max implementation attempts
+    agent.WithReviewTool("code_review"),        // MCP tool for review (alternative to handler)
+    agent.WithPRTool("create_pr"),              // MCP tool for PR creation (alternative to handler)
+    agent.WithReviewHandler(customHandler),     // Custom review function
+    agent.WithPRHandler(customPRHandler),       // Custom PR creation function
+)
+```
+
+See `examples/feedback-loop/` and `examples/mcp-feedback/` for complete examples.
 
 ### Event Handling
 
@@ -418,7 +543,43 @@ curl http://localhost:3000/health
 
 ## Examples
 
-See `examples/basic/main.go` for a complete working example.
+See `examples/` directory for complete working examples:
+
+### Basic Example (`examples/basic/`)
+
+Demonstrates core features:
+- MCP server configuration
+- Session management
+- Simple prompts and streaming
+- Prompt builder with files
+- Configuration save/load
+
+```bash
+go run ./agent/examples/basic/main.go
+```
+
+### Feedback Loop Example (`examples/feedback-loop/`)
+
+Shows the feedback loop pattern:
+- Basic iterative implementation
+- Custom review handlers with scoring
+- Automatic PR creation on approval
+
+```bash
+go run ./agent/examples/feedback-loop/main.go
+```
+
+### MCP Feedback Example (`examples/mcp-feedback/`)
+
+Advanced feedback loop with MCP tools:
+- MCP-based code review using `code_review` tool
+- Automated PR creation using `github` MCP tool
+- Multi-stage implementation pipeline
+- Custom review criteria with weights
+
+```bash
+go run ./agent/examples/mcp-feedback/main.go
+```
 
 ## License
 

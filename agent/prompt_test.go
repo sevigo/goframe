@@ -23,13 +23,28 @@ func TestFilePart(t *testing.T) {
 
 	t.Run("file from content", func(t *testing.T) {
 		content := []byte("package main\n\nfunc main() {}")
-		part := FileFromContent("main.go", content, "text/plain")
+		part := FileFromContent("main.go", content, "text/x-go")
 		assert.NotNil(t, part)
+
+		input, err := part.ToInput()
+		assert.NoError(t, err)
+		assert.NotNil(t, input)
+	})
+
+	t.Run("file with mime detection", func(t *testing.T) {
+		content := []byte("package main\n\nfunc main() {}")
+		part := FileFromContent("test.go", content, "")
+		assert.NotNil(t, part)
+
+		input, err := part.ToInput()
+		assert.NoError(t, err)
+		assert.NotNil(t, input)
 	})
 }
 
 func TestSymbolPart(t *testing.T) {
-	part := Symbol("main.go", "main", 12)
+	content := []byte("package main\n\nfunc main() {}")
+	part := SymbolFromContent("main.go", "main", 12, content)
 	assert.NotNil(t, part)
 
 	input, err := part.ToInput()

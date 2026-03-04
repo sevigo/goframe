@@ -104,9 +104,16 @@ func exampleSimplePrompt(ctx context.Context, session *agent.Session) {
 
 func examplePromptWithFiles(ctx context.Context, session *agent.Session) {
 	fmt.Println("\n=== Example 2: Prompt with Files ===")
+	content := []byte(`module example.com/test
+
+go 1.21
+
+require (
+	github.com/some/package v1.0.0
+)`)
 	response, err := session.Prompt(ctx,
 		"Analyze this code structure",
-		agent.WithFiles("go.mod", "go.sum"),
+		agent.WithParts(agent.FileFromContent("go.mod", content, "text/x-go")),
 		agent.WithContext("Focus on dependencies"),
 	)
 	if err != nil {
@@ -138,11 +145,18 @@ func exampleStreaming(ctx context.Context, ag *agent.Agent) {
 
 func examplePromptBuilder(ctx context.Context, session *agent.Session) {
 	fmt.Println("\n=== Example 4: Prompt Builder ===")
+	goModContent := []byte(`module example.com/test
+
+go 1.21
+
+require github.com/some/package v1.0.0`)
+	goSumContent := []byte(`github.com/some/package v1.0.0 h1:abc123
+github.com/some/package v1.0.0/go.mod h1:def456`)
 	builder := agent.NewPromptBuilder().
 		AddText("Compare these two files:\n").
-		AddFile("go.mod").
+		AddFileFromContent("go.mod", goModContent, "text/x-go").
 		AddText("\nand\n").
-		AddFile("go.sum").
+		AddFileFromContent("go.sum", goSumContent, "text/plain").
 		AddText("\nWhat are the main differences?")
 
 	config := builder.Build()
@@ -180,17 +194,20 @@ func exampleConfiguration() {
 	fmt.Printf("Small Model: %s\n", config.SmallModel)
 	fmt.Printf("MCP Servers: %d\n", len(config.GetMCPServers()))
 
-	err := agent.SaveConfig(config, "/tmp/workspace/opencode.json")
+	tmpDir := os.TempDir()
+	configPath := tmpDir + "/opencode.json"
+	err := agent.SaveConfig(config, configPath)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Warning saving config: %v\n", err)
 	} else {
-		fmt.Println("Configuration saved to /tmp/workspace/opencode.json")
+		fmt.Printf("Configuration saved to %s\n", configPath)
 	}
 }
 
 func exampleLoadConfiguration() {
 	fmt.Println("\n=== Example 7: Loading Configuration ===")
-	config, err := agent.LoadConfigFromDir("/tmp/workspace")
+	tmpDir := os.TempDir()
+	config, err := agent.LoadConfigFromDir(tmpDir)
 	if err != nil {
 		fmt.Printf("No config found: %v\n", err)
 		return
