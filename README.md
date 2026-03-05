@@ -260,13 +260,14 @@ go run ./examples/qdrant-ultimate-rag/main.go
 
 ## Core Components
 
--   **`/schema`**: Defines the core data structures used throughout the framework, such as `Document`, `ChatMessage`, and `ParserPlugin`.
--   **`/llms`**: Contains interfaces and implementations for LLM clients. The `ollama` package provides a full-featured client.
--   **`/embeddings`**: Provides the `Embedder` interface and a default implementation that wraps an LLM client to perform embedding tasks.
--   **`/vectorstores`**: Contains interfaces and implementations for vector stores. The `qdrant` package provides a robust client.
--   **`/agent`**: Provides the Agent framework for programmatic control of AI agents through OpenCode SDK. Features MCP server management, session handling, permissions, and event streaming.
--   **`/parsers`**: Home to the language parser plugin system. Each sub-directory (`/golang`, `/markdown`, etc.) contains a plugin for a specific file type. See `Plugins.md` for more details.
--   **`/textsplitter`**: Provides the `CodeAwareTextSplitter`, which uses the parser plugins to perform intelligent, semantic chunking of documents.
+- **`/schema`**: Defines the core data structures used throughout the framework, such as `Document`, `ChatMessage`, and `ParserPlugin`.
+- **`/llms`**: Contains interfaces and implementations for LLM clients. The `ollama` package provides a full-featured client.
+- **`/embeddings`**: Provides the `Embedder` interface and a default implementation that wraps an LLM client to perform embedding tasks.
+- **`/vectorstores`**: Contains interfaces and implementations for vector stores. The `qdrant` package provides a robust client.
+- **`/agent`**: Provides the Agent framework for programmatic control of AI agents through OpenCode SDK. Features MCP server management, session handling, permissions, and event streaming.
+- **`/voice`**: Provides Text-to-Speech synthesis with OpenAI-compatible API support. Supports both buffered and streaming audio generation, compatible with OpenAI cloud and local servers like Kokoro-FastAPI.
+- **`/parsers`**: Home to the language parser plugin system. Each sub-directory (`/golang`, `/markdown`, etc.) contains a plugin for a specific file type. See `Plugins.md` for more details.
+- **`/textsplitter`**: Provides the `CodeAwareTextSplitter`, which uses the parser plugins to perform intelligent, semantic chunking of documents.
 
 ## How to Contribute
 
