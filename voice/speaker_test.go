@@ -61,11 +61,11 @@ func TestNegativePauseForInterruptions(t *testing.T) {
 		PauseMsMax: 300,
 	}
 
-	// Test same speaker (should produce very short pause)
+	// Test same speaker (should produce very short pause ~50ms with 0.25x multiplier)
 	pause := ds.calculateContextualPause("Alice", "I was thinking", "Alice", "about that", 200, 300)
 
-	// Same speaker should have short pause
-	if pause > 100 {
-		t.Errorf("same speaker pause too long: got %dms, expected < 100ms", pause)
+	// Same speaker should have very short pause (minPause * 0.25 + random)
+	if pause > 150 {
+		t.Errorf("same speaker pause too long: got %dms, expected <= 150ms (min * 0.25 multiplier)", pause)
 	}
 }
