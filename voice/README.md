@@ -284,14 +284,24 @@ dialogueSyn := voice.NewDialogueSynthesizer(synthesizer, map[string]string{
 })
 ```
 
-### Parallel Dialogue Synthesis
+### Parallel Dialogue Synthesis with Concurrency Limiting
 
-For faster generation, synthesize all segments in parallel:
+For faster generation, synthesize all segments in parallel with controlled concurrency:
 
 ```go
-// Processes all segments concurrently, then streams in order
+// Unlimited concurrency (may overwhelm API for large dialogues)
 stream, err := dialogueSyn.StreamDialogueParallel(ctx, dialogue)
+
+// Limited concurrency (recommended for large dialogues)
+// Process 10 segments at a time to avoid overwhelming the API
+stream, err := dialogueSyn.StreamDialogueParallelWithLimit(ctx, dialogue, 10)
 ```
+
+**Concurrency Recommendations:**
+- **Kokoro-FastAPI (local)**: 5-10 concurrent requests
+- **OpenAI API**: 3-5 concurrent requests (rate limits)
+- **Large dialogues (>50 segments)**: Always use limiting
+- **Small dialogues (<10 segments)**: Unlimited is fine
 
 ### Audio Processing Features
 

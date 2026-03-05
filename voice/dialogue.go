@@ -540,8 +540,24 @@ func (ds *DialogueSynthesizer) writeOrderedSegments(writer *io.PipeWriter, order
 // as all segments are synthesized concurrently, then assembled in order with proper
 // crossfading and pause timing.
 //
+// The concurrencyLimit parameter controls how many segments are synthesized simultaneously.
+// A value of 0 or negative means no limit (may overwhelm the API for large dialogues).
+// Recommended: 5-10 for most APIs, adjust based on API rate limits.
+// For Kokoro-FastAPI, 5-10 works well. For OpenAI, use lower values (3-5) due to rate limits.
+//
 // Returns a ReadCloser that streams the concatenated audio with natural transitions.
 func (ds *DialogueSynthesizer) StreamDialogueParallel(ctx context.Context, segments []DialogueSegment) (io.ReadCloser, error) {
+	return ds.streamDialogueParallelWithLimit(ctx, segments, 0) // 0 = no limit, use all goroutines
+}
+
+// StreamDialogueParallelWithLimit generates audio with controlled concurrency.
+// Use this for large dialogues or when dealing with rate-limited APIs.
+// ConcurrencyLimit of 5-10 is recommended for most use cases.
+func (ds *DialogueSynthesizer) StreamDialogueParallelWithLimit(ctx context.Context, segments []DialogueSegment, concurrencyLimit int) (io.ReadCloser, error) {
+	return ds.streamDialogueParallelWithLimit(ctx, segments, concurrencyLimit)
+}
+
+func (ds *DialogueSynthesizer) streamDialogueParallelWithLimit(ctx context.Context, segments []DialogueSegment, concurrencyLimit int) (io.ReadCloser, error) {
 	if len(segments) == 0 {
 		return nil, errors.New("voice: no segments provided")
 	}
@@ -551,10 +567,23 @@ func (ds *DialogueSynthesizer) StreamDialogueParallel(ctx context.Context, segme
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// If no limit specified or limit is invalid, process all at once
+	if concurrencyLimit <= 0 {
+		concurrencyLimit = len(segments)
+	}
+
+	// Create a semaphore to limit concurrency
+	sem := make(chan struct{}, concurrencyLimit)
+
 	for i, seg := range segments {
 		wg.Add(1)
 		go func(idx int, s DialogueSegment) {
 			defer wg.Done()
+
+			// Acquire semaphore
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
 			ds.synthesizeSegment(ctx, idx, s, results)
 		}(i, seg)
 	}

@@ -92,13 +92,15 @@ func run() error {
 	ctx := context.Background()
 	start := time.Now()
 
-	fmt.Println("Synthesizing dialogue with 3 voices (parallel):")
+	fmt.Println("Synthesizing dialogue with 3 voices (parallel with rate limiting):")
 	fmt.Println("  - Alex:  af_sky(3)+af_nicole(1)  @ 1.05x speed")
 	fmt.Println("  - Maya:  af_bella(3)+af_heart(1) @ 1.00x speed")
 	fmt.Println("  - Kenji: am_adam                 @ 0.95x speed")
 	fmt.Println()
 
-	stream, err := dialogueSyn.StreamDialogueParallel(ctx, dialogue)
+	// Use parallel synthesis with concurrency limit to avoid overwhelming the API
+	// For 89 segments, we process 10 at a time to respect rate limits
+	stream, err := dialogueSyn.StreamDialogueParallelWithLimit(ctx, dialogue, 10)
 	if err != nil {
 		return fmt.Errorf("failed to stream dialogue: %w", err)
 	}
