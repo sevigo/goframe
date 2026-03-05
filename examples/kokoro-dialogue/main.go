@@ -43,9 +43,9 @@ func run() error {
 		"Alex":  "af_sky(3)+af_nicole(1)",
 	})
 	dialogueSyn.SpeedMap = map[string]float64{
-		"Alex":  1.05, // slightly faster, energetic host
-		"Maya":  1.0,  // normal pace, warm storyteller
-		"Kenji": 0.95, // slightly slower, thoughtful guest
+		"Alex":  1.1,
+		"Maya":  1.05,
+		"Kenji": 1.00,
 	}
 
 	dialogue := []voice.DialogueSegment{
