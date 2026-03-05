@@ -280,13 +280,23 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 	// Calculate perfect pauses between segments
 	pauses := make([]int, len(segments)-1)
 	for i := 0; i < len(segments)-1; i++ {
-		pauses[i] = ds.CalculatePerfectPause(&captionedSegments[i], &captionedSegments[i+1])
+		pause := ds.CalculatePerfectPause(&captionedSegments[i], &captionedSegments[i+1])
+		pauses[i] = pause
 
-		logger.Debug("pause calculated",
-			"between", fmt.Sprintf("segment %d -> %d", i, i+1),
-			"pause_ms", pauses[i],
-			"prev_speech_ms", captionedSegments[i].SpeechDurationMs,
-			"curr_speech_ms", captionedSegments[i+1].SpeechDurationMs,
+		prev := &captionedSegments[i]
+		curr := &captionedSegments[i+1]
+
+		logger.Info("pause calculated",
+			"between", fmt.Sprintf("segment %d (%s) -> %d (%s)", i, prev.Speaker, i+1, curr.Speaker),
+			"pause_ms", pause,
+			"target_pause_ms", ds.TargetPauseMs,
+			"prev_duration_ms", prev.DurationMs,
+			"prev_speech_ms", prev.SpeechDurationMs,
+			"prev_trailing_ms", prev.TrailingSilenceMs,
+			"curr_leading_ms", curr.LeadingSilenceMs,
+			"built_in_silence_ms", prev.TrailingSilenceMs+curr.LeadingSilenceMs,
+			"prev_text_preview", truncateText(prev.Text, 30),
+			"curr_text_preview", truncateText(curr.Text, 30),
 		)
 	}
 
