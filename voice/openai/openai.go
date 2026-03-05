@@ -178,6 +178,59 @@ func (s *Synthesizer) Synthesize(ctx context.Context, text string, opts ...voice
 	}, nil
 }
 
+func (s *Synthesizer) Stream(ctx context.Context, text string, opts ...voice.Option) (io.ReadCloser, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, errors.New("openai: text cannot be empty")
+	}
+
+	options := &voice.SynthesizeOptions{
+		Model:  s.model,
+		Voice:  s.voice,
+		Format: s.format,
+	}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	reqBody := &speechRequest{
+		Model:          options.Model,
+		Input:          text,
+		Voice:          options.Voice,
+		ResponseFormat: options.Format,
+	}
+	if options.Speed > 0 {
+		reqBody.Speed = options.Speed
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("openai: failed to marshal request: %w", err)
+	}
+
+	url := s.baseURL + "/audio/speech"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("openai: failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if s.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+s.apiKey)
+	}
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("openai: request failed: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		return nil, s.parseError(resp)
+	}
+
+	return resp.Body, nil
+}
+
 func (s *Synthesizer) parseError(resp *http.Response) error {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

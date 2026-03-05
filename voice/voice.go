@@ -2,6 +2,7 @@ package voice
 
 import (
 	"context"
+	"io"
 )
 
 type Audio struct {
@@ -11,6 +12,7 @@ type Audio struct {
 
 type Synthesizer interface {
 	Synthesize(ctx context.Context, text string, opts ...Option) (*Audio, error)
+	Stream(ctx context.Context, text string, opts ...Option) (io.ReadCloser, error)
 }
 
 type SynthesizeOptions struct {
