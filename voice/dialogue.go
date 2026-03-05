@@ -749,6 +749,11 @@ func (ds *DialogueSynthesizer) calculateContextualPause(prevSpeaker, prevText, c
 
 	multiplier := applyContextualPauseMultiplier(prevText, currText, prevSpeaker, currSpeaker)
 
+	// Same-speaker: use short deterministic pause without randomness
+	if prevSpeaker == currSpeaker && prevSpeaker != "" {
+		return int(float64(base) * multiplier)
+	}
+
 	// Calculate final pause with randomness for naturalness
 	// Not security-sensitive - just adding variety to dialogue pacing
 	pause := int(float64(base) + float64(variable)*multiplier*0.5 + float64(rand.IntN(variable/2))) //nolint:gosec // dialogue pacing doesn't need cryptographic randomness
