@@ -322,7 +322,7 @@ func (ds *DialogueSynthesizer) StreamDialogue(ctx context.Context, segments []Di
 				prevRaw := segmentBuffer[i-1][wavFormat.dataOffset:]
 				currentRaw := segmentBuffer[i][wavFormat.dataOffset:]
 
-				// Segments already normalized during initial buffering (lines 306-308)
+				// Segments normalized above during buffering (line 307)
 				prevSpeaker := segments[i-1].Speaker
 				prevText := segments[i-1].Text
 				currSpeaker := segments[i].Speaker

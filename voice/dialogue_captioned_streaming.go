@@ -104,8 +104,10 @@ func concatenateCaptionedAudio(segments []CaptionedSegment, pauses []int, crossf
 
 // calculatePauseBytes converts milliseconds to bytes based on WAV format.
 func calculatePauseBytes(pauseMs int, format wavInfo) int {
-	samples := (pauseMs * format.sampleRate) / 1000
-	return samples * format.numChannels * format.bytesPerSample
+	// Use int64 for intermediate calculations to avoid overflow with large pauses
+	samples := (int64(pauseMs) * int64(format.sampleRate)) / 1000
+	bytes := samples * int64(format.numChannels) * int64(format.bytesPerSample)
+	return int(bytes)
 }
 
 // generateSRT creates SRT-format subtitles from captioned segments.
@@ -126,6 +128,35 @@ func generateSRT(segments []CaptionedSegment) string {
 				formatSRTTime(startMs),
 				formatSRTTime(endMs)))
 			srt.WriteString(fmt.Sprintf("%s\n\n", ts.Word))
+
+			index++
+		}
+
+		globalOffsetMs += seg.DurationMs
+	}
+
+	return srt.String()
+}
+
+// generateSRTWithSpeakers creates SRT-format subtitles with speaker labels.
+// Each subtitle line includes "[Speaker]: word" format, useful for multi-speaker content.
+func generateSRTWithSpeakers(segments []CaptionedSegment) string {
+	var srt bytes.Buffer
+	index := 1
+	globalOffsetMs := 0
+
+	for _, seg := range segments {
+		segOffset := globalOffsetMs
+
+		for _, ts := range seg.Timestamps {
+			startMs := segOffset + ts.StartMs
+			endMs := segOffset + ts.EndMs
+
+			srt.WriteString(fmt.Sprintf("%d\n", index))
+			srt.WriteString(fmt.Sprintf("%s --> %s\n",
+				formatSRTTime(startMs),
+				formatSRTTime(endMs)))
+			srt.WriteString(fmt.Sprintf("[%s]: %s\n\n", seg.Speaker, ts.Word))
 
 			index++
 		}

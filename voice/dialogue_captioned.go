@@ -162,15 +162,12 @@ func (ds *DialogueSynthesizerCaptioned) CalculatePerfectPause(prev, curr *Captio
 
 	// Cap built-in silence at reasonable values
 	// Kokoro sometimes includes 10-20 seconds of silence which is not intentional
-	// Maximum reasonable built-in silence is 500ms for trailing and 300ms for leading
-	maxTrailingSilence := 500
-	maxLeadingSilence := 300
-
-	if prevTrailing > maxTrailingSilence {
-		prevTrailing = maxTrailingSilence
+	// Maximum reasonable built-in silence is defined by constants
+	if prevTrailing > MaxTrailingSilenceMs {
+		prevTrailing = MaxTrailingSilenceMs
 	}
-	if currLeading > maxLeadingSilence {
-		currLeading = maxLeadingSilence
+	if currLeading > MaxLeadingSilenceMs {
+		currLeading = MaxLeadingSilenceMs
 	}
 
 	// Total silence already in the audio
@@ -464,6 +461,12 @@ func validateCaptionedResult(result *CaptionedDialogueResult) error {
 // This is a convenience method that wraps the internal generateSRT function.
 func (ds *DialogueSynthesizerCaptioned) GenerateSRT(segments []CaptionedSegment) string {
 	return generateSRT(segments)
+}
+
+// GenerateSRTWithSpeakers creates SRT-format subtitles with speaker labels.
+// Each subtitle line includes "[Speaker]: word" format, useful for multi-speaker content.
+func (ds *DialogueSynthesizerCaptioned) GenerateSRTWithSpeakers(segments []CaptionedSegment) string {
+	return generateSRTWithSpeakers(segments)
 }
 
 // AnalyzeSpeechRate calculates words per minute for a speaker.
