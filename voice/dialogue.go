@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"math/rand/v2"
 	"sync"
 )
 
@@ -36,16 +37,19 @@ type DialogueSynthesizer struct {
 	// Set to 0 to disable crossfading.
 	// Note: Crossfading requires buffering segments in memory.
 	CrossfadeMs int
-	// PauseMs specifies pause duration between segments in milliseconds (default: 100ms).
-	// Set to 0 to disable pauses between segments.
-	PauseMs int
+	// PauseMsMin specifies minimum pause duration between segments in milliseconds (default: 200ms).
+	// Set both PauseMsMin and PauseMsMax to 0 to disable pauses between segments.
+	PauseMsMin int
+	// PauseMsMax specifies maximum pause duration between segments in milliseconds (default: 300ms).
+	// A random value between PauseMsMin and PauseMsMax is used for each segment transition.
+	PauseMsMax int
 }
 
 // NewDialogueSynthesizer creates a new dialogue synthesizer.
 // The format defaults to "wav" which supports reliable concatenation.
 // Crossfading is enabled by default (50ms) to smooth transitions between segments
 // using equal-power curves for constant perceived loudness.
-// Pause between segments defaults to 150ms.
+// Pause between segments is randomized between 200ms and 300ms by default.
 func NewDialogueSynthesizer(syn Synthesizer, voiceMap map[string]string, format ...string) *DialogueSynthesizer {
 	f := "wav"
 	if len(format) > 0 && format[0] != "" {
@@ -56,7 +60,8 @@ func NewDialogueSynthesizer(syn Synthesizer, voiceMap map[string]string, format 
 		VoiceMap:    voiceMap,
 		Format:      f,
 		CrossfadeMs: 50,
-		PauseMs:     150,
+		PauseMsMin:  200,
+		PauseMsMax:  300,
 	}
 }
 
@@ -222,23 +227,42 @@ func (ds *DialogueSynthesizer) StreamDialogue(ctx context.Context, segments []Di
 
 // streamWAVSegment processes a single WAV segment with pause and crossfade.
 func (ds *DialogueSynthesizer) streamWAVSegment(prevRaw, currentRaw []byte, wavFormat wavInfo) []byte {
-	pauseMs := ds.PauseMs
+	pauseMs := ds.PauseMsMin
+	if ds.PauseMsMax > ds.PauseMsMin {
+		pauseMs = ds.PauseMsMin + rand.IntN(ds.PauseMsMax-ds.PauseMsMin+1) //nolint:gosec // not security-sensitive
+	}
 	pauseSamples := (pauseMs * wavFormat.sampleRate * wavFormat.numChannels) / 1000
 	pauseBytes := pauseSamples * wavFormat.bytesPerSample
 	silence := make([]byte, pauseBytes)
 
 	var toWrite []byte
 	if ds.CrossfadeMs > 0 && len(prevRaw) > 0 && len(currentRaw) > 0 {
+		bytesPerFrame := wavFormat.bytesPerSample * wavFormat.numChannels
 		crossfadeBytes := min(
-			(ds.CrossfadeMs*wavFormat.sampleRate*wavFormat.bytesPerSample*wavFormat.numChannels)/1000,
+			(ds.CrossfadeMs*wavFormat.sampleRate*bytesPerFrame)/1000,
 			len(prevRaw)/4,
 			len(currentRaw)/4,
 		)
-		crossfadeRegion := crossfadeWAVEqualPower(prevRaw[len(prevRaw)-crossfadeBytes:], currentRaw[:crossfadeBytes], wavFormat, ds.CrossfadeMs)
-		toWrite = make([]byte, len(silence)+len(crossfadeRegion)+len(currentRaw)-crossfadeBytes/2)
-		copy(toWrite, silence)
-		copy(toWrite[len(silence):], crossfadeRegion)
-		copy(toWrite[len(silence)+len(crossfadeRegion):], currentRaw[crossfadeBytes/2:])
+		// Align to sample boundary
+		crossfadeBytes = (crossfadeBytes / bytesPerFrame) * bytesPerFrame
+
+		if crossfadeBytes < bytesPerFrame {
+			// Too small for crossfade, just concatenate
+			toWrite = make([]byte, len(silence)+len(currentRaw))
+			copy(toWrite, silence)
+			copy(toWrite[len(silence):], currentRaw)
+		} else {
+			crossfadeRegion := crossfadeWAVEqualPower(prevRaw[len(prevRaw)-crossfadeBytes:], currentRaw[:crossfadeBytes], wavFormat, ds.CrossfadeMs)
+			// crossfadeRegion contains: (prev_tail - crossfade) + crossfaded + (next_head starting from crossfadeBytes/2)
+			// So we need: silence + crossfadeRegion + rest of currentRaw after crossfadeBytes/2
+			alignedCrossfadeBytes := crossfadeBytes / 2
+			alignedCrossfadeBytes = (alignedCrossfadeBytes / bytesPerFrame) * bytesPerFrame
+
+			toWrite = make([]byte, len(silence)+len(crossfadeRegion)+len(currentRaw)-alignedCrossfadeBytes)
+			copy(toWrite, silence)
+			copy(toWrite[len(silence):], crossfadeRegion)
+			copy(toWrite[len(silence)+len(crossfadeRegion):], currentRaw[alignedCrossfadeBytes:])
+		}
 	} else {
 		toWrite = make([]byte, len(silence)+len(currentRaw))
 		copy(toWrite, silence)
@@ -247,48 +271,106 @@ func (ds *DialogueSynthesizer) streamWAVSegment(prevRaw, currentRaw []byte, wavF
 	return toWrite
 }
 
+// parallelResult holds the output of a single parallel segment synthesis.
+type parallelResult struct {
+	index int
+	data  []byte
+	err   error
+}
+
+// synthesizeSegment synthesizes a single dialogue segment and sends the result to the channel.
+func (ds *DialogueSynthesizer) synthesizeSegment(ctx context.Context, idx int, s DialogueSegment, results chan<- parallelResult) {
+	select {
+	case <-ctx.Done():
+		results <- parallelResult{index: idx, err: ctx.Err()}
+		return
+	default:
+	}
+
+	voiceID, ok := ds.VoiceMap[s.Speaker]
+	if !ok {
+		results <- parallelResult{index: idx, err: fmt.Errorf("voice: no voice mapping for speaker %q", s.Speaker)}
+		return
+	}
+
+	stream, err := ds.Syn.Stream(ctx, s.Text, WithVoice(voiceID), WithFormat(ds.Format))
+	if err != nil {
+		results <- parallelResult{index: idx, err: fmt.Errorf("voice: failed to stream segment %d: %w", idx, err)}
+		return
+	}
+
+	data, err := io.ReadAll(stream)
+	if closeErr := stream.Close(); closeErr != nil {
+		slog.Warn("Failed to close stream", "error", closeErr)
+	}
+	if err != nil {
+		results <- parallelResult{index: idx, err: fmt.Errorf("voice: failed to read segment %d: %w", idx, err)}
+		return
+	}
+
+	results <- parallelResult{index: idx, data: data}
+}
+
+// writeOrderedSegments writes ordered audio segments to a pipe writer with crossfade and pause.
+func (ds *DialogueSynthesizer) writeOrderedSegments(writer *io.PipeWriter, orderedData [][]byte) {
+	defer writer.Close()
+
+	var (
+		prevRawAudio []byte
+		wavFormat    wavInfo
+		err          error
+	)
+
+	for i, data := range orderedData {
+		if ds.Format == "wav" {
+			if i == 0 {
+				wavFormat, err = parseWAVHeader(data)
+				if err != nil {
+					writer.CloseWithError(fmt.Errorf("voice: %w", err))
+					return
+				}
+				if _, err = writer.Write(data); err != nil {
+					writer.CloseWithError(err)
+					return
+				}
+				prevRawAudio = data[wavFormat.dataOffset:]
+				continue
+			}
+
+			currentRawAudio := data[wavFormat.dataOffset:]
+
+			toWrite := ds.streamWAVSegment(prevRawAudio, currentRawAudio, wavFormat)
+
+			if _, err = writer.Write(toWrite); err != nil {
+				writer.CloseWithError(err)
+				return
+			}
+			prevRawAudio = currentRawAudio
+		} else {
+			if _, err = writer.Write(data); err != nil {
+				writer.CloseWithError(err)
+				return
+			}
+		}
+	}
+}
+
 // StreamDialogueParallel generates audio for segments in parallel and streams them in order.
 func (ds *DialogueSynthesizer) StreamDialogueParallel(ctx context.Context, segments []DialogueSegment) (io.ReadCloser, error) {
 	if len(segments) == 0 {
 		return nil, errors.New("voice: no segments provided")
 	}
 
-	type result struct {
-		index int
-		data  []byte
-		err   error
-	}
-
-	results := make(chan result, len(segments))
+	results := make(chan parallelResult, len(segments))
 	var wg sync.WaitGroup
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	for i, seg := range segments {
 		wg.Add(1)
 		go func(idx int, s DialogueSegment) {
 			defer wg.Done()
-
-			voiceID, ok := ds.VoiceMap[s.Speaker]
-			if !ok {
-				results <- result{index: idx, err: fmt.Errorf("voice: no voice mapping for speaker %q", s.Speaker)}
-				return
-			}
-
-			stream, err := ds.Syn.Stream(ctx, s.Text, WithVoice(voiceID), WithFormat(ds.Format))
-			if err != nil {
-				results <- result{index: idx, err: fmt.Errorf("voice: failed to stream segment %d: %w", idx, err)}
-				return
-			}
-
-			data, err := io.ReadAll(stream)
-			if closeErr := stream.Close(); closeErr != nil {
-				slog.Warn("Failed to close stream", "error", closeErr)
-			}
-			if err != nil {
-				results <- result{index: idx, err: fmt.Errorf("voice: failed to read segment %d: %w", idx, err)}
-				return
-			}
-
-			results <- result{index: idx, data: data}
+			ds.synthesizeSegment(ctx, idx, s, results)
 		}(i, seg)
 	}
 
@@ -298,56 +380,24 @@ func (ds *DialogueSynthesizer) StreamDialogueParallel(ctx context.Context, segme
 	}()
 
 	orderedData := make([][]byte, len(segments))
+	var firstErr error
 	for res := range results {
 		if res.err != nil {
-			return nil, res.err
+			if firstErr == nil {
+				firstErr = res.err
+				cancel()
+			}
+			continue
 		}
 		orderedData[res.index] = res.data
 	}
 
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
 	reader, writer := io.Pipe()
-	go func() {
-		defer writer.Close()
-
-		var (
-			prevRawAudio []byte
-			wavFormat    wavInfo
-			err          error
-		)
-
-		for i, data := range orderedData {
-			if ds.Format == "wav" {
-				if i == 0 {
-					wavFormat, err = parseWAVHeader(data)
-					if err != nil {
-						writer.CloseWithError(fmt.Errorf("voice: %w", err))
-						return
-					}
-					if _, err = writer.Write(data); err != nil {
-						writer.CloseWithError(err)
-						return
-					}
-					prevRawAudio = data[wavFormat.dataOffset:]
-					continue
-				}
-
-				currentRawAudio := data[wavFormat.dataOffset:]
-
-				toWrite := ds.streamWAVSegment(prevRawAudio, currentRawAudio, wavFormat)
-
-				if _, err = writer.Write(toWrite); err != nil {
-					writer.CloseWithError(err)
-					return
-				}
-				prevRawAudio = currentRawAudio
-			} else {
-				if _, err = writer.Write(data); err != nil {
-					writer.CloseWithError(err)
-					return
-				}
-			}
-		}
-	}()
+	go ds.writeOrderedSegments(writer, orderedData)
 
 	return reader, nil
 }
