@@ -45,13 +45,15 @@ func run() error {
 	fmt.Println()
 
 	// Create captioned dialogue synthesizer
-	dialogueSyn := voice.NewDialogueSynthesizerCaptioned(captionedSyn, map[string]string{
+	dialogueSyn, err := voice.NewDialogueSynthesizerCaptioned(captionedSyn, map[string]string{
 		"Maya":  "af_bella(3)+af_heart(1)",
 		"Kenji": "am_adam",
 		"Alex":  "af_sky(3)+af_nicole(1)",
 	})
 	dialogueSyn.SpeedMap = map[string]float64{
-		"Alex":  1.1,
+	if err != nil {
+		return fmt.Errorf("failed to create captioned dialogue synthesizer: %w", err)
+	}		"Alex":  1.1,
 		"Maya":  1.05,
 		"Kenji": 1.00,
 	}
