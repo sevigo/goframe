@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	opencode "github.com/sst/opencode-sdk-go"
@@ -38,6 +40,8 @@ type Config struct {
 	Permissions *PermissionConfig
 	Hooks       *HookConfig
 	WorkingDir  string
+	// PathMapping maps host paths to container paths for Docker-based agents
+	PathMapping map[string]string
 	mcpRegistry *MCPRegistry
 	agents      map[string]AgentConfig
 	Tools       map[string]bool
@@ -83,6 +87,7 @@ func (a *Agent) NewSession(ctx context.Context, opts ...SessionOption) (*Session
 		opt(config)
 	}
 
+	// Determine the directory (default or explicit)
 	if config.Directory == "" {
 		a.mu.RLock()
 		workingDir := a.config.WorkingDir
@@ -94,6 +99,29 @@ func (a *Agent) NewSession(ctx context.Context, opts ...SessionOption) (*Session
 				return nil, fmt.Errorf("getting working directory: %w", err)
 			}
 			config.Directory = wd
+		}
+	}
+
+	// Apply path mapping for Docker-based agents (applies to both default and explicit directories)
+	a.mu.RLock()
+	pathMapping := a.config.PathMapping
+	a.mu.RUnlock()
+
+	for hostPath, containerPath := range pathMapping {
+		if hostPath == "" || containerPath == "" {
+			continue // Skip empty mappings
+		}
+		// Check for exact match or prefix match with path separator
+		// This prevents prefix collisions like /data matching /data-backup
+		if config.Directory == hostPath {
+			config.Directory = containerPath
+			break
+		}
+		sep := string(filepath.Separator)
+		if strings.HasPrefix(config.Directory, hostPath+sep) {
+			// Replace the prefix, preserving the rest of the path
+			config.Directory = containerPath + config.Directory[len(hostPath):]
+			break
 		}
 	}
 

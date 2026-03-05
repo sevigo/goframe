@@ -36,6 +36,7 @@ services:
       - "3000:3000"
     volumes:
       - .:/app/workspace
+      - ${AGENT_WORKSPACE_DIR:-${HOME}/sevigo/data/agent-workspaces}:/agent-workspaces
       - opencode_config:/root/.opencode
     environment:
       - OPENCODE_WORKING_DIR=/app/workspace
