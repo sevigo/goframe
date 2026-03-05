@@ -38,18 +38,22 @@ func run() error {
 	}
 
 	dialogueSyn := voice.NewDialogueSynthesizer(synthesizer, map[string]string{
-		"Case":     "am_adam",
-		"Molly":    "af_bella",
+		"Sarah":    "af_bella",
+		"James":    "am_adam",
 		"Narrator": "af_sky",
 	})
 
 	dialogue := []voice.DialogueSegment{
-		{Speaker: "Narrator", Text: "The neon lights flickered against the rain-slicked streets of Night City."},
-		{Speaker: "Case", Text: "I've seen things you people wouldn't believe. Attack ships on fire off the shoulder of Orion."},
-		{Speaker: "Molly", Text: "Time to die. But not today. Not when we have a job to do."},
-		{Speaker: "Case", Text: "The matrix was everywhere. It was all around us. It was the world that had been pulled over our eyes."},
-		{Speaker: "Molly", Text: "We're not in Kansas anymore. But then again, Kansas doesn't exist anymore either."},
-		{Speaker: "Narrator", Text: "And so they walked into the digital sunset, two shadows in a world of light."},
+		{Speaker: "Narrator", Text: "In a quiet coffee shop on a rainy afternoon, two old friends reunited after years apart."},
+		{Speaker: "Sarah", Text: "James! I can't believe it's really you. It's been what, five years?"},
+		{Speaker: "James", Text: "Six, actually. You look wonderful, Sarah. Time has been kind to you."},
+		{Speaker: "Sarah", Text: "Flatterer. But tell me, how have you been? The last I heard, you were off to Tokyo."},
+		{Speaker: "James", Text: "That expedition changed everything. The things I discovered there, the people I met. I learned that home isn't a place, it's the people you share it with."},
+		{Speaker: "Sarah", Text: "That's beautiful, James. You always had a way with words. So, what brings you back?"},
+		{Speaker: "James", Text: "I realized something important while I was away. There was unfinished business here. A conversation I never got to finish."},
+		{Speaker: "Sarah", Text: "You mean that day at the airport? James, I thought you'd forgotten."},
+		{Speaker: "James", Text: "I never forgot. Sarah, I came back to tell you what I should have said six years ago."},
+		{Speaker: "Narrator", Text: "As the rain continued to fall outside, the coffee shop grew warmer, and two hearts found their way back to each other."},
 	}
 
 	ctx := context.Background()
@@ -57,8 +61,8 @@ func run() error {
 
 	fmt.Println("Synthesizing dialogue with 3 voices:")
 	fmt.Println("  - Narrator: af_sky (American Female)")
-	fmt.Println("  - Case: am_adam (American Male)")
-	fmt.Println("  - Molly: af_bella (American Female)")
+	fmt.Println("  - Sarah: af_bella (American Female)")
+	fmt.Println("  - James: am_adam (American Male)")
 	fmt.Println()
 
 	stream, err := dialogueSyn.StreamDialogue(ctx, dialogue)
