@@ -56,6 +56,17 @@ func WithWorkingDir(dir string) Option {
 	}
 }
 
+// WithPathMapping configures path translation for Docker-based agents.
+// It maps host paths to container paths so that when the agent creates
+// a session, the directory is correctly translated for the container.
+// Example: {"~/sevigo/data/agent-workspaces": "/agent-workspaces"}
+func WithPathMapping(mapping map[string]string) Option {
+	return func(a *Agent) error {
+		a.config.PathMapping = mapping
+		return nil
+	}
+}
+
 func WithMCPServers(servers ...*MCPServer) Option {
 	return func(a *Agent) error {
 		if a.mcp == nil {

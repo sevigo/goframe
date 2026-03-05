@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 
 	opencode "github.com/sst/opencode-sdk-go"
@@ -38,6 +39,9 @@ type Config struct {
 	Permissions *PermissionConfig
 	Hooks       *HookConfig
 	WorkingDir  string
+	// PathMapping maps host paths to container paths for Docker-based agents
+	// e.g., {"/Users/igorkomlew/sevigo/data/agent-workspaces": "/agent-workspaces"}
+	PathMapping map[string]string
 	mcpRegistry *MCPRegistry
 	agents      map[string]AgentConfig
 	Tools       map[string]bool
@@ -86,6 +90,7 @@ func (a *Agent) NewSession(ctx context.Context, opts ...SessionOption) (*Session
 	if config.Directory == "" {
 		a.mu.RLock()
 		workingDir := a.config.WorkingDir
+		pathMapping := a.config.PathMapping
 		a.mu.RUnlock()
 		config.Directory = workingDir
 		if config.Directory == "" {
@@ -94,6 +99,15 @@ func (a *Agent) NewSession(ctx context.Context, opts ...SessionOption) (*Session
 				return nil, fmt.Errorf("getting working directory: %w", err)
 			}
 			config.Directory = wd
+		}
+		// Apply path mapping for Docker-based agents
+		if pathMapping != nil {
+			for hostPath, containerPath := range pathMapping {
+				if strings.HasPrefix(config.Directory, hostPath) {
+					config.Directory = strings.Replace(config.Directory, hostPath, containerPath, 1)
+					break
+				}
+			}
 		}
 	}
 
