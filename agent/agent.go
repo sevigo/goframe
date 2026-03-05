@@ -101,12 +101,10 @@ func (a *Agent) NewSession(ctx context.Context, opts ...SessionOption) (*Session
 			config.Directory = wd
 		}
 		// Apply path mapping for Docker-based agents
-		if pathMapping != nil {
-			for hostPath, containerPath := range pathMapping {
-				if strings.HasPrefix(config.Directory, hostPath) {
-					config.Directory = strings.Replace(config.Directory, hostPath, containerPath, 1)
-					break
-				}
+		for hostPath, containerPath := range pathMapping {
+			if strings.HasPrefix(config.Directory, hostPath) {
+				config.Directory = strings.Replace(config.Directory, hostPath, containerPath, 1)
+				break
 			}
 		}
 	}

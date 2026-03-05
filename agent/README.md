@@ -306,6 +306,48 @@ sessions, _ := ag.ListSessions(ctx)
 ag.DeleteSession(ctx, session.ID)
 ```
 
+### Docker Support and Path Mapping
+
+When running agents in Docker containers (like OpenCode), workspace directories on the host need to be translated to container paths. Use `WithPathMapping` to configure this translation:
+
+```go
+// Configure path mapping for Docker-based agents
+// Maps host paths to container paths
+pathMapping := map[string]string{
+    "/Users/igorkomlew/sevigo/data/agent-workspaces": "/agent-workspaces",
+}
+
+ag, err := agent.New(
+    agent.WithBaseURL("http://localhost:3000"),
+    agent.WithModel("ollama/qwen3.5:2b"),
+    agent.WithWorkingDir("/Users/igorkomlew/sevigo/data/agent-workspaces"),
+    agent.WithPathMapping(pathMapping),
+)
+
+// When creating a session, the directory is automatically translated
+session, err := ag.NewSession(ctx,
+    agent.WithTitle("Docker Agent Session"),
+    agent.WithDirectory("/Users/igorkomlew/sevigo/data/agent-workspaces/my-session"),
+)
+// The session will use "/agent-workspaces/my-session" inside the container
+```
+
+**Why this is needed:**
+- OpenCode runs in a Docker container with its own filesystem
+- When you specify a host directory, the agent needs to know the corresponding container path
+- Path mapping ensures files created/modified by the agent are persisted to the host
+
+**Docker Compose configuration:**
+```yaml
+opencode:
+  image: ghcr.io/anomalyco/opencode:latest
+  volumes:
+    - .:/app/workspace
+    - ~/sevigo/data/agent-workspaces:/agent-workspaces  # Mount host workspaces
+  environment:
+    - OPENCODE_WORKING_DIR=/app/workspace
+```
+
 ### Prompt Building
 
 ```go
@@ -508,6 +550,8 @@ The `docker-compose.yml` includes:
 | qdrant | qdrant/qdrant:v1.16.0 | 6333, 6334 | Vector database |
 | ollama | ollama/ollama:latest | 11434 | Local LLM inference |
 | opencode | ghcr.io/anomalyco/opencode:latest | 3000 | Agent API server |
+
+**Note:** OpenCode mounts agent workspaces to persist changes. See [Docker Support and Path Mapping](#docker-support-and-path-mapping) section.
 
 ### Environment Variables
 
