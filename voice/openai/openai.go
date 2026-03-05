@@ -421,9 +421,31 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 		return nil, s.parseError(resp)
 	}
 
+	// Read entire response body first to avoid partial read issues
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("openai: failed to read response body: %w", err)
+	}
+
+	// Debug: log response size
+	s.logger.Debug("captioned response body received",
+		"status", resp.StatusCode,
+		"content_length", resp.ContentLength,
+		"body_size", len(respBody),
+	)
+
 	// Parse JSON response with audio (base64) and timestamps
 	var capResp captionedResponse
-	if err := json.NewDecoder(resp.Body).Decode(&capResp); err != nil {
+	if err := json.Unmarshal(respBody, &capResp); err != nil {
+		// Log the actual response for debugging (first 500 chars)
+		preview := string(respBody)
+		if len(preview) > 500 {
+			preview = preview[:500] + "..."
+		}
+		s.logger.Error("failed to parse JSON response",
+			"error", err,
+			"response_preview", preview,
+		)
 		return nil, fmt.Errorf("openai: failed to parse captioned response: %w", err)
 	}
 
