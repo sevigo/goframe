@@ -348,8 +348,16 @@ type captionedSpeechRequest struct {
 
 // captionedResponse represents the JSON response from captioned speech synthesis.
 type captionedResponse struct {
-	Audio      string                `json:"audio"` // base64 encoded
-	Timestamps []voice.WordTimestamp `json:"timestamps"`
+	Audio       string                   `json:"audio"` // base64 encoded
+	AudioFormat string                   `json:"audio_format"`
+	Timestamps  []captionedWordTimestamp `json:"timestamps"`
+}
+
+// captionedWordTimestamp represents a single word timing from the API (in seconds).
+type captionedWordTimestamp struct {
+	Word      string  `json:"word"`
+	StartTime float64 `json:"start_time"` // in seconds
+	EndTime   float64 `json:"end_time"`   // in seconds
 }
 
 // SynthesizeCaptioned generates audio from text with word-level timestamps.
@@ -390,7 +398,8 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 	}
 
 	// Use /dev/captioned_speech endpoint for Kokoro-FastAPI
-	endpoint := s.baseURL + "/dev/captioned_speech"
+	// Note: This endpoint is at root level, not under /v1
+	endpoint := strings.TrimSuffix(s.baseURL, "/v1") + "/dev/captioned_speech"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("openai: failed to create request: %w", err)
@@ -417,22 +426,38 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 		return nil, fmt.Errorf("openai: failed to parse captioned response: %w", err)
 	}
 
+	// Debug: log what we received
+	s.logger.Debug("captioned response",
+		"audio_len", len(capResp.Audio),
+		"timestamps_count", len(capResp.Timestamps),
+	)
+
 	// Decode base64 audio
 	audioData, err := base64.StdEncoding.DecodeString(capResp.Audio)
 	if err != nil {
 		return nil, fmt.Errorf("openai: failed to decode base64 audio: %w", err)
 	}
 
+	// Convert timestamps from seconds to milliseconds
+	timestamps := make([]voice.WordTimestamp, len(capResp.Timestamps))
+	for i, ts := range capResp.Timestamps {
+		timestamps[i] = voice.WordTimestamp{
+			Word:    ts.Word,
+			StartMs: int(ts.StartTime * 1000), // Convert seconds to ms
+			EndMs:   int(ts.EndTime * 1000),   // Convert seconds to ms
+		}
+	}
+
 	// Calculate total duration from last timestamp
 	durationMs := 0
-	if len(capResp.Timestamps) > 0 {
-		durationMs = capResp.Timestamps[len(capResp.Timestamps)-1].EndMs
+	if len(timestamps) > 0 {
+		durationMs = timestamps[len(timestamps)-1].EndMs
 	}
 
 	return &voice.CaptionedAudio{
 		Data:       audioData,
 		Format:     options.Format,
-		Timestamps: capResp.Timestamps,
+		Timestamps: timestamps,
 		DurationMs: durationMs,
 	}, nil
 }
@@ -481,7 +506,8 @@ func (s *Synthesizer) StreamCaptioned(ctx context.Context, text string, opts ...
 	}
 
 	// Use /dev/captioned_speech endpoint for Kokoro-FastAPI
-	endpoint := s.baseURL + "/dev/captioned_speech"
+	// Note: This endpoint is at root level, not under /v1
+	endpoint := strings.TrimSuffix(s.baseURL, "/v1") + "/dev/captioned_speech"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("openai: failed to create request: %w", err)
