@@ -130,3 +130,23 @@ audio, err := synthesizer.Synthesize(ctx, text,
 - `flac`
 - `wav`
 - `pcm`
+
+## Testing Without API Credits
+
+For local testing without spending API credits, you can use a mock server or inspect the request payload:
+
+```go
+// Create a test server for verification
+synthesizer, err := openai.NewSynthesizer(
+    openai.WithBaseURL("http://localhost:8880/v1"),
+)
+// Verify requests are formatted correctly before hitting production
+```
+
+## Errors
+
+| Error | Description |
+|-------|-------------|
+| `ErrAPIKeyRequired` | API key required when using default OpenAI endpoint |
+| `openai: text cannot be empty` | Empty input text |
+| `openai: request failed with status N` | HTTP error from API |

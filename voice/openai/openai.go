@@ -22,6 +22,12 @@ const (
 	defaultFormat  = "mp3"
 )
 
+var (
+	ErrAPIKeyRequired = errors.New("openai: API key required for OpenAI endpoint")
+)
+
+var _ voice.Synthesizer = (*Synthesizer)(nil)
+
 type Synthesizer struct {
 	client  *http.Client
 	baseURL string
@@ -102,6 +108,12 @@ func NewSynthesizer(opts ...Option) (*Synthesizer, error) {
 		opt(s)
 	}
 
+	s.baseURL = strings.TrimSuffix(s.baseURL, "/")
+
+	if s.baseURL == defaultBaseURL && s.apiKey == "" {
+		return nil, ErrAPIKeyRequired
+	}
+
 	return s, nil
 }
 
@@ -110,7 +122,7 @@ func (s *Synthesizer) Synthesize(ctx context.Context, text string, opts ...voice
 		return nil, errors.New("openai: text cannot be empty")
 	}
 
-	options := &voice.Options{
+	options := &voice.SynthesizeOptions{
 		Model:  s.model,
 		Voice:  s.voice,
 		Format: s.format,

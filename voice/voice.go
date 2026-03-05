@@ -13,17 +13,17 @@ type Synthesizer interface {
 	Synthesize(ctx context.Context, text string, opts ...Option) (*Audio, error)
 }
 
-type Options struct {
+type SynthesizeOptions struct {
 	Model  string
 	Voice  string
 	Format string
 	Speed  float64
 }
 
-type Option func(*Options)
+type Option func(*SynthesizeOptions)
 
 func WithModel(model string) Option {
-	return func(o *Options) {
+	return func(o *SynthesizeOptions) {
 		if model != "" {
 			o.Model = model
 		}
@@ -31,7 +31,7 @@ func WithModel(model string) Option {
 }
 
 func WithVoice(voice string) Option {
-	return func(o *Options) {
+	return func(o *SynthesizeOptions) {
 		if voice != "" {
 			o.Voice = voice
 		}
@@ -39,7 +39,7 @@ func WithVoice(voice string) Option {
 }
 
 func WithFormat(format string) Option {
-	return func(o *Options) {
+	return func(o *SynthesizeOptions) {
 		if format != "" {
 			o.Format = format
 		}
@@ -47,7 +47,7 @@ func WithFormat(format string) Option {
 }
 
 func WithSpeed(speed float64) Option {
-	return func(o *Options) {
+	return func(o *SynthesizeOptions) {
 		if speed > 0 {
 			o.Speed = speed
 		}
