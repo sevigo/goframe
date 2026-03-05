@@ -30,6 +30,9 @@ type DialogueSynthesizer struct {
 	// For OpenAI: alloy, echo, fable, onyx, nova, shimmer.
 	// For Kokoro: af_bella, af_sky, am_adam, etc.
 	VoiceMap map[string]string
+	// SpeedMap maps speaker names to speech speed multipliers.
+	// Values typically range from 0.8 to 1.2. Speakers not in the map default to 1.0.
+	SpeedMap map[string]float64
 	// Format specifies the output audio format (e.g., "wav", "mp3").
 	// Default is "wav" for better concatenation support.
 	Format string
@@ -43,6 +46,9 @@ type DialogueSynthesizer struct {
 	// PauseMsMax specifies maximum pause duration between segments in milliseconds (default: 300ms).
 	// A random value between PauseMsMin and PauseMsMax is used for each segment transition.
 	PauseMsMax int
+	// NormalizeVolume enables peak volume normalization per segment (default: true).
+	// Ensures consistent loudness across different speakers/voices.
+	NormalizeVolume bool
 }
 
 // NewDialogueSynthesizer creates a new dialogue synthesizer.
@@ -50,19 +56,32 @@ type DialogueSynthesizer struct {
 // Crossfading is enabled by default (50ms) to smooth transitions between segments
 // using equal-power curves for constant perceived loudness.
 // Pause between segments is randomized between 200ms and 300ms by default.
+// Volume normalization is enabled by default.
 func NewDialogueSynthesizer(syn Synthesizer, voiceMap map[string]string, format ...string) *DialogueSynthesizer {
 	f := "wav"
 	if len(format) > 0 && format[0] != "" {
 		f = format[0]
 	}
 	return &DialogueSynthesizer{
-		Syn:         syn,
-		VoiceMap:    voiceMap,
-		Format:      f,
-		CrossfadeMs: 50,
-		PauseMsMin:  200,
-		PauseMsMax:  300,
+		Syn:             syn,
+		VoiceMap:        voiceMap,
+		Format:          f,
+		CrossfadeMs:     50,
+		PauseMsMin:      200,
+		PauseMsMax:      300,
+		NormalizeVolume: true,
 	}
+}
+
+// speakerSpeed returns the speed multiplier for a speaker, defaulting to 1.0.
+func (ds *DialogueSynthesizer) speakerSpeed(speaker string) float64 {
+	if ds.SpeedMap == nil {
+		return 1.0
+	}
+	if speed, ok := ds.SpeedMap[speaker]; ok {
+		return speed
+	}
+	return 1.0
 }
 
 // SynthesizeDialogue generates audio for all segments and returns individual audio files.
@@ -79,7 +98,7 @@ func (ds *DialogueSynthesizer) SynthesizeDialogue(ctx context.Context, segments 
 			return nil, fmt.Errorf("voice: no voice mapping for speaker %q", seg.Speaker)
 		}
 
-		audio, err := ds.Syn.Synthesize(ctx, seg.Text, WithVoice(voiceID), WithFormat(ds.Format))
+		audio, err := ds.Syn.Synthesize(ctx, seg.Text, WithVoice(voiceID), WithFormat(ds.Format), WithSpeed(ds.speakerSpeed(seg.Speaker)))
 		if err != nil {
 			return nil, fmt.Errorf("voice: failed to synthesize segment %d (speaker %q): %w", i, seg.Speaker, err)
 		}
@@ -168,7 +187,7 @@ func (ds *DialogueSynthesizer) StreamDialogue(ctx context.Context, segments []Di
 				return
 			}
 
-			stream, synErr := ds.Syn.Stream(ctx, seg.Text, WithVoice(voiceID), WithFormat(ds.Format))
+			stream, synErr := ds.Syn.Stream(ctx, seg.Text, WithVoice(voiceID), WithFormat(ds.Format), WithSpeed(ds.speakerSpeed(seg.Speaker)))
 			if synErr != nil {
 				writer.CloseWithError(fmt.Errorf("voice: failed to stream segment %d: %w", i, synErr))
 				return
@@ -190,6 +209,10 @@ func (ds *DialogueSynthesizer) StreamDialogue(ctx context.Context, segments []Di
 					writer.CloseWithError(fmt.Errorf("voice: %w", parseErr))
 					return
 				}
+			}
+
+			if ds.NormalizeVolume && ds.Format == "wav" {
+				normalizeWAVVolume(data, wavFormat)
 			}
 
 			segmentBuffer = append(segmentBuffer, data)
@@ -293,7 +316,7 @@ func (ds *DialogueSynthesizer) synthesizeSegment(ctx context.Context, idx int, s
 		return
 	}
 
-	stream, err := ds.Syn.Stream(ctx, s.Text, WithVoice(voiceID), WithFormat(ds.Format))
+	stream, err := ds.Syn.Stream(ctx, s.Text, WithVoice(voiceID), WithFormat(ds.Format), WithSpeed(ds.speakerSpeed(s.Speaker)))
 	if err != nil {
 		results <- parallelResult{index: idx, err: fmt.Errorf("voice: failed to stream segment %d: %w", idx, err)}
 		return
@@ -309,6 +332,52 @@ func (ds *DialogueSynthesizer) synthesizeSegment(ctx context.Context, idx int, s
 	}
 
 	results <- parallelResult{index: idx, data: data}
+}
+
+// normalizeWAVVolume normalizes the volume of WAV PCM data to a target peak level.
+// It scans all samples to find the peak amplitude, then applies gain to bring
+// the peak to targetPeak (0.95 = 95% of max, leaving headroom to avoid clipping).
+// Modifies data in-place. Only supports 16-bit PCM.
+func normalizeWAVVolume(data []byte, info wavInfo) {
+	if info.bitsPerSample != 16 || info.dataOffset >= len(data) {
+		return
+	}
+
+	pcmData := data[info.dataOffset:]
+	if len(pcmData) < 2 {
+		return
+	}
+
+	// Find peak amplitude.
+	var peak float64
+	for i := 0; i+1 < len(pcmData); i += 2 {
+		sample := math.Abs(float64(int16(binary.LittleEndian.Uint16(pcmData[i : i+2]))))
+		if sample > peak {
+			peak = sample
+		}
+	}
+
+	if peak < 1.0 {
+		return // silence, nothing to normalize
+	}
+
+	const targetPeak = 0.95
+	gain := (targetPeak * 32767.0) / peak
+	if gain >= 1.0 && gain < 1.01 {
+		return // already near target, skip to avoid unnecessary processing
+	}
+
+	// Apply gain to all samples.
+	for i := 0; i+1 < len(pcmData); i += 2 {
+		sample := float64(int16(binary.LittleEndian.Uint16(pcmData[i : i+2])))
+		normalized := sample * gain
+		if normalized > 32767 {
+			normalized = 32767
+		} else if normalized < -32768 {
+			normalized = -32768
+		}
+		binary.LittleEndian.PutUint16(pcmData[i:i+2], uint16(int16(normalized)))
+	}
 }
 
 // writeOrderedSegments writes ordered audio segments to a pipe writer with crossfade and pause.
@@ -329,6 +398,9 @@ func (ds *DialogueSynthesizer) writeOrderedSegments(writer *io.PipeWriter, order
 					writer.CloseWithError(fmt.Errorf("voice: %w", err))
 					return
 				}
+				if ds.NormalizeVolume {
+					normalizeWAVVolume(data, wavFormat)
+				}
 				if _, err = writer.Write(data); err != nil {
 					writer.CloseWithError(err)
 					return
@@ -338,6 +410,9 @@ func (ds *DialogueSynthesizer) writeOrderedSegments(writer *io.PipeWriter, order
 			}
 
 			currentRawAudio := data[wavFormat.dataOffset:]
+			if ds.NormalizeVolume {
+				normalizeWAVVolume(data, wavFormat)
+			}
 
 			toWrite := ds.streamWAVSegment(prevRawAudio, currentRawAudio, wavFormat)
 

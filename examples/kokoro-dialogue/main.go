@@ -42,6 +42,11 @@ func run() error {
 		"Kenji": "am_adam",
 		"Alex":  "af_sky",
 	})
+	dialogueSyn.SpeedMap = map[string]float64{
+		"Alex":  1.05, // slightly faster, energetic host
+		"Maya":  1.0,  // normal pace, warm storyteller
+		"Kenji": 0.95, // slightly slower, thoughtful guest
+	}
 
 	dialogue := []voice.DialogueSegment{
 		{Speaker: "Alex", Text: "Hey hey hey, welcome back to Cities That Never Sleep. I'm Alex, and oh boy, do we have a good one for you today."},
@@ -93,7 +98,7 @@ func run() error {
 	fmt.Println("  - Kenji: am_adam (American Male)")
 	fmt.Println()
 
-	stream, err := dialogueSyn.StreamDialogue(ctx, dialogue)
+	stream, err := dialogueSyn.StreamDialogueParallel(ctx, dialogue)
 	if err != nil {
 		return fmt.Errorf("failed to stream dialogue: %w", err)
 	}
