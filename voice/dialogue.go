@@ -322,6 +322,10 @@ func (ds *DialogueSynthesizer) StreamDialogue(ctx context.Context, segments []Di
 				prevRaw := segmentBuffer[i-1][wavFormat.dataOffset:]
 				currentRaw := segmentBuffer[i][wavFormat.dataOffset:]
 
+				// Normalize both segments before crossfade (fixes inconsistent normalization)
+				normalizeWAVVolume(segmentBuffer[i-1], wavFormat)
+				normalizeWAVVolume(segmentBuffer[i], wavFormat)
+
 				prevText := segments[i-1].Text
 				currText := segments[i].Text
 				toWrite := ds.streamWAVSegment(prevRaw, currentRaw, wavFormat, prevText, currText)
@@ -768,6 +772,19 @@ func (ds *DialogueSynthesizer) calculateContextualPause(prevText, currText strin
 		multiplier *= 0.6 // "Yeah", "Right", "Okay" need quick back-and-forth
 	case wordCount > 20:
 		multiplier *= 1.2 // Long sentences need more pause before them (processing)
+	}
+
+	// Factor 4: Same-speaker continuations need much shorter pauses
+	// This handles cases like Kenji's "Ten years." after his own long explanation
+	// We don't know the speaker here, so this would need to be passed in
+	// TODO: Add speaker parameter to enable same-speaker optimization
+
+	// Clamp multiplier to reasonable range to prevent overshoot
+	// Range [0.5, 1.8] ensures pauses stay proportional
+	if multiplier < 0.5 {
+		multiplier = 0.5
+	} else if multiplier > 1.8 {
+		multiplier = 1.8
 	}
 
 	// Calculate final pause with randomness for naturalness

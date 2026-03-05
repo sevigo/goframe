@@ -34,6 +34,76 @@ func concatenateCaptionedAudio(segments []CaptionedSegment, pauses []int, crossf
 		return nil, fmt.Errorf("failed to parse WAV header: %w", err)
 	}
 
+	// Normalize all segments first (consistent volume)
+	for _, seg := range segments {
+		if len(seg.Audio) > wavFormat.dataOffset {
+			normalizeWAVVolume(seg.Audio, wavFormat)
+		}
+	}
+
+	// Build result: start with first segment (includes WAV header)
+	var result bytes.Buffer
+	result.Write(segments[0].Audio)
+
+	// Track previous raw audio for crossfading
+	prevRaw := segments[0].Audio[wavFormat.dataOffset:]
+
+	// Add subsequent segments with pauses and crossfade
+	for i := 1; i < len(segments); i++ {
+		currentRaw := segments[i].Audio[wavFormat.dataOffset:]
+
+		// Insert pause silence
+		if i-1 < len(pauses) && pauses[i-1] > 0 {
+			pauseBytes := calculatePauseBytes(pauses[i-1], wavFormat)
+			silence := make([]byte, pauseBytes)
+			result.Write(silence)
+		}
+
+		// Apply crossfade if enabled and we have enough audio
+		// Match the logic from streamWAVSegment in dialogue.go
+		if crossfadeMs > 0 && len(prevRaw) > 0 && len(currentRaw) > 0 {
+			bytesPerFrame := wavFormat.bytesPerSample * wavFormat.numChannels
+			crossfadeBytes := (crossfadeMs * wavFormat.sampleRate * bytesPerFrame) / 1000
+			crossfadeBytes = min(crossfadeBytes, len(prevRaw)/4, len(currentRaw)/4)
+			crossfadeBytes = (crossfadeBytes / bytesPerFrame) * bytesPerFrame
+
+			if crossfadeBytes >= bytesPerFrame {
+				// Crossfade the end of previous with start of current
+				crossfadeRegion := crossfadeWAVEqualPower(
+					prevRaw[len(prevRaw)-crossfadeBytes:],
+					currentRaw[:crossfadeBytes],
+					wavFormat,
+					crossfadeMs,
+				)
+				// Write crossfaded region (contains blended overlap)
+				result.Write(crossfadeRegion)
+				// Write the rest of current segment (after crossfade region)
+				// Note: crossfadeRegion contains (prev_tail - crossfade) + crossfaded + part_of_next
+				// So we need to continue from middle of current
+				result.Write(currentRaw[crossfadeBytes/2:])
+			} else {
+				result.Write(currentRaw)
+			}
+		} else {
+			result.Write(currentRaw)
+		}
+
+		prevRaw = currentRaw
+	}
+
+	return result.Bytes(), nil
+}
+
+	if len(segments) == 1 {
+		return segments[0].Audio, nil
+	}
+
+	// Parse first segment to get WAV format
+	wavFormat, err := parseWAVHeader(segments[0].Audio)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse WAV header: %w", err)
+	}
+
 	// Build result: start with first segment (includes WAV header)
 	var result bytes.Buffer
 	result.Write(segments[0].Audio)

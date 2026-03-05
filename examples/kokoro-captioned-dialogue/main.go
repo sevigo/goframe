@@ -173,11 +173,13 @@ func run() error {
 	fmt.Printf("\n✓ Audio saved to: %s (%d bytes)\n", audioFile, len(result.Audio))
 
 	// Speech rate analysis
-	aliceWPM := voice.AnalyzeSpeechRate(filterSegments(result.Segments, "Alice"))
-	bobWPM := voice.AnalyzeSpeechRate(filterSegments(result.Segments, "Bob"))
+	aliceWPM := voice.AnalyzeSpeechRate(filterSegments(result.Segments, "Alex"))
+	mayaWPM := voice.AnalyzeSpeechRate(filterSegments(result.Segments, "Maya"))
+	kenjiWPM := voice.AnalyzeSpeechRate(filterSegments(result.Segments, "Kenji"))
 	fmt.Printf("\nSpeech Rate Analysis:\n")
-	fmt.Printf("  Alice: %.0f words/min\n", aliceWPM)
-	fmt.Printf("  Bob:   %.0f words/min\n", bobWPM)
+	fmt.Printf("  Alex:  %.0f words/min\n", aliceWPM)
+	fmt.Printf("  Maya:  %.0f words/min\n", mayaWPM)
+	fmt.Printf("  Kenji: %.0f words/min\n", kenjiWPM)
 
 	fmt.Println("\nPlay with: ffplay dialogue_captioned.wav")
 	fmt.Println("Subtitles: ffplay dialogue_captioned.wav -vf subtitles=dialogue.srt")
