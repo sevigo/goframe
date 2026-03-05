@@ -74,14 +74,22 @@ func NewDialogueSynthesizer(syn Synthesizer, voiceMap map[string]string, format 
 }
 
 // speakerSpeed returns the speed multiplier for a speaker, defaulting to 1.0.
+// Values are clamped to the valid API range of 0.25 to 4.0.
 func (ds *DialogueSynthesizer) speakerSpeed(speaker string) float64 {
 	if ds.SpeedMap == nil {
 		return 1.0
 	}
-	if speed, ok := ds.SpeedMap[speaker]; ok {
-		return speed
+	speed, ok := ds.SpeedMap[speaker]
+	if !ok {
+		return 1.0
 	}
-	return 1.0
+	if speed < 0.25 {
+		return 0.25
+	}
+	if speed > 4.0 {
+		return 4.0
+	}
+	return speed
 }
 
 // SynthesizeDialogue generates audio for all segments and returns individual audio files.
