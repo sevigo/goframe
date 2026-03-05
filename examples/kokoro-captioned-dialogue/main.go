@@ -27,7 +27,7 @@ func main() {
 	}
 }
 
-func run() error {
+func run() error { //nolint:funlen // Example code demonstrating dialogue synthesis
 	// Create synthesizer - it implements CaptionedSynthesizer interface
 	synthesizer, err := openai.NewSynthesizer(
 		openai.WithBaseURL("http://localhost:8880/v1"),
@@ -127,16 +127,16 @@ func run() error {
 		// Show first few word timestamps
 		if len(seg.Timestamps) > 0 {
 			fmt.Printf("  Timestamps:\n")
-			max := 5
-			if len(seg.Timestamps) < max {
-				max = len(seg.Timestamps)
+			displayCount := 5
+			if len(seg.Timestamps) < displayCount {
+				displayCount = len(seg.Timestamps)
 			}
-			for j := 0; j < max; j++ {
+			for j := range displayCount {
 				ts := seg.Timestamps[j]
 				fmt.Printf("    [%d-%dms] %s\n", ts.StartMs, ts.EndMs, ts.Word)
 			}
-			if len(seg.Timestamps) > max {
-				fmt.Printf("    ... and %d more words\n", len(seg.Timestamps)-max)
+			if len(seg.Timestamps) > displayCount {
+				fmt.Printf("    ... and %d more words\n", len(seg.Timestamps)-displayCount)
 			}
 		}
 	}
@@ -144,7 +144,7 @@ func run() error {
 	// Show pause calculations
 	fmt.Println("\nPause Analysis:")
 	fmt.Println("────────────────────────────────────────────────────────")
-	for i := 0; i < len(result.Segments)-1; i++ {
+	for i := range len(result.Segments) - 1 {
 		pause := result.Segments[i+1].StartMs - result.Segments[i].EndMs
 		fmt.Printf("After \"%s\": %dms pause (target: %dms)\n",
 			result.Segments[i].Text, pause, dialogueSyn.TargetPauseMs)
@@ -153,7 +153,7 @@ func run() error {
 	// Save subtitles
 	if result.Subtitles != "" {
 		subtitleFile := "dialogue.srt"
-		if err := os.WriteFile(subtitleFile, []byte(result.Subtitles), 0644); err != nil {
+		if err := os.WriteFile(subtitleFile, []byte(result.Subtitles), 0600); err != nil {
 			return fmt.Errorf("failed to save subtitles: %w", err)
 		}
 		fmt.Printf("\n✓ Subtitles saved to: %s\n", subtitleFile)
@@ -167,7 +167,7 @@ func run() error {
 
 	// Save audio
 	audioFile := "dialogue_captioned.wav"
-	if err := os.WriteFile(audioFile, result.Audio, 0644); err != nil {
+	if err := os.WriteFile(audioFile, result.Audio, 0600); err != nil {
 		return fmt.Errorf("failed to save audio: %w", err)
 	}
 	fmt.Printf("\n✓ Audio saved to: %s (%d bytes)\n", audioFile, len(result.Audio))

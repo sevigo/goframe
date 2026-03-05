@@ -374,7 +374,7 @@ type captionedWordTimestamp struct {
 //	for _, ts := range audio.Timestamps {
 //	    fmt.Printf("%d-%dms: %s\n", ts.StartMs, ts.EndMs, ts.Word)
 //	}
-func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts ...voice.Option) (*voice.CaptionedAudio, error) {
+func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts ...voice.Option) (*voice.CaptionedAudio, error) { //nolint:funlen // Single API call with comprehensive error handling
 	if strings.TrimSpace(text) == "" {
 		return nil, errors.New("openai: text cannot be empty")
 	}
