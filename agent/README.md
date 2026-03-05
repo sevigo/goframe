@@ -314,20 +314,20 @@ When running agents in Docker containers (like OpenCode), workspace directories 
 // Configure path mapping for Docker-based agents
 // Maps host paths to container paths
 pathMapping := map[string]string{
-    "/Users/igorkomlew/sevigo/data/agent-workspaces": "/agent-workspaces",
+    "/home/user/agent-workspaces": "/agent-workspaces",
 }
 
 ag, err := agent.New(
     agent.WithBaseURL("http://localhost:3000"),
     agent.WithModel("ollama/qwen3.5:2b"),
-    agent.WithWorkingDir("/Users/igorkomlew/sevigo/data/agent-workspaces"),
+    agent.WithWorkingDir("/home/user/agent-workspaces"),
     agent.WithPathMapping(pathMapping),
 )
 
 // When creating a session, the directory is automatically translated
 session, err := ag.NewSession(ctx,
     agent.WithTitle("Docker Agent Session"),
-    agent.WithDirectory("/Users/igorkomlew/sevigo/data/agent-workspaces/my-session"),
+    agent.WithDirectory("/home/user/agent-workspaces/my-session"),
 )
 // The session will use "/agent-workspaces/my-session" inside the container
 ```
@@ -343,7 +343,7 @@ opencode:
   image: ghcr.io/anomalyco/opencode:latest
   volumes:
     - .:/app/workspace
-    - ~/sevigo/data/agent-workspaces:/agent-workspaces  # Mount host workspaces
+    - ${AGENT_WORKSPACE_DIR:-./workspaces}:/agent-workspaces  # Mount host workspaces
   environment:
     - OPENCODE_WORKING_DIR=/app/workspace
 ```

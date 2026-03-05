@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	opencode "github.com/sst/opencode-sdk-go"
 	"github.com/sst/opencode-sdk-go/option"
@@ -59,9 +62,17 @@ func WithWorkingDir(dir string) Option {
 // WithPathMapping configures path translation for Docker-based agents.
 // It maps host paths to container paths so that when the agent creates
 // a session, the directory is correctly translated for the container.
-// Example: {"~/sevigo/data/agent-workspaces": "/agent-workspaces"}
+// Example: {"/home/user/agent-workspaces": "/agent-workspaces"}
 func WithPathMapping(mapping map[string]string) Option {
 	return func(a *Agent) error {
+		for hostPath, containerPath := range mapping {
+			if hostPath == "" || containerPath == "" {
+				return errors.New("path mapping values cannot be empty")
+			}
+			if !filepath.IsAbs(hostPath) || !filepath.IsAbs(containerPath) {
+				return fmt.Errorf("path mapping must use absolute paths: %s -> %s", hostPath, containerPath)
+			}
+		}
 		a.config.PathMapping = mapping
 		return nil
 	}
