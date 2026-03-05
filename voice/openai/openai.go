@@ -25,6 +25,7 @@ package openai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,8 +53,9 @@ var (
 	ErrAPIKeyRequired = errors.New("openai: API key required for OpenAI endpoint")
 )
 
-// Compile-time interface check.
+// Compile-time interface checks.
 var _ voice.Synthesizer = (*Synthesizer)(nil)
+var _ voice.CaptionedSynthesizer = (*Synthesizer)(nil)
 
 // Synthesizer implements voice.Synthesizer using an OpenAI-compatible API.
 // It supports both buffered synthesis (Synthesize) and streaming (Stream) modes.
@@ -331,4 +333,175 @@ type speechRequest struct {
 	Voice          string  `json:"voice"`
 	ResponseFormat string  `json:"response_format"`
 	Speed          float64 `json:"speed,omitempty"`
+}
+
+// captionedSpeechRequest represents the JSON request body for captioned TTS API.
+type captionedSpeechRequest struct {
+	Model            string  `json:"model"`
+	Input            string  `json:"input"`
+	Voice            string  `json:"voice"`
+	ResponseFormat   string  `json:"response_format"`
+	Speed            float64 `json:"speed,omitempty"`
+	ReturnTimestamps bool    `json:"return_timestamps,omitempty"`
+	Stream           bool    `json:"stream,omitempty"`
+}
+
+// captionedResponse represents the JSON response from captioned speech synthesis.
+type captionedResponse struct {
+	Audio      string                `json:"audio"` // base64 encoded
+	Timestamps []voice.WordTimestamp `json:"timestamps"`
+}
+
+// SynthesizeCaptioned generates audio from text with word-level timestamps.
+// This uses the /dev/captioned_speech endpoint which returns both audio data
+// and timing information for each word.
+//
+// This method is only supported by providers that implement the captioned speech
+// endpoint (e.g., Kokoro-FastAPI). OpenAI's standard API does not support this.
+//
+// Example:
+//
+//	audio, err := synth.SynthesizeCaptioned(ctx, "Hello world", opts...)
+//	for _, ts := range audio.Timestamps {
+//	    fmt.Printf("%d-%dms: %s\n", ts.StartMs, ts.EndMs, ts.Word)
+//	}
+func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts ...voice.Option) (*voice.CaptionedAudio, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, errors.New("openai: text cannot be empty")
+	}
+
+	options := s.buildOptions(opts)
+
+	reqBody := &captionedSpeechRequest{
+		Model:            options.Model,
+		Input:            text,
+		Voice:            options.Voice,
+		ResponseFormat:   options.Format,
+		ReturnTimestamps: true,
+		Stream:           false,
+	}
+	if options.Speed > 0 {
+		reqBody.Speed = options.Speed
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("openai: failed to marshal request: %w", err)
+	}
+
+	// Use /dev/captioned_speech endpoint for Kokoro-FastAPI
+	endpoint := s.baseURL + "/dev/captioned_speech"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("openai: failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if s.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+s.apiKey)
+	}
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("openai: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, s.parseError(resp)
+	}
+
+	// Parse JSON response with audio (base64) and timestamps
+	var capResp captionedResponse
+	if err := json.NewDecoder(resp.Body).Decode(&capResp); err != nil {
+		return nil, fmt.Errorf("openai: failed to parse captioned response: %w", err)
+	}
+
+	// Decode base64 audio
+	audioData, err := base64.StdEncoding.DecodeString(capResp.Audio)
+	if err != nil {
+		return nil, fmt.Errorf("openai: failed to decode base64 audio: %w", err)
+	}
+
+	// Calculate total duration from last timestamp
+	durationMs := 0
+	if len(capResp.Timestamps) > 0 {
+		durationMs = capResp.Timestamps[len(capResp.Timestamps)-1].EndMs
+	}
+
+	return &voice.CaptionedAudio{
+		Data:       audioData,
+		Format:     options.Format,
+		Timestamps: capResp.Timestamps,
+		DurationMs: durationMs,
+	}, nil
+}
+
+// StreamCaptioned generates captioned audio with word-level timestamps as a stream.
+// Each chunk in the stream is a JSON object containing base64-encoded audio and timestamps.
+//
+// This method requires a provider that supports the /dev/captioned_speech endpoint
+// with streaming enabled (e.g., Kokoro-FastAPI).
+//
+// Example:
+//
+//	stream, err := synth.StreamCaptioned(ctx, longText, opts...)
+//	defer stream.Close()
+//	decoder := json.NewDecoder(stream)
+//	for {
+//	    var chunk voice.CaptionedChunk
+//	    if err := decoder.Decode(&chunk); err != nil {
+//	        if err == io.EOF { break }
+//	        return err
+//	    }
+//	    // Process chunk.Audio and chunk.Timestamps
+//	}
+func (s *Synthesizer) StreamCaptioned(ctx context.Context, text string, opts ...voice.Option) (io.ReadCloser, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, errors.New("openai: text cannot be empty")
+	}
+
+	options := s.buildOptions(opts)
+
+	reqBody := &captionedSpeechRequest{
+		Model:            options.Model,
+		Input:            text,
+		Voice:            options.Voice,
+		ResponseFormat:   options.Format,
+		ReturnTimestamps: true,
+		Stream:           true,
+	}
+	if options.Speed > 0 {
+		reqBody.Speed = options.Speed
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("openai: failed to marshal request: %w", err)
+	}
+
+	// Use /dev/captioned_speech endpoint for Kokoro-FastAPI
+	endpoint := s.baseURL + "/dev/captioned_speech"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("openai: failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if s.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+s.apiKey)
+	}
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("openai: request failed: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		return nil, s.parseError(resp)
+	}
+
+	// Return the response body as a stream of JSON objects
+	return resp.Body, nil
 }
