@@ -152,6 +152,33 @@ audio, err := synthesizer.Synthesize(ctx, text,
 
 ## Examples
 
+### Multi-Speaker Dialogue
+
+Generate dialogue with multiple speakers using different voices:
+
+```go
+import "github.com/sevigo/goframe/voice"
+
+synthesizer, _ := openai.NewSynthesizer(
+    openai.WithBaseURL("http://localhost:8880/v1"),
+    openai.WithModel("kokoro"),
+)
+
+dialogueSyn := voice.NewDialogueSynthesizer(synthesizer, map[string]string{
+    "Alice": "af_bella",
+    "Bob":   "am_adam",
+})
+
+dialogue := []voice.DialogueSegment{
+    {Speaker: "Alice", Text: "Hello, how are you?"},
+    {Speaker: "Bob", Text: "I'm doing great, thanks for asking!"},
+}
+
+stream, _ := dialogueSyn.StreamDialogue(ctx, dialogue)
+defer stream.Close()
+io.Copy(outputFile, stream)
+```
+
 ### Streaming with Progress
 
 See `examples/kokoro-streaming/main.go` for a streaming example with real-time progress:
@@ -166,6 +193,14 @@ See `examples/kokoro-tts/main.go` for generating audio with multiple voices:
 
 ```bash
 go run ./examples/kokoro-tts/main.go
+```
+
+### Dialogue Synthesis
+
+See `examples/kokoro-dialogue/main.go` for multi-speaker dialogue generation:
+
+```bash
+go run ./examples/kokoro-dialogue/main.go
 ```
 
 ## Testing Without API Credits
