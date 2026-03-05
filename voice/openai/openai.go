@@ -344,6 +344,7 @@ type captionedSpeechRequest struct {
 	Speed            float64 `json:"speed,omitempty"`
 	ReturnTimestamps bool    `json:"return_timestamps,omitempty"`
 	Stream           bool    `json:"stream,omitempty"`
+	LangCode         string  `json:"lang_code,omitempty"`
 }
 
 // captionedResponse represents the JSON response from captioned speech synthesis.

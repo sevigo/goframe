@@ -322,10 +322,7 @@ func (ds *DialogueSynthesizer) StreamDialogue(ctx context.Context, segments []Di
 				prevRaw := segmentBuffer[i-1][wavFormat.dataOffset:]
 				currentRaw := segmentBuffer[i][wavFormat.dataOffset:]
 
-				// Normalize both segments before crossfade (fixes inconsistent normalization)
-				normalizeWAVVolume(segmentBuffer[i-1], wavFormat)
-				normalizeWAVVolume(segmentBuffer[i], wavFormat)
-
+				// Segments already normalized during initial buffering (lines 306-308)
 				prevText := segments[i-1].Text
 				currText := segments[i].Text
 				toWrite := ds.streamWAVSegment(prevRaw, currentRaw, wavFormat, prevText, currText)
