@@ -46,7 +46,7 @@ type DialogueSynthesizerCaptioned struct {
 	GenerateSubtitles bool
 }
 
-// NewDialogueSynthesizerCaptioned creates a new captioned dialogue synthesizer.
+// NewDialogueSynthesizerCaptioned creates a new captioned dialogue synthesizer for multi-speaker audio generation.
 // The synthesizer uses word-level timestamps for perfect pause calculation
 // and optional subtitle generation.
 //
@@ -56,14 +56,23 @@ type DialogueSynthesizerCaptioned struct {
 // The format defaults to "wav" which preserves quality through multiple processing steps.
 // For subtitle generation and timestamp analysis, WAV is strongly recommended.
 //
+// Returns an error if the synthesizer is nil or voiceMap is empty.
+//
 // Example:
 //
 //	syn, _ := openai.NewSynthesizer(openai.WithBaseURL("http://localhost:8880/v1"))
-//	ds := voice.NewDialogueSynthesizerCaptioned(syn, map[string]string{
+//	ds, err := voice.NewDialogueSynthesizerCaptioned(syn, map[string]string{
 //	    "Alice": "af_bella",
 //	    "Bob":   "am_adam",
 //	})
-func NewDialogueSynthesizerCaptioned(syn CaptionedSynthesizer, voiceMap map[string]string, format ...string) *DialogueSynthesizerCaptioned {
+func NewDialogueSynthesizerCaptioned(syn CaptionedSynthesizer, voiceMap map[string]string, format ...string) (*DialogueSynthesizerCaptioned, error) {
+	if syn == nil {
+		return nil, errors.New("voice: synthesizer cannot be nil")
+	}
+	if len(voiceMap) == 0 {
+		return nil, errors.New("voice: voiceMap cannot be empty")
+	}
+
 	f := "wav"
 	if len(format) > 0 && format[0] != "" {
 		f = format[0]
@@ -76,7 +85,7 @@ func NewDialogueSynthesizerCaptioned(syn CaptionedSynthesizer, voiceMap map[stri
 		TargetPauseMs:     250,
 		NormalizeVolume:   true,
 		GenerateSubtitles: true,
-	}
+	}, nil
 }
 
 // speakerSpeed returns the speed multiplier for a speaker, defaulting to 1.0.
@@ -241,12 +250,12 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 	for i, seg := range segments {
 		voiceID, ok := ds.VoiceMap[seg.Speaker]
 		if !ok {
-			return nil, fmt.Errorf("voice: no voice mapping for speaker %q", seg.Speaker)
+			return nil, fmt.Errorf("voice: no voice mapping for speaker %q (segment %d)", seg.Speaker, i)
 		}
 
 		audio, err := ds.Syn.SynthesizeCaptioned(ctx, seg.Text, WithVoice(voiceID), WithFormat(ds.Format), WithSpeed(ds.speakerSpeed(seg.Speaker)))
 		if err != nil {
-			return nil, fmt.Errorf("voice: failed to synthesize segment %d: %w", i, err)
+			return nil, fmt.Errorf("voice: failed to synthesize segment %d for speaker %q: %w", i, seg.Speaker, err)
 		}
 
 		// Calculate timing details
@@ -311,9 +320,9 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 
 // GenerateSRT creates SRT-format subtitles from captioned segments.
 // This automatically generates perfectly timed subtitles without manual adjustment.
+// This is a convenience method that wraps the internal generateSRT function.
 func (ds *DialogueSynthesizerCaptioned) GenerateSRT(segments []CaptionedSegment) string {
-	// TODO: Implement SRT generation from timestamps
-	return ""
+	return generateSRT(segments)
 }
 
 // AnalyzeSpeechRate calculates words per minute for a speaker.
