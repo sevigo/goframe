@@ -459,17 +459,17 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 
 	// Parse JSON response with audio (base64) and timestamps
 	var capResp captionedResponse
-	if err := json.Unmarshal(jsonBody, &capResp); err != nil {
+	if unmarshalErr := json.Unmarshal(jsonBody, &capResp); unmarshalErr != nil {
 		// Log the actual response for debugging (first 500 chars)
 		preview := string(jsonBody)
 		if len(preview) > 500 {
 			preview = preview[:500] + "..."
 		}
 		s.logger.Error("failed to parse JSON response",
-			"error", err,
+			"error", unmarshalErr,
 			"response_preview", preview,
 		)
-		return nil, fmt.Errorf("openai: failed to parse captioned response: %w", err)
+		return nil, fmt.Errorf("openai: failed to parse captioned response: %w", unmarshalErr)
 	}
 
 	// Debug: log what we received

@@ -406,6 +406,8 @@ voice/
 - `SynthesizeCaptioned(ctx, text, opts)` - Audio + word timing information
 - `StreamCaptioned(ctx, text, opts)` - Stream audio + timing incrementally
 
+**Note**: `DialogueSynthesizerCaptioned.StreamDialogueCaptioned()` is not yet implemented because timestamp-based pause calculation requires buffering all segments. For streaming dialogue synthesis, use `DialogueSynthesizer.StreamDialogueParallel()` instead.
+
 **`voice.DialogueSynthesizer`** - Multi-speaker dialogue synthesis
 - `StreamDialogue(ctx, segments)` - Sequential synthesis
 - `StreamDialogueParallel(ctx, segments)` - Parallel synthesis (faster)
@@ -433,7 +435,7 @@ type CaptionedAudio struct {
 
 ### Word-Level Timestamps (Kokoro-FastAPI)
 
-For providers that support captioned synthesis, you can get precise word timing:
+For providers that support captioned synthesis (currently Kokoro-FastAPI), you can get precise word timing:
 
 ```go
 // Check if synthesizer supports captions
@@ -456,6 +458,8 @@ if cs, ok := synthesizer.(voice.CaptionedSynthesizer); ok {
 - ✅ Analyze speech rate per speaker
 - ✅ Create chapter markers for podcasts
 - ✅ Perfect synchronization for background audio
+
+**Limitation**: Captioned dialogue synthesis (`DialogueSynthesizerCaptioned`) does not support streaming. This is because calculating perfect pauses requires buffering all segments to detect built-in silence. For streaming dialogue, use heuristic-based `DialogueSynthesizer` instead.
 
 ### Subtitle Generation
 

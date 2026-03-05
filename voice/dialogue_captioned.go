@@ -229,6 +229,22 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 	)
 
 	// Synthesize all segments with timestamps
+	captionedSegments, err := ds.synthesizeAllSegments(ctx, segments, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	logger.Info("all segments synthesized, calculating pauses")
+
+	// Calculate perfect pauses between segments
+	pauses := ds.calculateAllPauses(captionedSegments, logger)
+
+	// Assemble final dialogue
+	return ds.assembleDialogue(captionedSegments, pauses, logger)
+}
+
+// synthesizeAllSegments synthesizes all dialogue segments with timestamps.
+func (ds *DialogueSynthesizerCaptioned) synthesizeAllSegments(ctx context.Context, segments []DialogueSegment, logger *slog.Logger) ([]CaptionedSegment, error) {
 	captionedSegments := make([]CaptionedSegment, 0, len(segments))
 	for i, seg := range segments {
 		voiceID, ok := ds.VoiceMap[seg.Speaker]
@@ -301,17 +317,18 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 			LeadingSilenceMs:  leadingSilence,
 		})
 	}
+	return captionedSegments, nil
+}
 
-	logger.Info("all segments synthesized, calculating pauses")
-
-	// Calculate perfect pauses between segments
+// calculateAllPauses calculates pauses between all segments.
+func (ds *DialogueSynthesizerCaptioned) calculateAllPauses(segments []CaptionedSegment, logger *slog.Logger) []int {
 	pauses := make([]int, len(segments)-1)
-	for i := 0; i < len(segments)-1; i++ {
-		pause := ds.CalculatePerfectPause(&captionedSegments[i], &captionedSegments[i+1])
+	for i := range len(segments) - 1 {
+		pause := ds.CalculatePerfectPause(&segments[i], &segments[i+1])
 		pauses[i] = pause
 
-		prev := &captionedSegments[i]
-		curr := &captionedSegments[i+1]
+		prev := &segments[i]
+		curr := &segments[i+1]
 
 		// Log pause calculation details
 		prevTrailingCapped := prev.TrailingSilenceMs
@@ -336,15 +353,19 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 			"curr_text_preview", truncateText(curr.Text, 30),
 		)
 	}
+	return pauses
+}
 
+// assembleDialogue assembles the final dialogue audio and metadata.
+func (ds *DialogueSynthesizerCaptioned) assembleDialogue(segments []CaptionedSegment, pauses []int, logger *slog.Logger) (*CaptionedDialogueResult, error) {
 	logger.Info("concatenating audio",
-		"segments", len(captionedSegments),
+		"segments", len(segments),
 		"pauses", len(pauses),
 		"crossfade_ms", ds.CrossfadeMs,
 	)
 
 	// Concatenate audio with perfect pauses
-	audioData, err := concatenateCaptionedAudio(captionedSegments, pauses, ds.CrossfadeMs)
+	audioData, err := concatenateCaptionedAudio(segments, pauses, ds.CrossfadeMs)
 	if err != nil {
 		return nil, fmt.Errorf("voice: failed to concatenate audio: %w", err)
 	}
@@ -356,7 +377,7 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 	// Generate subtitles if enabled
 	subtitles := ""
 	if ds.GenerateSubtitles {
-		subtitles = generateSRT(captionedSegments)
+		subtitles = generateSRT(segments)
 		logger.Debug("subtitles generated",
 			"subtitle_len", len(subtitles),
 		)
@@ -364,7 +385,7 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 
 	// Calculate total duration
 	totalDuration := 0
-	for _, seg := range captionedSegments {
+	for _, seg := range segments {
 		totalDuration += seg.DurationMs
 	}
 	for _, pause := range pauses {
@@ -374,7 +395,7 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 	logger.Info("dialogue synthesis complete",
 		"total_duration_ms", totalDuration,
 		"total_duration_sec", totalDuration/1000,
-		"total_words", countTotalWords(captionedSegments),
+		"total_words", countTotalWords(segments),
 		"total_pauses", len(pauses),
 		"avg_pause_ms", averagePause(pauses),
 	)
@@ -382,7 +403,7 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 	result := &CaptionedDialogueResult{
 		Audio:           audioData,
 		Format:          ds.Format,
-		Segments:        captionedSegments,
+		Segments:        segments,
 		TotalDurationMs: totalDuration,
 		Subtitles:       subtitles,
 	}

@@ -141,9 +141,9 @@ func TestCalculatePerfectPause(t *testing.T) {
 				},
 				LeadingSilenceMs: 500, // Another 500ms
 			},
-			wantPauseMin:      0, // Already has 1000ms, more than enough
-			wantPauseMax:      0,
-			wantNoDoublePause: true,
+			wantPauseMin:      MinPauseMs, // Ensures minimum pause for naturalness (50ms)
+			wantPauseMax:      MinPauseMs,
+			wantNoDoublePause: false, // Built-in is capped, so no double-pause issue
 		},
 		{
 			name: "short utterance after",

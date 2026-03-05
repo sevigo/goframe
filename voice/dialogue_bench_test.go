@@ -11,7 +11,7 @@ func BenchmarkCalculateContextualPause(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		ds.calculateContextualPause("Speaker", "What do you think?", "Speaker", "I think it's great.", 200, 300)
 	}
 }
@@ -37,7 +37,7 @@ func BenchmarkCalculatePerfectPause(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		ds.CalculatePerfectPause(prev, curr)
 	}
 }
@@ -57,14 +57,14 @@ func BenchmarkGenerateSRT(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		generateSRT(segments)
 	}
 }
 
 func BenchmarkApplyContextualPauseMultiplier(b *testing.B) {
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		applyContextualPauseMultiplier("What do you think?", "I think it's great.", "Speaker", "Speaker")
 	}
 }
@@ -86,7 +86,7 @@ func BenchmarkAnalyzeSpeechRate(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		AnalyzeSpeechRate(segments)
 	}
 }
