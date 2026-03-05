@@ -1,6 +1,14 @@
 # Voice Generation Package
 
-The `voice` package provides a modular Text-to-Speech (TTS) interface for generating audio from text.
+The `voice` package provides a modular Text-to-Speech (TTS) interface for generating audio from text. It supports both buffered synthesis and streaming modes, compatible with OpenAI's API and local OpenAI-compatible servers like Kokoro-FastAPI.
+
+## Features
+
+- **Dual Mode Operation**: Buffered synthesis (`Synthesize`) for short texts, streaming (`Stream`) for efficient processing of longer content
+- **OpenAI Compatible**: Works with OpenAI cloud API and local servers (Kokoro, etc.)
+- **Functional Options**: Flexible configuration using the functional options pattern
+- **Context Support**: Proper cancellation and timeout handling
+- **Multiple Voices**: Support for various voice identifiers per provider
 
 ## Installation
 
@@ -41,7 +49,7 @@ func main() {
         log.Fatal(err)
     }
 
-    err = os.WriteFile("output.mp3", audio.Data, 0644)
+    err = os.WriteFile("output.mp3", audio.Data, 0600)
     if err != nil {
         log.Fatal(err)
     }
@@ -51,14 +59,13 @@ func main() {
 
 ### Local Kokoro Container
 
-To use a local OpenAI-compatible API like Kokoro-FastAPI-CPU:
-
 ```go
 package main
 
 import (
     "context"
     "fmt"
+    "io"
     "log"
     "os"
 
@@ -66,7 +73,7 @@ import (
 )
 
 func main() {
-    // Kokoro runs locally on port 8880 by default
+    // Kokoro runs locally - no API key required
     synthesizer, err := openai.NewSynthesizer(
         openai.WithBaseURL("http://localhost:8880/v1"),
         openai.WithModel("kokoro"),
@@ -77,21 +84,30 @@ func main() {
         log.Fatal(err)
     }
 
-    // No API key needed for local server
-    audio, err := synthesizer.Synthesize(context.Background(), "Hello from local TTS!")
+    // Use streaming for efficient processing
+    stream, err := synthesizer.Stream(context.Background(), "Hello from local TTS!")
     if err != nil {
         log.Fatal(err)
     }
+    defer stream.Close()
 
-    err = os.WriteFile("output.wav", audio.Data, 0644)
+    file, err := os.Create("output.wav")
     if err != nil {
         log.Fatal(err)
     }
-    fmt.Println("Audio saved to output.wav")
+    defer file.Close()
+
+    written, err := io.Copy(file, stream)
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("Saved %d bytes to output.wav\n", written)
 }
 ```
 
 ### Per-Request Options
+
+Override default settings for individual requests:
 
 ```go
 audio, err := synthesizer.Synthesize(ctx, text,
@@ -110,19 +126,22 @@ audio, err := synthesizer.Synthesize(ctx, text,
 | `WithModel(model)` | TTS model name | `tts-1` |
 | `WithVoice(voice)` | Voice identifier | `alloy` |
 | `WithFormat(format)` | Output format (mp3, wav, etc.) | `mp3` |
+| `WithSpeed(speed)` | Speech speed multiplier (0.25-4.0) | 1.0 |
 | `WithHTTPClient(client)` | Custom HTTP client | Default shared client |
-| `WithLogger(logger)` | Custom logger | `slog.Default()` |
+| `WithLogger(logger)` | Custom structured logger | `slog.Default()` |
 
-## Supported Voices (OpenAI)
+## Supported Voices
 
-- `alloy`
-- `echo`
-- `fable`
-- `onyx`
-- `nova`
-- `shimmer`
+### OpenAI
+- `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`
 
-## Supported Formats (OpenAI)
+### Kokoro
+- **American Female**: `af_bella`, `af_sarah`, `af_sky`
+- **American Male**: `am_adam`, `am_michael`
+- **British Female**: `bf_emma`, `bf_isabella`
+- **British Male**: `bm_george`, `bm_lewis`
+
+## Supported Formats
 
 - `mp3` (default)
 - `opus`
@@ -131,16 +150,36 @@ audio, err := synthesizer.Synthesize(ctx, text,
 - `wav`
 - `pcm`
 
+## Examples
+
+### Streaming with Progress
+
+See `examples/kokoro-streaming/main.go` for a streaming example with real-time progress:
+
+```bash
+go run ./examples/kokoro-streaming/main.go
+```
+
+### Multiple Voices
+
+See `examples/kokoro-tts/main.go` for generating audio with multiple voices:
+
+```bash
+go run ./examples/kokoro-tts/main.go
+```
+
 ## Testing Without API Credits
 
-For local testing without spending API credits, you can use a mock server or inspect the request payload:
+For local testing without spending API credits, use Kokoro-FastAPI:
 
-```go
-// Create a test server for verification
-synthesizer, err := openai.NewSynthesizer(
+```bash
+# Start Kokoro container
+docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:latest
+
+# Test with local server
+synthesizer, _ := openai.NewSynthesizer(
     openai.WithBaseURL("http://localhost:8880/v1"),
 )
-// Verify requests are formatted correctly before hitting production
 ```
 
 ## Errors
