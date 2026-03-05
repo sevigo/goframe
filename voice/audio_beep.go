@@ -30,16 +30,15 @@ func (ap *AudioProcessor) DecodeWAV(data []byte) (beep.Streamer, beep.Format, er
 	return streamer, format, nil
 }
 
+// EncodeWAV is currently not implemented due to Beep's io.WriteSeeker requirement.
+// For WAV encoding, use the manual WAV processing in dialogue.go instead.
+// Beep works well for decoding and real-time streaming, but encoding to memory
+// requires a seekable buffer (temp file or custom implementation).
+//
+// FUTURE: Use Beep for MP3/OGG encoding, or when writing directly to files.
+// For now, manual WAV byte manipulation (in dialogue.go) is simpler and works well.
 func (ap *AudioProcessor) EncodeWAV(streamer beep.Streamer, format beep.Format) ([]byte, error) {
-	buf := &bytes.Buffer{}
-	err := wav.Encode(struct {
-		io.Writer
-		io.Seeker
-	}{Writer: buf}, streamer, format)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode WAV: %w", err)
-	}
-	return buf.Bytes(), nil
+	return nil, fmt.Errorf("beep WAV encoding to memory not implemented - use manual WAV processing")
 }
 
 func (ap *AudioProcessor) NormalizeVolumeStreamer(streamer beep.Streamer, targetVolume float64) beep.Streamer {
