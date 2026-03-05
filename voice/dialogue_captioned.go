@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 )
 
 // DialogueSynthesizerCaptioned generates multi-speaker dialogue with perfect timing
@@ -166,51 +165,10 @@ func (ds *DialogueSynthesizerCaptioned) CalculatePerfectPause(prev, curr *Captio
 	// Start with target pause
 	targetPause := ds.TargetPauseMs
 
-	// Apply context-aware adjustments (same logic as heuristic version)
-	// Use the text analysis from the heuristic synthesizer
-	prevText := prev.Text
-	currText := curr.Text
+	// Apply context-aware adjustments using shared logic
+	multiplier := applyContextualPauseMultiplier(prev.Text, curr.Text)
 
-	// Analyze punctuation and content
-	multiplier := 1.0
-	prevEnd := strings.ToLower(strings.TrimSpace(prevText))
-
-	switch {
-	case endsWith(prevEnd, "?"):
-		multiplier = 1.3 // Questions need 30% longer pause
-	case endsWith(prevEnd, "!"):
-		multiplier = 1.2 // Exclamations: 20% longer
-	case endsWith(prevEnd, "..."):
-		multiplier = 1.4 // Trailing off: 40% longer
-	case endsWith(prevEnd, "—") || endsWith(prevEnd, "--"):
-		multiplier = 1.5 // Dramatic interruption: 50% longer
-	case endsWith(prevEnd, ","):
-		multiplier = 0.7 // Continuing thought: 30% shorter
-	}
-
-	// Analyze response patterns
-	currStart := strings.ToLower(strings.TrimSpace(currText))
-	switch {
-	case startsWith(currStart, "wait,") || startsWith(currStart, "wait "):
-		multiplier *= 1.3
-	case startsWith(currStart, "but ") || startsWith(currStart, "and "):
-		multiplier *= 0.8
-	case startsWith(currStart, "so,") || startsWith(currStart, "well,"):
-		multiplier *= 1.1
-	case startsWith(currStart, "ha") || startsWith(currStart, "oh") || startsWith(currStart, "wow"):
-		multiplier *= 1.2
-	}
-
-	// Analyze speech length
-	wordCount := len(strings.Fields(currText))
-	switch {
-	case wordCount <= 3:
-		multiplier *= 0.6 // Quick back-and-forth
-	case wordCount > 20:
-		multiplier *= 1.2 // Long sentences need processing time
-	}
-
-	// Adjust for actual speech duration (timestamp-based)
+	// Adjust for actual speech duration (timestamp-based enhancement)
 	if prev.SpeechDurationMs < 600 {
 		// Very short utterance, reduce pause further
 		multiplier *= 0.9
@@ -309,13 +267,63 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 		totalDuration += pause
 	}
 
-	return &CaptionedDialogueResult{
+	result := &CaptionedDialogueResult{
 		Audio:           audioData,
 		Format:          ds.Format,
 		Segments:        captionedSegments,
 		TotalDurationMs: totalDuration,
 		Subtitles:       subtitles,
-	}, nil
+	}
+
+	// Validate result
+	if err := validateCaptionedResult(result); err != nil {
+		return nil, fmt.Errorf("voice: validation failed: %w", err)
+	}
+
+	return result, nil
+}
+
+// validateCaptionedResult ensures the dialogue result is consistent.
+func validateCaptionedResult(result *CaptionedDialogueResult) error {
+	if len(result.Audio) == 0 {
+		return fmt.Errorf("no audio data generated")
+	}
+	if result.Format == "" {
+		return fmt.Errorf("audio format not specified")
+	}
+	if len(result.Segments) == 0 {
+		return fmt.Errorf("no segments in result")
+	}
+	if result.TotalDurationMs <= 0 {
+		return fmt.Errorf("invalid total duration: %dms", result.TotalDurationMs)
+	}
+
+	// Validate each segment
+	for i, seg := range result.Segments {
+		if seg.Speaker == "" {
+			return fmt.Errorf("segment %d has empty speaker", i)
+		}
+		if seg.DurationMs <= 0 {
+			return fmt.Errorf("segment %d has invalid duration: %dms", i, seg.DurationMs)
+		}
+		if len(seg.Audio) == 0 {
+			return fmt.Errorf("segment %d has no audio data", i)
+		}
+		// Validate timestamp ordering
+		for j, ts := range seg.Timestamps {
+			if ts.StartMs < 0 || ts.EndMs < 0 {
+				return fmt.Errorf("segment %d timestamp %d has negative time", i, j)
+			}
+			if ts.EndMs < ts.StartMs {
+				return fmt.Errorf("segment %d timestamp %d has end time before start time", i, j)
+			}
+			if ts.Word == "" {
+				return fmt.Errorf("segment %d timestamp %d has empty word", i, j)
+			}
+		}
+	}
+
+	return nil
 }
 
 // GenerateSRT creates SRT-format subtitles from captioned segments.

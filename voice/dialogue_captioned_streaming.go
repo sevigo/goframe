@@ -10,8 +10,16 @@ import (
 // StreamDialogueCaptioned streams dialogue with timestamps, calculating perfect
 // pauses on-the-fly using speech duration information.
 //
-// Note: Streaming captioned dialogue is not yet implemented. Use SynthesizeDialogueCaptioned
-// for buffered synthesis with timestamps.
+// IMPLEMENTATION STATUS: This method is currently a stub and returns an error.
+// Streaming captioned dialogue requires buffering segments anyway to calculate
+// perfect pauses, so there's no significant benefit over SynthesizeDialogueCaptioned.
+//
+// FUTURE WORK: If streaming is needed for very long dialogues, consider:
+// 1. Using a heuristic pause calculation instead of perfect pause
+// 2. Buffering N segments ahead for pause calculation while streaming
+// 3. Using a separate goroutine for synthesis and another for assembly
+//
+// For now, use SynthesizeDialogueCaptioned which provides the full feature set.
 func (ds *DialogueSynthesizerCaptioned) StreamDialogueCaptioned(ctx context.Context, segments []DialogueSegment) (io.ReadCloser, error) {
 	return nil, fmt.Errorf("voice: streaming captioned dialogue not yet implemented - use SynthesizeDialogueCaptioned instead")
 }
@@ -131,34 +139,11 @@ func generateSRT(segments []CaptionedSegment) string {
 // formatSRTTime converts milliseconds to SRT time format.
 func formatSRTTime(ms int) string {
 	hours := ms / 3600000
-	ms = ms % 3600000
+	ms %= 3600000
 	minutes := ms / 60000
-	ms = ms % 60000
+	ms %= 60000
 	seconds := ms / 1000
 	milliseconds := ms % 1000
 
 	return fmt.Sprintf("%02d:%02d:%02d,%03d", hours, minutes, seconds, milliseconds)
-}
-
-// perfectPauseBetween calculates ideal pause between segments.
-func perfectPauseBetween(prev, curr *CaptionedSegment, targetPauseMs int) int {
-	prevTrailing := prev.TrailingSilenceMs
-	currLeading := curr.LeadingSilenceMs
-	builtInSilence := prevTrailing + currLeading
-
-	target := targetPauseMs
-
-	// Adjust for speech characteristics
-	if prev.SpeechDurationMs < 500 && len(prev.Timestamps) <= 2 {
-		target = int(float64(target) * 0.6)
-	}
-	if prev.SpeechDurationMs > 2000 {
-		target = int(float64(target) * 1.2)
-	}
-
-	needed := target - builtInSilence
-	if needed < 0 {
-		return 0
-	}
-	return needed
 }

@@ -729,60 +729,7 @@ func (ds *DialogueSynthesizer) calculateContextualPause(prevText, currText strin
 	base := minMs
 	variable := maxMs - minMs
 
-	// Analyze previous segment's ending
-	prevEnd := strings.ToLower(strings.TrimSpace(prevText))
-	// Analyze current segment's beginning
-	currStart := strings.ToLower(strings.TrimSpace(currText))
-
-	// Factor 1: Punctuation-based pause adjustment
-	// Questions and exclamations need longer pause for listener processing
-	multiplier := 1.0
-	switch {
-	case endsWith(prevEnd, "?"):
-		multiplier = 1.3 // Questions need 30% longer pause (processing time)
-	case endsWith(prevEnd, "!"):
-		multiplier = 1.2 // Exclamations: 20% longer (impact)
-	case endsWith(prevEnd, "..."):
-		multiplier = 1.4 // Trailing off: 40% longer (thoughtful pause)
-	case endsWith(prevEnd, "—") || endsWith(prevEnd, "--"):
-		multiplier = 1.5 // Interruption/continuation: 50% (dramatic)
-	case endsWith(prevEnd, ","):
-		multiplier = 0.7 // Comma: 30% shorter (continuing thought)
-	}
-
-	// Factor 2: Response type affects pause
-	switch {
-	case startsWith(currStart, "wait,") || startsWith(currStart, "wait "):
-		multiplier *= 1.3 // "Wait..." needs more pause
-	case startsWith(currStart, "but ") || startsWith(currStart, "and "):
-		multiplier *= 0.8 // Continuing thought - shorter pause
-	case startsWith(currStart, "so,") || startsWith(currStart, "well,"):
-		multiplier *= 1.1 // Transition phrases - slightly longer
-	case startsWith(currStart, "ha") || startsWith(currStart, "oh") || startsWith(currStart, "wow"):
-		multiplier *= 1.2 // Emotional reactions - need processing time
-	}
-
-	// Factor 3: Very short responses need less pause
-	wordCount := len(strings.Fields(currText))
-	switch {
-	case wordCount <= 3:
-		multiplier *= 0.6 // "Yeah", "Right", "Okay" need quick back-and-forth
-	case wordCount > 20:
-		multiplier *= 1.2 // Long sentences need more pause before them (processing)
-	}
-
-	// Factor 4: Same-speaker continuations need much shorter pauses
-	// This handles cases like Kenji's "Ten years." after his own long explanation
-	// We don't know the speaker here, so this would need to be passed in
-	// TODO: Add speaker parameter to enable same-speaker optimization
-
-	// Clamp multiplier to reasonable range to prevent overshoot
-	// Range [0.5, 1.8] ensures pauses stay proportional
-	if multiplier < 0.5 {
-		multiplier = 0.5
-	} else if multiplier > 1.8 {
-		multiplier = 1.8
-	}
+	multiplier := applyContextualPauseMultiplier(prevText, currText)
 
 	// Calculate final pause with randomness for naturalness
 	// Not security-sensitive - just adding variety to dialogue pacing
