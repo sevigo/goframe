@@ -434,11 +434,34 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 		"body_size", len(respBody),
 	)
 
+	// Kokoro may return NDJSON (newline-delimited JSON) with multiple objects
+	// In streaming mode, each line is a JSON object. Take the last complete one.
+	var lastValidJSON []byte
+	lines := bytes.Split(respBody, []byte("\n"))
+	for _, line := range lines {
+		line = bytes.TrimSpace(line)
+		if len(line) > 0 && line[0] == '{' {
+			lastValidJSON = line
+		}
+	}
+
+	// If we found NDJSON format, use the last complete JSON object
+	var jsonBody []byte
+	if len(lastValidJSON) > 0 && len(lastValidJSON) != len(respBody) {
+		s.logger.Debug("detected NDJSON format, using last JSON object",
+			"total_size", len(respBody),
+			"json_size", len(lastValidJSON),
+		)
+		jsonBody = lastValidJSON
+	} else {
+		jsonBody = respBody
+	}
+
 	// Parse JSON response with audio (base64) and timestamps
 	var capResp captionedResponse
-	if err := json.Unmarshal(respBody, &capResp); err != nil {
+	if err := json.Unmarshal(jsonBody, &capResp); err != nil {
 		// Log the actual response for debugging (first 500 chars)
-		preview := string(respBody)
+		preview := string(jsonBody)
 		if len(preview) > 500 {
 			preview = preview[:500] + "..."
 		}
