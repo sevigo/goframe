@@ -485,13 +485,48 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 	}
 
 	// Convert timestamps from seconds to milliseconds
-	timestamps := make([]voice.WordTimestamp, len(capResp.Timestamps))
+	// Handle floating point precision issues from Kokoro
+	timestamps := make([]voice.WordTimestamp, 0, len(capResp.Timestamps))
 	for i, ts := range capResp.Timestamps {
-		timestamps[i] = voice.WordTimestamp{
-			Word:    ts.Word,
-			StartMs: int(ts.StartTime * 1000), // Convert seconds to ms
-			EndMs:   int(ts.EndTime * 1000),   // Convert seconds to ms
+		startMs := int(ts.StartTime * 1000)
+		endMs := int(ts.EndTime * 1000)
+
+		// Clamp negative times to 0 (can happen with float precision)
+		if startMs < 0 {
+			s.logger.Warn("negative start time, clamping to 0",
+				"word", ts.Word,
+				"index", i,
+				"start_time", ts.StartTime,
+				"start_ms", startMs,
+			)
+			startMs = 0
 		}
+		if endMs < 0 {
+			s.logger.Warn("negative end time, clamping to 0",
+				"word", ts.Word,
+				"index", i,
+				"end_time", ts.EndTime,
+				"end_ms", endMs,
+			)
+			endMs = 0
+		}
+
+		// Skip invalid timestamps where end <= start
+		if endMs <= startMs {
+			s.logger.Warn("skipping invalid timestamp",
+				"word", ts.Word,
+				"index", i,
+				"start_ms", startMs,
+				"end_ms", endMs,
+			)
+			continue
+		}
+
+		timestamps = append(timestamps, voice.WordTimestamp{
+			Word:    ts.Word,
+			StartMs: startMs,
+			EndMs:   endMs,
+		})
 	}
 
 	// Calculate total duration from last timestamp
