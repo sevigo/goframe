@@ -19,23 +19,23 @@ type VoiceConfig struct {
 var kokoroVoices = []VoiceConfig{
 	{Name: "af_bella", Description: "American Female - Bella"},
 	{Name: "af_sarah", Description: "American Female - Sarah"},
-	{Name: "af_sky", Description: "American Female - Sky"},
+	{Name: "af_sky", Description: "American Female - Sky"}, // +1
 	{Name: "am_adam", Description: "American Male - Adam"},
-	{Name: "am_michael", Description: "American Male - Michael"},
+	{Name: "am_michael", Description: "American Male - Michael"}, // +1
 	{Name: "bf_emma", Description: "British Female - Emma"},
 	{Name: "bf_isabella", Description: "British Female - Isabella"},
 	{Name: "bm_george", Description: "British Male - George"},
 	{Name: "bm_lewis", Description: "British Male - Lewis"},
 }
 
-var scifiPassage = `In the beginning the Universe was created. This has made a lot of people very angry 
-and been widely regarded as a bad move. Many races believe that it was created by some sort of god, 
-though the Jatravartid people of Viltvodle VI believe that the entire Universe was in fact sneezed 
-out of the nose of a being called the Great Green Arkleseizure.
+var bookExcerpt = `The sky above the port was the color of television, tuned to a dead channel.
 
-The Jatravartids, who live in perpetual fear of the time they call The Coming of the Great White 
-Handkerchief, are small blue creatures with more than fifty arms each, who are therefore unique 
-in being the only race in history to have invented the aerosol deodorant before the wheel.`
+"It's not like I'm using," Case heard someone say, as he shouldered his way through the crowd around the door of the Chat. 
+
+"It's like my body's developed this massive drug deficiency." 
+
+It was a Sprawl voice and a Sprawl joke. The Chatsubo was a bar for professional expatriates; you could drink there for a week and never hear two words in Japanese.
+`
 
 func main() {
 	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
@@ -77,7 +77,7 @@ func generateVoice(ctx context.Context, vc VoiceConfig, outputDir string) error 
 
 	outputPath := filepath.Join(outputDir, fmt.Sprintf("%s.wav", vc.Name))
 
-	stream, err := synthesizer.Stream(ctx, scifiPassage)
+	stream, err := synthesizer.Stream(ctx, bookExcerpt)
 	if err != nil {
 		return fmt.Errorf("stream failed: %w", err)
 	}
