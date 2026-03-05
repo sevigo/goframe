@@ -38,9 +38,9 @@ func run() error {
 	}
 
 	dialogueSyn := voice.NewDialogueSynthesizer(synthesizer, map[string]string{
-		"Maya":  "af_bella",
+		"Maya":  "af_bella(3)+af_heart(1)",
 		"Kenji": "am_adam",
-		"Alex":  "af_sky",
+		"Alex":  "af_sky(3)+af_nicole(1)",
 	})
 	dialogueSyn.SpeedMap = map[string]float64{
 		"Alex":  1.05, // slightly faster, energetic host
@@ -92,10 +92,10 @@ func run() error {
 	ctx := context.Background()
 	start := time.Now()
 
-	fmt.Println("Synthesizing dialogue with 3 voices:")
-	fmt.Println("  - Alex:  af_sky (American Female)")
-	fmt.Println("  - Maya:  af_bella (American Female)")
-	fmt.Println("  - Kenji: am_adam (American Male)")
+	fmt.Println("Synthesizing dialogue with 3 voices (parallel):")
+	fmt.Println("  - Alex:  af_sky(3)+af_nicole(1)  @ 1.05x speed")
+	fmt.Println("  - Maya:  af_bella(3)+af_heart(1) @ 1.00x speed")
+	fmt.Println("  - Kenji: am_adam                 @ 0.95x speed")
 	fmt.Println()
 
 	stream, err := dialogueSyn.StreamDialogueParallel(ctx, dialogue)
