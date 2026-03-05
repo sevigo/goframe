@@ -56,7 +56,7 @@ func run() error {
 		"Kenji": 1.00,
 	}
 	dialogueSyn.TargetPauseMs = 250
-	dialogueSyn.GenerateSubtitles = true
+	dialogueSyn.GenerateSubtitles = false
 
 	dialogue := []voice.DialogueSegment{
 		{Speaker: "Alex", Text: "Hey hey hey, welcome back to Cities That Never Sleep. I'm Alex, and oh boy, do we have a good one for you today."},

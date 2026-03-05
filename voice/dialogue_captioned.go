@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // DialogueSynthesizerCaptioned generates multi-speaker dialogue with perfect timing
@@ -135,7 +136,8 @@ type CaptionedSegment struct {
 }
 
 // CalculatePerfectPause calculates the exact pause needed between two segments.
-// It uses word-level timestamps to avoid double-pausing and ensure natural flow.
+// It uses word-level timestamps to avoid double-pausing and applies context-aware
+// adjustments based on dialogue content.
 func (ds *DialogueSynthesizerCaptioned) CalculatePerfectPause(prev, curr *CaptionedSegment) int {
 	// Calculate built-in silence from timestamps
 	prevTrailing := 0
@@ -152,17 +154,64 @@ func (ds *DialogueSynthesizerCaptioned) CalculatePerfectPause(prev, curr *Captio
 	// Total silence already in the audio
 	builtInSilence := prevTrailing + currLeading
 
-	// Calculate target pause based on dialogue context
+	// Start with target pause
 	targetPause := ds.TargetPauseMs
 
-	// Adjust for speech rate: fast speakers need more processing time
-	if prev.SpeechDurationMs < 600 {
-		// Very short utterance (yeah, right, okay)
-		targetPause = int(float64(targetPause) * 0.6)
-	} else if prev.SpeechDurationMs > 2000 {
-		// Long utterance, listener needs more time
-		targetPause = int(float64(targetPause) * 1.2)
+	// Apply context-aware adjustments (same logic as heuristic version)
+	// Use the text analysis from the heuristic synthesizer
+	prevText := prev.Text
+	currText := curr.Text
+
+	// Analyze punctuation and content
+	multiplier := 1.0
+	prevEnd := strings.ToLower(strings.TrimSpace(prevText))
+
+	switch {
+	case endsWith(prevEnd, "?"):
+		multiplier = 1.3 // Questions need 30% longer pause
+	case endsWith(prevEnd, "!"):
+		multiplier = 1.2 // Exclamations: 20% longer
+	case endsWith(prevEnd, "..."):
+		multiplier = 1.4 // Trailing off: 40% longer
+	case endsWith(prevEnd, "—") || endsWith(prevEnd, "--"):
+		multiplier = 1.5 // Dramatic interruption: 50% longer
+	case endsWith(prevEnd, ","):
+		multiplier = 0.7 // Continuing thought: 30% shorter
 	}
+
+	// Analyze response patterns
+	currStart := strings.ToLower(strings.TrimSpace(currText))
+	switch {
+	case startsWith(currStart, "wait,") || startsWith(currStart, "wait "):
+		multiplier *= 1.3
+	case startsWith(currStart, "but ") || startsWith(currStart, "and "):
+		multiplier *= 0.8
+	case startsWith(currStart, "so,") || startsWith(currStart, "well,"):
+		multiplier *= 1.1
+	case startsWith(currStart, "ha") || startsWith(currStart, "oh") || startsWith(currStart, "wow"):
+		multiplier *= 1.2
+	}
+
+	// Analyze speech length
+	wordCount := len(strings.Fields(currText))
+	switch {
+	case wordCount <= 3:
+		multiplier *= 0.6 // Quick back-and-forth
+	case wordCount > 20:
+		multiplier *= 1.2 // Long sentences need processing time
+	}
+
+	// Adjust for actual speech duration (timestamp-based)
+	if prev.SpeechDurationMs < 600 {
+		// Very short utterance, reduce pause further
+		multiplier *= 0.9
+	} else if prev.SpeechDurationMs > 2000 {
+		// Long utterance, increase pause
+		multiplier *= 1.1
+	}
+
+	// Calculate final target
+	targetPause = int(float64(targetPause) * multiplier)
 
 	// Add exactly what's needed
 	additionalPause := targetPause - builtInSilence
