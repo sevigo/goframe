@@ -38,22 +38,37 @@ func run() error {
 	}
 
 	dialogueSyn := voice.NewDialogueSynthesizer(synthesizer, map[string]string{
-		"Sarah":    "af_bella",
-		"James":    "am_adam",
-		"Narrator": "af_sky",
+		"Maya":  "af_bella",
+		"Kenji": "am_adam",
+		"Alex":  "af_sky",
 	})
 
 	dialogue := []voice.DialogueSegment{
-		{Speaker: "Narrator", Text: "In a quiet coffee shop on a rainy afternoon, two old friends reunited after years apart."},
-		{Speaker: "Sarah", Text: "James! I can't believe it's really you. It's been what, five years?"},
-		{Speaker: "James", Text: "Six, actually. You look wonderful, Sarah. Time has been kind to you."},
-		{Speaker: "Sarah", Text: "Flatterer. But tell me, how have you been? The last I heard, you were off to Tokyo."},
-		{Speaker: "James", Text: "That expedition changed everything. The things I discovered there, the people I met. I learned that home isn't a place, it's the people you share it with."},
-		{Speaker: "Sarah", Text: "That's beautiful, James. You always had a way with words. So, what brings you back?"},
-		{Speaker: "James", Text: "I realized something important while I was away. There was unfinished business here. A conversation I never got to finish."},
-		{Speaker: "Sarah", Text: "You mean that day at the airport? James, I thought you'd forgotten."},
-		{Speaker: "James", Text: "I never forgot. Sarah, I came back to tell you what I should have said six years ago."},
-		{Speaker: "Narrator", Text: "As the rain continued to fall outside, the coffee shop grew warmer, and two hearts found their way back to each other."},
+		{Speaker: "Alex", Text: "Welcome back everyone to Cities That Never Sleep. I'm Alex."},
+		{Speaker: "Maya", Text: "And I'm Maya. Alex, today we're talking about one of my favorite cities in the world: Tokyo."},
+		{Speaker: "Alex", Text: "Maya, I remember when you first came back from Tokyo. You wouldn't stop talking about it for weeks."},
+		{Speaker: "Maya", Text: "Because it completely blew my mind, Alex. One minute you're surrounded by neon lights and giant video screens, and the next you're walking into a quiet temple that feels hundreds of years old."},
+		{Speaker: "Alex", Text: "That's what fascinates me about Tokyo too. It's like the future and the past decided to share the same city."},
+		{Speaker: "Kenji", Text: "That's actually a really good way to describe it, Alex."},
+		{Speaker: "Alex", Text: "Kenji, glad you said that, because everyone listening should know you're originally from Tokyo."},
+		{Speaker: "Kenji", Text: "That's right. I grew up there, and even for me the city never stops surprising me."},
+		{Speaker: "Maya", Text: "Kenji, I have to ask you about Shibuya Crossing. The first time I saw it, I just stood there staring like a tourist."},
+		{Speaker: "Kenji", Text: "Honestly Maya, even locals still pause sometimes. When the lights change and thousands of people cross at once, it's like watching a perfectly organized wave."},
+		{Speaker: "Alex", Text: "And somehow nobody bumps into each other."},
+		{Speaker: "Kenji", Text: "Exactly, Alex. Tokyo has this quiet rhythm to it. Everyone understands the flow."},
+		{Speaker: "Maya", Text: "But Kenji, what surprised me most was how peaceful parts of Tokyo are. I expected noise everywhere."},
+		{Speaker: "Kenji", Text: "Most visitors do, Maya. But if you walk just ten minutes away from the busy areas, you'll find small neighborhoods with bakeries, bicycles, and tiny parks."},
+		{Speaker: "Alex", Text: "Okay Kenji, important question. Best ramen in Tokyo."},
+		{Speaker: "Kenji", Text: "Alex, that's a dangerous question. People spend their entire lives arguing about that."},
+		{Speaker: "Maya", Text: "I knew it. Food debates are serious business in Tokyo."},
+		{Speaker: "Kenji", Text: "They really are. But that's part of the culture. Even the smallest ramen shop might have been perfecting one recipe for thirty years."},
+		{Speaker: "Alex", Text: "So Maya, after everything you experienced there, what moment stuck with you the most?"},
+		{Speaker: "Maya", Text: "Honestly, Alex? Early morning in Tokyo. The city waking up, shop owners opening their doors, and the smell of fresh ramen broth starting to fill the streets."},
+		{Speaker: "Kenji", Text: "That's when Tokyo feels the most real."},
+		{Speaker: "Alex", Text: "I think you just convinced half our listeners to book a flight."},
+		{Speaker: "Maya", Text: "If they do, Alex, tell them one thing."},
+		{Speaker: "Alex", Text: "What's that, Maya?"},
+		{Speaker: "Maya", Text: "Don't just visit Tokyo. Wander it."},
 	}
 
 	ctx := context.Background()

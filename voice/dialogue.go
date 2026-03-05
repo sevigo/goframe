@@ -36,12 +36,16 @@ type DialogueSynthesizer struct {
 	// Set to 0 to disable crossfading.
 	// Note: Crossfading requires buffering segments in memory.
 	CrossfadeMs int
+	// PauseMs specifies pause duration between segments in milliseconds (default: 100ms).
+	// Set to 0 to disable pauses between segments.
+	PauseMs int
 }
 
 // NewDialogueSynthesizer creates a new dialogue synthesizer.
 // The format defaults to "wav" which supports reliable concatenation.
 // Crossfading is enabled by default (50ms) to smooth transitions between segments
 // using equal-power curves for constant perceived loudness.
+// Pause between segments defaults to 150ms.
 func NewDialogueSynthesizer(syn Synthesizer, voiceMap map[string]string, format ...string) *DialogueSynthesizer {
 	f := "wav"
 	if len(format) > 0 && format[0] != "" {
@@ -52,6 +56,7 @@ func NewDialogueSynthesizer(syn Synthesizer, voiceMap map[string]string, format 
 		VoiceMap:    voiceMap,
 		Format:      f,
 		CrossfadeMs: 50,
+		PauseMs:     150,
 	}
 }
 
@@ -217,7 +222,7 @@ func (ds *DialogueSynthesizer) StreamDialogue(ctx context.Context, segments []Di
 
 // streamWAVSegment processes a single WAV segment with pause and crossfade.
 func (ds *DialogueSynthesizer) streamWAVSegment(prevRaw, currentRaw []byte, wavFormat wavInfo) []byte {
-	pauseMs := 100
+	pauseMs := ds.PauseMs
 	pauseSamples := (pauseMs * wavFormat.sampleRate * wavFormat.numChannels) / 1000
 	pauseBytes := pauseSamples * wavFormat.bytesPerSample
 	silence := make([]byte, pauseBytes)
