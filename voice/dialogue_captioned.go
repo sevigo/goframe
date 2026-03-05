@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 )
 
 // DialogueSynthesizerCaptioned generates multi-speaker dialogue with perfect timing
@@ -199,9 +200,18 @@ func (ds *DialogueSynthesizerCaptioned) CalculatePerfectPause(prev, curr *Captio
 //
 // Returns complete dialogue audio and detailed timing information for each segment.
 func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.Context, segments []DialogueSegment) (*CaptionedDialogueResult, error) {
+	logger := slog.Default()
+
 	if len(segments) == 0 {
 		return nil, errors.New("voice: no segments provided")
 	}
+
+	logger.Info("starting captioned dialogue synthesis",
+		"segment_count", len(segments),
+		"generate_subtitles", ds.GenerateSubtitles,
+		"crossfade_ms", ds.CrossfadeMs,
+		"target_pause_ms", ds.TargetPauseMs,
+	)
 
 	// Synthesize all segments with timestamps
 	captionedSegments := make([]CaptionedSegment, 0, len(segments))
@@ -211,10 +221,25 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 			return nil, fmt.Errorf("voice: no voice mapping for speaker %q (segment %d)", seg.Speaker, i)
 		}
 
+		logger.Debug("synthesizing segment",
+			"index", i,
+			"speaker", seg.Speaker,
+			"voice_id", voiceID,
+			"text_len", len(seg.Text),
+			"text_preview", truncateText(seg.Text, 50),
+		)
+
 		audio, err := ds.Syn.SynthesizeCaptioned(ctx, seg.Text, WithVoice(voiceID), WithFormat(ds.Format), WithSpeed(ds.speakerSpeed(seg.Speaker)))
 		if err != nil {
 			return nil, fmt.Errorf("voice: failed to synthesize segment %d for speaker %q: %w", i, seg.Speaker, err)
 		}
+
+		logger.Debug("segment synthesized",
+			"index", i,
+			"audio_bytes", len(audio.Data),
+			"duration_ms", audio.DurationMs,
+			"word_count", len(audio.Timestamps),
+		)
 
 		// Calculate timing details
 		trailingSilence := 0
@@ -226,6 +251,16 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 			trailingSilence = audio.DurationMs - lastWordEnd
 			leadingSilence = audio.Timestamps[0].StartMs
 			speechDuration = lastWordEnd - audio.Timestamps[0].StartMs
+
+			logger.Debug("segment timing calculated",
+				"index", i,
+				"duration_ms", audio.DurationMs,
+				"speech_duration_ms", speechDuration,
+				"trailing_silence_ms", trailingSilence,
+				"leading_silence_ms", leadingSilence,
+				"first_word_start", audio.Timestamps[0].StartMs,
+				"last_word_end", lastWordEnd,
+			)
 		}
 
 		captionedSegments = append(captionedSegments, CaptionedSegment{
@@ -240,11 +275,26 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 		})
 	}
 
+	logger.Info("all segments synthesized, calculating pauses")
+
 	// Calculate perfect pauses between segments
 	pauses := make([]int, len(segments)-1)
 	for i := 0; i < len(segments)-1; i++ {
 		pauses[i] = ds.CalculatePerfectPause(&captionedSegments[i], &captionedSegments[i+1])
+
+		logger.Debug("pause calculated",
+			"between", fmt.Sprintf("segment %d -> %d", i, i+1),
+			"pause_ms", pauses[i],
+			"prev_speech_ms", captionedSegments[i].SpeechDurationMs,
+			"curr_speech_ms", captionedSegments[i+1].SpeechDurationMs,
+		)
 	}
+
+	logger.Info("concatenating audio",
+		"segments", len(captionedSegments),
+		"pauses", len(pauses),
+		"crossfade_ms", ds.CrossfadeMs,
+	)
 
 	// Concatenate audio with perfect pauses
 	audioData, err := concatenateCaptionedAudio(captionedSegments, pauses, ds.CrossfadeMs)
@@ -252,10 +302,17 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 		return nil, fmt.Errorf("voice: failed to concatenate audio: %w", err)
 	}
 
+	logger.Info("audio concatenated successfully",
+		"output_bytes", len(audioData),
+	)
+
 	// Generate subtitles if enabled
 	subtitles := ""
 	if ds.GenerateSubtitles {
 		subtitles = generateSRT(captionedSegments)
+		logger.Debug("subtitles generated",
+			"subtitle_len", len(subtitles),
+		)
 	}
 
 	// Calculate total duration
@@ -266,6 +323,14 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 	for _, pause := range pauses {
 		totalDuration += pause
 	}
+
+	logger.Info("dialogue synthesis complete",
+		"total_duration_ms", totalDuration,
+		"total_duration_sec", totalDuration/1000,
+		"total_words", countTotalWords(captionedSegments),
+		"total_pauses", len(pauses),
+		"avg_pause_ms", averagePause(pauses),
+	)
 
 	result := &CaptionedDialogueResult{
 		Audio:           audioData,
@@ -355,4 +420,33 @@ func AnalyzeSpeechRate(segments []CaptionedSegment) float64 {
 	// Words per minute = (words / minutes)
 	minutes := float64(totalDurationMs) / 60000.0
 	return float64(totalWords) / minutes
+}
+
+// truncateText truncates text to maxLen characters for logging
+func truncateText(text string, maxLen int) string {
+	if len(text) <= maxLen {
+		return text
+	}
+	return text[:maxLen] + "..."
+}
+
+// countTotalWords counts total words across all segments
+func countTotalWords(segments []CaptionedSegment) int {
+	total := 0
+	for _, seg := range segments {
+		total += len(seg.Timestamps)
+	}
+	return total
+}
+
+// averagePause calculates average pause duration
+func averagePause(pauses []int) int {
+	if len(pauses) == 0 {
+		return 0
+	}
+	sum := 0
+	for _, p := range pauses {
+		sum += p
+	}
+	return sum / len(pauses)
 }

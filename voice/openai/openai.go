@@ -473,9 +473,10 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 	}
 
 	// Debug: log what we received
-	s.logger.Debug("captioned response",
+	s.logger.Debug("captioned response parsed",
 		"audio_len", len(capResp.Audio),
 		"timestamps_count", len(capResp.Timestamps),
+		"format", capResp.AudioFormat,
 	)
 
 	// Decode base64 audio
@@ -484,12 +485,31 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 		return nil, fmt.Errorf("openai: failed to decode base64 audio: %w", err)
 	}
 
+	s.logger.Debug("decoded audio",
+		"base64_len", len(capResp.Audio),
+		"decoded_len", len(audioData),
+		"first_100_bytes", fmt.Sprintf("%x", audioData[:min(100, len(audioData))]),
+	)
+
 	// Convert timestamps from seconds to milliseconds
 	// Handle floating point precision issues from Kokoro
 	timestamps := make([]voice.WordTimestamp, 0, len(capResp.Timestamps))
+	s.logger.Debug("processing timestamps",
+		"input_count", len(capResp.Timestamps),
+	)
+
 	for i, ts := range capResp.Timestamps {
 		startMs := int(ts.StartTime * 1000)
 		endMs := int(ts.EndTime * 1000)
+
+		s.logger.Debug("timestamp conversion",
+			"index", i,
+			"word", ts.Word,
+			"start_time_sec", ts.StartTime,
+			"end_time_sec", ts.EndTime,
+			"start_ms", startMs,
+			"end_ms", endMs,
+		)
 
 		// Clamp negative times to 0 (can happen with float precision)
 		if startMs < 0 {
@@ -529,11 +549,24 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 		})
 	}
 
+	s.logger.Debug("valid timestamps",
+		"input_count", len(capResp.Timestamps),
+		"valid_count", len(timestamps),
+		"skipped", len(capResp.Timestamps)-len(timestamps),
+	)
+
 	// Calculate total duration from last timestamp
 	durationMs := 0
 	if len(timestamps) > 0 {
 		durationMs = timestamps[len(timestamps)-1].EndMs
 	}
+
+	s.logger.Info("captioned synthesis complete",
+		"audio_bytes", len(audioData),
+		"word_count", len(timestamps),
+		"duration_ms", durationMs,
+		"format", options.Format,
+	)
 
 	return &voice.CaptionedAudio{
 		Data:       audioData,
