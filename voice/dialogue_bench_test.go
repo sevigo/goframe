@@ -12,7 +12,7 @@ func BenchmarkCalculateContextualPause(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		ds.calculateContextualPause("What do you think?", "I think it's great.", 200, 300)
+		ds.calculateContextualPause("Speaker", "What do you think?", "Speaker", "I think it's great.", 200, 300)
 	}
 }
 
@@ -65,7 +65,7 @@ func BenchmarkGenerateSRT(b *testing.B) {
 func BenchmarkApplyContextualPauseMultiplier(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		applyContextualPauseMultiplier("What do you think?", "I think it's great.")
+		applyContextualPauseMultiplier("What do you think?", "I think it's great.", "Speaker", "Speaker")
 	}
 }
 

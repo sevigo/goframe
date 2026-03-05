@@ -77,7 +77,7 @@ func TestCalculateContextualPause(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pause := ds.calculateContextualPause(tt.prevText, tt.currText, ds.PauseMsMin, ds.PauseMsMax)
+			pause := ds.calculateContextualPause("Speaker", tt.prevText, "Speaker", tt.currText, ds.PauseMsMin, ds.PauseMsMax)
 
 			if pause < tt.wantMin {
 				t.Errorf("pause too short: got %dms, want at least %dms for %q -> %q",

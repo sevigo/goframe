@@ -67,7 +67,8 @@ func TestApplyContextualPauseMultiplier(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			multiplier := applyContextualPauseMultiplier(tt.prevText, tt.currText)
+			// Use different speakers for normal conversation tests
+			multiplier := applyContextualPauseMultiplier(tt.prevText, tt.currText, "Alice", "Bob")
 
 			if multiplier < tt.wantMin*0.9 || multiplier > tt.wantMax*1.1 {
 				t.Errorf("multiplier = %.2f, want range [%.2f, %.2f] for %q -> %q",

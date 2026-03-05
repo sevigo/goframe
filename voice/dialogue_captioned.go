@@ -166,7 +166,7 @@ func (ds *DialogueSynthesizerCaptioned) CalculatePerfectPause(prev, curr *Captio
 	targetPause := ds.TargetPauseMs
 
 	// Apply context-aware adjustments using shared logic
-	multiplier := applyContextualPauseMultiplier(prev.Text, curr.Text)
+	multiplier := applyContextualPauseMultiplier(prev.Text, curr.Text, prev.Speaker, curr.Speaker)
 
 	// Adjust for actual speech duration (timestamp-based enhancement)
 	if prev.SpeechDurationMs < 600 {

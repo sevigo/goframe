@@ -323,9 +323,11 @@ func (ds *DialogueSynthesizer) StreamDialogue(ctx context.Context, segments []Di
 				currentRaw := segmentBuffer[i][wavFormat.dataOffset:]
 
 				// Segments already normalized during initial buffering (lines 306-308)
+				prevSpeaker := segments[i-1].Speaker
 				prevText := segments[i-1].Text
+				currSpeaker := segments[i].Speaker
 				currText := segments[i].Text
-				toWrite := ds.streamWAVSegment(prevRaw, currentRaw, wavFormat, prevText, currText)
+				toWrite := ds.streamWAVSegment(prevRaw, currentRaw, wavFormat, prevSpeaker, prevText, currSpeaker, currText)
 
 				if _, err = writer.Write(toWrite); err != nil {
 					writer.CloseWithError(err)
@@ -346,11 +348,24 @@ func (ds *DialogueSynthesizer) StreamDialogue(ctx context.Context, segments []Di
 // streamWAVSegment processes a single WAV segment with pause and crossfade.
 // It calculates an appropriate pause duration based on the dialogue context,
 // applies crossfading between segments, and returns the processed audio data.
-func (ds *DialogueSynthesizer) streamWAVSegment(prevRaw, currentRaw []byte, wavFormat wavInfo, prevText, currText string) []byte {
-	pauseMs := ds.calculateContextualPause(prevText, currText, ds.PauseMsMin, ds.PauseMsMax)
+func (ds *DialogueSynthesizer) streamWAVSegment(prevRaw, currentRaw []byte, wavFormat wavInfo, prevSpeaker, prevText, currSpeaker, currText string) []byte {
+	pauseMs := ds.calculateContextualPause(prevSpeaker, prevText, currSpeaker, currText, ds.PauseMsMin, ds.PauseMsMax)
+
+	// Handle negative pauses (interruptions/overlap)
+	if pauseMs < 0 {
+		return handleInterruption(prevRaw, currentRaw, wavFormat, -pauseMs)
+	}
+
 	pauseSamples := (pauseMs * wavFormat.sampleRate * wavFormat.numChannels) / 1000
 	pauseBytes := pauseSamples * wavFormat.bytesPerSample
-	silence := make([]byte, pauseBytes)
+
+	// Generate room tone instead of pure silence for natural pauses
+	var silence []byte
+	if pauseMs < RoomToneMaxPauseMs {
+		silence = generateRoomTone(pauseBytes, RoomToneAmplitude)
+	} else {
+		silence = make([]byte, pauseBytes)
+	}
 
 	var toWrite []byte
 	if ds.CrossfadeMs > 0 && len(prevRaw) > 0 && len(currentRaw) > 0 {
@@ -518,9 +533,11 @@ func (ds *DialogueSynthesizer) writeOrderedSegments(writer *io.PipeWriter, order
 				normalizeWAVVolume(data, wavFormat)
 			}
 
+			prevSpeaker := segments[i-1].Speaker
 			prevText := segments[i-1].Text
+			currSpeaker := segments[i].Speaker
 			currText := segments[i].Text
-			toWrite := ds.streamWAVSegment(prevRawAudio, currentRawAudio, wavFormat, prevText, currText)
+			toWrite := ds.streamWAVSegment(prevRawAudio, currentRawAudio, wavFormat, prevSpeaker, prevText, currSpeaker, currText)
 
 			if _, err = writer.Write(toWrite); err != nil {
 				writer.CloseWithError(err)
@@ -715,13 +732,14 @@ func crossfadeWAVEqualPower(prev, next []byte, info wavInfo, durationMs int) []b
 // pause that creates natural conversation flow.
 //
 // Pause adjustments are based on:
+//   - Speaker: Same-speaker continuations get much shorter pauses
 //   - Punctuation: Questions (?), exclamations (!), ellipses (...), dashes (—), commas (,)
 //   - Response patterns: Transition words, emotional reactions, continuation markers
 //   - Speech length: Short responses get shorter pauses, long sentences get longer pauses
 //
 // The function applies multipliers to the base pause range and adds randomness for naturalness.
 // Not security-sensitive - uses math/rand for variety in dialogue pacing.
-func (ds *DialogueSynthesizer) calculateContextualPause(prevText, currText string, minMs, maxMs int) int {
+func (ds *DialogueSynthesizer) calculateContextualPause(prevSpeaker, prevText, currSpeaker, currText string, minMs, maxMs int) int {
 	if maxMs <= minMs {
 		return minMs
 	}
@@ -729,7 +747,7 @@ func (ds *DialogueSynthesizer) calculateContextualPause(prevText, currText strin
 	base := minMs
 	variable := maxMs - minMs
 
-	multiplier := applyContextualPauseMultiplier(prevText, currText)
+	multiplier := applyContextualPauseMultiplier(prevText, currText, prevSpeaker, currSpeaker)
 
 	// Calculate final pause with randomness for naturalness
 	// Not security-sensitive - just adding variety to dialogue pacing
@@ -741,6 +759,11 @@ func (ds *DialogueSynthesizer) calculateContextualPause(prevText, currText strin
 	}
 	if pause > maxMs*2 { // Allow up to 2x max for dramatic moments
 		pause = maxMs * 2
+	}
+
+	// Allow negative pauses for interruptions
+	if prevSpeaker != currSpeaker && multiplier < 0 {
+		return int(float64(base) * multiplier)
 	}
 
 	return pause
