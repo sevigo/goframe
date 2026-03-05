@@ -22,8 +22,11 @@ const (
 	PauseMultMax          = 1.8
 	PauseMultInterruption = -0.3
 
-	RoomToneAmplitude  = 30
-	RoomToneMaxPauseMs = 3000
+	RoomToneAmplitude    = 30
+	RoomToneMaxPauseMs   = 3000
+	MaxTrailingSilenceMs = 500
+	MaxLeadingSilenceMs  = 300
+	MinPauseMs           = 50
 )
 
 func applyContextualPauseMultiplier(prevText, currText string, prevSpeaker, currSpeaker string) float64 {

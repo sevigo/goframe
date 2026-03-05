@@ -160,6 +160,19 @@ func (ds *DialogueSynthesizerCaptioned) CalculatePerfectPause(prev, curr *Captio
 		currLeading = curr.Timestamps[0].StartMs
 	}
 
+	// Cap built-in silence at reasonable values
+	// Kokoro sometimes includes 10-20 seconds of silence which is not intentional
+	// Maximum reasonable built-in silence is 500ms for trailing and 300ms for leading
+	maxTrailingSilence := 500
+	maxLeadingSilence := 300
+
+	if prevTrailing > maxTrailingSilence {
+		prevTrailing = maxTrailingSilence
+	}
+	if currLeading > maxLeadingSilence {
+		currLeading = maxLeadingSilence
+	}
+
 	// Total silence already in the audio
 	builtInSilence := prevTrailing + currLeading
 
@@ -184,8 +197,8 @@ func (ds *DialogueSynthesizerCaptioned) CalculatePerfectPause(prev, curr *Captio
 	// Add exactly what's needed
 	additionalPause := targetPause - builtInSilence
 	if additionalPause < 0 {
-		// Already have enough silence, don't add more
-		return 0
+		// Already have enough silence, but add minimal pause for naturalness
+		return 50
 	}
 
 	return additionalPause
@@ -211,6 +224,8 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 		"generate_subtitles", ds.GenerateSubtitles,
 		"crossfade_ms", ds.CrossfadeMs,
 		"target_pause_ms", ds.TargetPauseMs,
+		"max_trailing_silence_ms", MaxTrailingSilenceMs,
+		"max_leading_silence_ms", MaxLeadingSilenceMs,
 	)
 
 	// Synthesize all segments with timestamps
@@ -252,6 +267,18 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 			leadingSilence = audio.Timestamps[0].StartMs
 			speechDuration = lastWordEnd - audio.Timestamps[0].StartMs
 
+			// Warn if Kokoro added excessive silence (indicates trimming needed)
+			if trailingSilence > MaxTrailingSilenceMs || leadingSilence > MaxLeadingSilenceMs {
+				logger.Warn("Kokoro added excessive silence, will be capped",
+					"index", i,
+					"speaker", seg.Speaker,
+					"trailing_ms", trailingSilence,
+					"leading_ms", leadingSilence,
+					"max_trailing_ms", MaxTrailingSilenceMs,
+					"max_leading_ms", MaxLeadingSilenceMs,
+				)
+			}
+
 			logger.Debug("segment timing calculated",
 				"index", i,
 				"duration_ms", audio.DurationMs,
@@ -286,15 +313,25 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 		prev := &captionedSegments[i]
 		curr := &captionedSegments[i+1]
 
+		// Log pause calculation details
+		prevTrailingCapped := prev.TrailingSilenceMs
+		if prevTrailingCapped > MaxTrailingSilenceMs {
+			prevTrailingCapped = MaxTrailingSilenceMs
+		}
+		currLeadingCapped := curr.LeadingSilenceMs
+		if currLeadingCapped > MaxLeadingSilenceMs {
+			currLeadingCapped = MaxLeadingSilenceMs
+		}
+
 		logger.Info("pause calculated",
 			"between", fmt.Sprintf("segment %d (%s) -> %d (%s)", i, prev.Speaker, i+1, curr.Speaker),
 			"pause_ms", pause,
-			"target_pause_ms", ds.TargetPauseMs,
-			"prev_duration_ms", prev.DurationMs,
-			"prev_speech_ms", prev.SpeechDurationMs,
-			"prev_trailing_ms", prev.TrailingSilenceMs,
-			"curr_leading_ms", curr.LeadingSilenceMs,
-			"built_in_silence_ms", prev.TrailingSilenceMs+curr.LeadingSilenceMs,
+			"target_ms", ds.TargetPauseMs,
+			"prev_trailing_raw_ms", prev.TrailingSilenceMs,
+			"prev_trailing_capped_ms", prevTrailingCapped,
+			"curr_leading_raw_ms", curr.LeadingSilenceMs,
+			"curr_leading_capped_ms", currLeadingCapped,
+			"built_in_silence_capped_ms", prevTrailingCapped+currLeadingCapped,
 			"prev_text_preview", truncateText(prev.Text, 30),
 			"curr_text_preview", truncateText(curr.Text, 30),
 		)
