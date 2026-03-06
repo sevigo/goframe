@@ -12,9 +12,9 @@ import (
 // Chunk parses HTML content and returns code chunks with metadata.
 // This method:
 //  1. Parses HTML using goquery
-//  2. Removes boilerplate (nav, footer, scripts)
-//  3. Normalizes links (relative → absolute)
-//  4. Extracts metadata (author, date, title)
+//  2. Extracts metadata (author, date, title) - MUST be before boilerplate removal
+//  3. Removes boilerplate (nav, footer, scripts)
+//  4. Normalizes links (relative → absolute)
 //  5. Converts to Markdown
 //  6. Returns chunks with governance annotations
 func (p *HTMLParser) Chunk(content string, path string, opts *schema.CodeChunkingOptions) ([]schema.CodeChunk, error) {
@@ -24,14 +24,14 @@ func (p *HTMLParser) Chunk(content string, path string, opts *schema.CodeChunkin
 		return nil, fmt.Errorf("failed to parse HTML: %w", err)
 	}
 
-	// 2. Remove boilerplate
+	// 2. Extract metadata BEFORE removing boilerplate (head section contains metadata)
+	metadata := p.extractMetadata(doc)
+
+	// 3. Remove boilerplate
 	p.removeBoilerplate(doc)
 
-	// 3. Normalize links
+	// 4. Normalize links
 	p.normalizeLinks(doc)
-
-	// 4. Extract metadata
-	metadata := p.extractMetadata(doc)
 
 	// 5. Convert to Markdown
 	markdown := p.toMarkdown(doc)

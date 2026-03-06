@@ -89,7 +89,7 @@ func main() {
 	if err != nil {
 		logger.Warn("Failed to initialize embedder, will skip vector store", "error", err)
 		fmt.Println("\n💡 Tip: Make sure Ollama is running with: ollama serve")
-		fmt.Println("💡 And pull the embedding model: ollama pull qwen3-embedding:0.6b\n")
+		fmt.Println("💡 And pull the embedding model: ollama pull qwen3-embedding:0.6b")
 
 		// Continue without vector store - just show the content
 		ingestWithoutVectorStore(ctx, loader, logger)
@@ -182,7 +182,7 @@ func main() {
 
 func ingestWithoutVectorStore(ctx context.Context, loader *documentloaders.RSSLoader, logger *slog.Logger) {
 	fmt.Println("\n⚠️  Running without vector store (Ollama not available)")
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 	docs, err := loader.Load(ctx)
 	if err != nil {
@@ -203,7 +203,7 @@ func ingestWithoutVectorStore(ctx context.Context, loader *documentloaders.RSSLo
 		fmt.Printf("Source: %v\n", doc.Metadata["source"])
 		fmt.Printf("Keywords: %v\n", doc.Metadata["keywords"])
 		fmt.Printf("\nContent (Markdown):\n%s\n\n", truncate(doc.PageContent, 300))
-		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	}
 }
 

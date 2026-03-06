@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"golang.org/x/net/html"
 )
 
 // toMarkdown converts an HTML document to Markdown format.
@@ -42,8 +43,12 @@ func (p *HTMLParser) nodeToMarkdown(s *goquery.Selection, depth int) string {
 	node := s.Nodes[0]
 
 	// Handle text nodes (node.Data contains text for text nodes)
-	if node.Type == 3 { // goquery.TextNode = 3
-		return strings.TrimSpace(node.Data)
+	if node.Type == html.TextNode {
+		text := strings.TrimSpace(node.Data)
+		if text == "" {
+			return ""
+		}
+		return text + " "
 	}
 
 	// Handle element nodes by tag name
@@ -127,7 +132,7 @@ func (p *HTMLParser) listToMarkdown(s *goquery.Selection, listType string, depth
 	var result strings.Builder
 	indent := strings.Repeat("  ", depth)
 
-	s.Find("> li").Each(func(i int, li *goquery.Selection) {
+	s.Find("li").Each(func(i int, li *goquery.Selection) {
 		text := strings.TrimSpace(li.Text())
 		if listType == "ul" {
 			result.WriteString(fmt.Sprintf("%s- %s\n", indent, text))
