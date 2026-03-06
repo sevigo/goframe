@@ -172,7 +172,7 @@ func performSearch(ctx context.Context, vectorStore vectorstores.VectorStore, lo
 	}
 }
 
-func initializeEmbedder(ctx context.Context, logger *slog.Logger) (embeddings.Embedder, error) {
+func initializeEmbedder(_ context.Context, logger *slog.Logger) (embeddings.Embedder, error) {
 	llm, err := ollama.New(
 		ollama.WithModel("qwen3-embedding:0.6b"),
 		ollama.WithLogger(logger),
