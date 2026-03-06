@@ -290,11 +290,9 @@ func (r *RSSLoader) LoadAndProcessStream(ctx context.Context, processFn func(ctx
 
 	var processorWg sync.WaitGroup
 	for range r.options.WorkerCount {
-		processorWg.Add(1)
-		go func() {
-			defer processorWg.Done()
+		processorWg.Go(func() {
 			r.processFeedWorker(pipelineCtx, feedChan, docChan)
-		}()
+		})
 	}
 
 	go func() {
