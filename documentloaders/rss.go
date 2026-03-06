@@ -15,6 +15,7 @@ import (
 	"github.com/mmcdole/gofeed"
 	"github.com/sevigo/goframe/parsers"
 	"github.com/sevigo/goframe/schema"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -23,6 +24,7 @@ const (
 	defaultTimeout        = 30 * time.Second
 	defaultMaxItems       = 100
 	defaultRetryAttempts  = 3
+	defaultRateLimit      = 10 // requests per second
 )
 
 // Error variables for RSS loading operations.
@@ -57,6 +59,8 @@ type RSSLoader struct {
 	httpClient *http.Client
 	logger     *slog.Logger
 	options    rssLoaderOptions
+	seenMu     sync.RWMutex // Protects options.SeenItems
+	limiter    *rate.Limiter
 }
 
 type rssLoaderOptions struct {
@@ -71,6 +75,7 @@ type rssLoaderOptions struct {
 	Normalization  NormalizationConfig
 	SkipDuplicates bool
 	SeenItems      map[string]bool
+	RateLimit      int // requests per second
 }
 
 // RSSLoaderOption configures an RSSLoader.
@@ -103,6 +108,7 @@ func WithRSSTimeout(timeout time.Duration) RSSLoaderOption {
 	}
 }
 
+// WithRSSMaxItems sets the maximum number of items to fetch per feed.
 func WithRSSMaxItems(count int) RSSLoaderOption {
 	return func(opts *rssLoaderOptions) {
 		if count > 0 {
@@ -168,6 +174,17 @@ func WithRSSSeenItems(seen map[string]bool) RSSLoaderOption {
 	}
 }
 
+// WithRSSRateLimit sets the maximum number of requests per second.
+// This helps prevent overwhelming RSS servers with too many concurrent requests.
+// Default is 10 requests per second.
+func WithRSSRateLimit(requestsPerSecond int) RSSLoaderOption {
+	return func(opts *rssLoaderOptions) {
+		if requestsPerSecond > 0 {
+			opts.RateLimit = requestsPerSecond
+		}
+	}
+}
+
 // NewRSS creates a new RSSLoader for the specified feed URLs.
 // Returns an error if no URLs are provided or the registry is nil.
 func NewRSS(feedURLs []string, registry parsers.ParserRegistry, opts ...RSSLoaderOption) (*RSSLoader, error) {
@@ -189,6 +206,7 @@ func NewRSS(feedURLs []string, registry parsers.ParserRegistry, opts ...RSSLoade
 		SeenItems:      make(map[string]bool),
 		SkipDuplicates: false,
 		Logger:         slog.Default(),
+		RateLimit:      defaultRateLimit,
 	}
 
 	for _, opt := range opts {
@@ -206,6 +224,9 @@ func NewRSS(feedURLs []string, registry parsers.ParserRegistry, opts ...RSSLoade
 	parser.Client = loaderOpts.HTTPClient
 	parser.UserAgent = loaderOpts.UserAgent
 
+	// Create rate limiter
+	limiter := rate.NewLimiter(rate.Limit(loaderOpts.RateLimit), loaderOpts.RateLimit)
+
 	return &RSSLoader{
 		feedURLs:   feedURLs,
 		parser:     parser,
@@ -214,12 +235,13 @@ func NewRSS(feedURLs []string, registry parsers.ParserRegistry, opts ...RSSLoade
 		httpClient: loaderOpts.HTTPClient,
 		logger:     loaderOpts.Logger.With("component", "rss_loader"),
 		options:    loaderOpts,
+		limiter:    limiter,
 	}, nil
 }
 
 // Load fetches all feeds and returns all documents.
-// This is a convenience method that collects all documents in memory.
-// For large feeds, use LoadAndProcessStream instead.
+// Warning: This method loads all documents into memory. For large feeds,
+// use LoadAndProcessStream instead for better memory efficiency.
 func (r *RSSLoader) Load(ctx context.Context) ([]schema.Document, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -349,6 +371,11 @@ func (r *RSSLoader) fetchFeedWithRetry(ctx context.Context, feedURL string) RSSF
 			return RSSFeedData{URL: feedURL, Error: ctx.Err()}
 		}
 
+		// Apply rate limiting
+		if err := r.limiter.Wait(ctx); err != nil {
+			return RSSFeedData{URL: feedURL, Error: err}
+		}
+
 		feed, err := r.fetchFeed(ctx, feedURL)
 		if err == nil {
 			r.logger.DebugContext(ctx, "Feed fetched successfully", "url", feedURL, "items", len(feed.Items))
@@ -367,10 +394,14 @@ func (r *RSSLoader) fetchFeedWithRetry(ctx context.Context, feedURL string) RSSF
 			"error", err)
 
 		if attempt < r.options.MaxRetries {
+			// Use a timer with proper cleanup
+			timer := time.NewTimer(time.Second * time.Duration(attempt+1))
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return RSSFeedData{URL: feedURL, Error: ctx.Err()}
-			case <-time.After(time.Second * time.Duration(attempt+1)):
+			case <-timer.C:
+				timer.Stop()
 			}
 		}
 	}
@@ -443,29 +474,38 @@ func (r *RSSLoader) processFeedItems(feedData RSSFeedData) []schema.Document {
 }
 
 func (r *RSSLoader) createDocument(item *gofeed.Item, feedData RSSFeedData) *schema.Document {
+	// Get GUID for deduplication
 	guid := item.GUID
 	if guid == "" {
 		guid = item.Link
 	}
 
-	if r.options.SkipDuplicates && r.options.SeenItems[guid] {
-		r.logger.Debug("Skipping duplicate item", "guid", guid)
-		return nil
+	// Deduplication check
+	if r.options.SkipDuplicates {
+		r.seenMu.RLock()
+		if r.options.SeenItems[guid] {
+			r.seenMu.RUnlock()
+			r.logger.Debug("Skipping duplicate item", "guid", guid)
+			return nil
+		}
+		r.seenMu.RUnlock()
 	}
 
+	// Normalize content
 	title := r.normalizer.NormalizeTitle(item.Title, item.Link)
 	content := item.Content
 	if content == "" {
 		content = item.Description
 	}
-
 	content = r.normalizer.NormalizeContent(content)
 
+	// Skip low-quality items
 	if r.normalizer.ShouldSkipItem(title, content) {
 		r.logger.Debug("Skipping item: insufficient content", "title", title)
 		return nil
 	}
 
+	// Build metadata
 	link := r.normalizer.NormalizeURL(item.Link)
 	link = r.normalizer.ResolveURL(feedData.Feed.Link, link)
 
@@ -497,8 +537,11 @@ func (r *RSSLoader) createDocument(item *gofeed.Item, feedData RSSFeedData) *sch
 		"is_definition": false,
 	}
 
+	// Mark as seen after successful processing
 	if r.options.SkipDuplicates {
+		r.seenMu.Lock()
 		r.options.SeenItems[guid] = true
+		r.seenMu.Unlock()
 	}
 
 	return &schema.Document{

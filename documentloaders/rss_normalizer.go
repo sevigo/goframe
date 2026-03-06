@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/microcosm-cc/bluemonday"
 )
@@ -115,18 +116,28 @@ func (n *RSSNormalizer) NormalizeContent(content string) string {
 }
 
 func (n *RSSNormalizer) truncateText(text string, maxLen int) string {
-	if len(text) <= maxLen {
+	if utf8.RuneCountInString(text) <= maxLen {
 		return text
 	}
 
-	text = text[:maxLen]
-	lastSpace := strings.LastIndex(text, " ")
-	if lastSpace > maxLen/2 {
-		text = text[:lastSpace]
+	// Convert to runes to avoid splitting multi-byte characters
+	runes := []rune(text)
+	if len(runes) <= maxLen {
+		return text
 	}
-	text = strings.TrimSpace(text) + "..."
 
-	return text
+	// Truncate to maxLen runes
+	truncated := runes[:maxLen]
+
+	// Try to find last space to avoid cutting words
+	for i := len(truncated) - 1; i > maxLen/2; i-- {
+		if truncated[i] == ' ' {
+			return string(truncated[:i]) + "..."
+		}
+	}
+
+	// No space found, just truncate at rune boundary
+	return string(truncated) + "..."
 }
 
 // NormalizeURL cleans a URL by removing tracking parameters and fragments.

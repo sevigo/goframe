@@ -217,9 +217,12 @@ func TestRSSLoader_WithDuplicates(t *testing.T) {
 }
 
 func TestRSSLoader_WithTimeout(t *testing.T) {
+	// Create a server that delays response
+	delay := 2 * time.Second
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(2 * time.Second)
+		time.Sleep(delay)
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<rss><channel><title>Test</title></channel></rss>`))
 	}))
 	defer server.Close()
 
@@ -236,10 +239,17 @@ func TestRSSLoader_WithTimeout(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	// Use a context with deadline shorter than the server delay
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 
+	start := time.Now()
 	docs, err := loader.Load(ctx)
+	elapsed := time.Since(start)
+
+	// The loader should timeout and return quickly
+	assert.Less(t, elapsed, 300*time.Millisecond, "Should timeout quickly")
+
 	// If there's an error, that's acceptable (timeout)
 	// If no error but no docs, that's also acceptable (feed failed but loader continues)
 	if err == nil {
