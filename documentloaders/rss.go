@@ -624,17 +624,24 @@ func (r *RSSLoader) extractFeedMetadata(feed *gofeed.Feed) map[string]any {
 
 // batchAndProcess collects documents into batches and calls processFn.
 // This method uses a common streaming pattern intentionally similar to GitLoader.
-func (r *RSSLoader) batchAndProcess(ctx context.Context, docChan <-chan schema.Document, processFn func(ctx context.Context, docs []schema.Document) error) error { //nolint:dupl // Common streaming pattern shared by document loaders
+func (r *RSSLoader) batchAndProcess(ctx context.Context, docChan <-chan schema.Document, processFn func(ctx context.Context, docs []schema.Document) error) error {
 	batch := make([]schema.Document, 0, r.options.BatchSize)
 
 	for {
 		select {
 		case <-ctx.Done():
+			// Drain remaining docs to prevent blocking senders
+			go func() {
+				for range docChan {
+					// Drain channel
+				}
+			}()
 			return ctx.Err()
 		case doc, ok := <-docChan:
 			if !ok {
 				if len(batch) > 0 {
 					if err := processFn(ctx, batch); err != nil {
+						// Final batch failed, but channel is already closed, no need to drain
 						return fmt.Errorf("final batch processing failed: %w", err)
 					}
 				}
@@ -645,6 +652,12 @@ func (r *RSSLoader) batchAndProcess(ctx context.Context, docChan <-chan schema.D
 
 			if len(batch) >= r.options.BatchSize {
 				if err := processFn(ctx, batch); err != nil {
+					// Drain remaining docs to prevent blocking senders
+					go func() {
+						for range docChan {
+							// Drain channel
+						}
+					}()
 					return fmt.Errorf("batch processing failed: %w", err)
 				}
 				batch = make([]schema.Document, 0, r.options.BatchSize)

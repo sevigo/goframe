@@ -244,7 +244,9 @@ func (p *HTMLParser) tableToMarkdown(s *goquery.Selection) string {
 
 	// Header
 	s.Find("thead tr th").Each(func(i int, th *goquery.Selection) {
-		result.WriteString(fmt.Sprintf("| %s ", strings.TrimSpace(th.Text())))
+		text := strings.TrimSpace(th.Text())
+		text = strings.ReplaceAll(text, "|", "\\|")
+		result.WriteString(fmt.Sprintf("| %s ", text))
 	})
 	result.WriteString("|\n")
 
@@ -257,7 +259,9 @@ func (p *HTMLParser) tableToMarkdown(s *goquery.Selection) string {
 	// Body
 	s.Find("tbody tr").Each(func(i int, tr *goquery.Selection) {
 		tr.Find("td").Each(func(j int, td *goquery.Selection) {
-			result.WriteString(fmt.Sprintf("| %s ", strings.TrimSpace(td.Text())))
+			text := strings.TrimSpace(td.Text())
+			text = strings.ReplaceAll(text, "|", "\\|")
+			result.WriteString(fmt.Sprintf("| %s ", text))
 		})
 		result.WriteString("|\n")
 	})

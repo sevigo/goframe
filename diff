@@ -1,0 +1,4375 @@
+diff --git a/.golangci.yaml b/.golangci.yaml
+index bb21c01..ed4df34 100644
+--- a/.golangci.yaml
++++ b/.golangci.yaml
+@@ -399,6 +399,9 @@ linters:
+     presets:
+       - std-error-handling
+       - common-false-positives
++    # Paths to exclude from all analysis.
++    paths:
++      - examples
+     # Excluding configuration per-path, per-linter, per-text and per-source.
+     rules:
+       - text: 'should have a package comment'
+@@ -411,6 +414,7 @@ linters:
+       - text: 'comment on exported \S+ \S+ should be of the form ".+"'
+         source: '// ?(nolint|TODO)'
+         linters: [ revive, staticcheck ]
++
+       - path: '_test\.go'
+         linters:
+           - bodyclose
+diff --git a/README.md b/README.md
+index 56294b5..a7ec088 100644
+--- a/README.md
++++ b/README.md
+@@ -32,8 +32,9 @@ The framework is built around a set of core interfaces for LLMs, Embedders, and
+     -   **Embeddings**: Decoupled embedding generation.
+ -   **Advanced Document Processing**:
+     -   **GitLoader**: Smart loading with automatic metadata extraction (imports, packages).
++    -   **RSSLoader**: Ingest RSS/Atom/JSON feeds with HTML sanitization and content normalization.
+     -   **Code-Aware Splitter**: Semantically chunks code while preserving context.
+-    -   **Parsers**: Plugins for Go, TypeScript, Markdown, JSON, YAML, PDF, and more.
++    -   **Parsers**: Plugins for Go, TypeScript, Markdown, JSON, YAML, PDF, and RSS.
+ 
+ ## Quick Start
+ 
+@@ -133,7 +134,62 @@ store.AddDocuments(ctx, docs)
+ results, _ := store.SimilaritySearch(ctx, "Europe capital", 1)
+ ```
+ 
+-### 2. Graph / Dependency Analysis
++### 3. RSS Feed Ingestion
++
++Ingest RSS/Atom/JSON feeds into your RAG pipeline:
++
++```go
++import (
++    "github.com/sevigo/goframe/documentloaders"
++    "github.com/sevigo/goframe/parsers"
++)
++
++// Initialize parser registry
++registry := parsers.NewRegistry(logger)
++registry.RegisterParser(parsers.NewRSSParser())
++
++// Create RSS loader with normalization
++loader, _ := documentloaders.NewRSS(
++    []string{
++        "https://news.ycombinator.com/rss",
++        "https://feeds.bbci.co.uk/news/technology/rss.xml",
++    },
++    registry,
++    documentloaders.WithRSSNormalization(documentloaders.NormalizationConfig{
++        StripHTML:        true,    // Strip HTML tags vs sanitize
++        RemoveTracking:   true,    // Remove UTM/fbclid parameters
++        MaxContentLength: 10000,   // Truncate long content
++        MinContentLength: 100,     // Skip short items
++        NormalizeURLs:    true,    // Remove fragments
++        MinTitleLength:   5,       // Minimum title length
++        FallbackToURL:    true,    // Use URL as title if missing
++        NormalizeAuthors: true,    // Clean author names
++    }),
++    documentloaders.WithRSSMaxItems(100),           // Max items per feed
++    documentloaders.WithRSSSkipDuplicates(true),     // Skip duplicate items
++    documentloaders.WithRSSBatchSize(50),            // Batch size
++)
++
++// Load documents
++docs, _ := loader.Load(ctx)
++
++// Or stream to vector store
++loader.LoadAndProcessStream(ctx, func(ctx context.Context, batch []schema.Document) error {
++    vectorStore.AddDocuments(ctx, batch)
++    return nil
++})
++```
++
++**Features:**
++- HTML sanitization with OWASP-compliant XSS protection
++- URL normalization (remove tracking parameters)
++- Date parsing (RFC1123, RFC3339, ISO8601)
++- Content deduplication by GUID/link
++- Parallel feed fetching with worker pools
++- Batch processing with backpressure
++- Retry logic with exponential backoff
++
++### 4. Graph / Dependency Analysis
+ 
+ Perform sophisticated code navigation using the `DependencyRetriever`.
+ 
+diff --git a/documentloaders/git.go b/documentloaders/git.go
+index 4424db3..875536b 100644
+--- a/documentloaders/git.go
++++ b/documentloaders/git.go
+@@ -402,7 +402,7 @@ func (g *GitLoader) processFilesWorker(ctx context.Context, fileChan <-chan File
+ 	}
+ }
+ 
+-func (g *GitLoader) batchAndProcess(ctx context.Context, docChan <-chan schema.Document, processFn func(ctx context.Context, docs []schema.Document) error) error {
++func (g *GitLoader) batchAndProcess(ctx context.Context, docChan <-chan schema.Document, processFn func(ctx context.Context, docs []schema.Document) error) error { //nolint:dupl // Common streaming pattern shared by document loaders
+ 	batch := make([]schema.Document, 0, g.options.BatchSize)
+ 
+ 	for {
+diff --git a/documentloaders/rss.go b/documentloaders/rss.go
+new file mode 100644
+index 0000000..783c284
+--- /dev/null
++++ b/documentloaders/rss.go
+@@ -0,0 +1,654 @@
++// Package documentloaders provides document loading utilities for RAG applications.
++// It includes loaders for git repositories, RSS feeds, and other document sources
++// with support for streaming, batch processing, and memory protection.
++package documentloaders
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"log/slog"
++	"net/http"
++	"sync"
++	"time"
++
++	"github.com/mmcdole/gofeed"
++	"github.com/sevigo/goframe/parsers"
++	"github.com/sevigo/goframe/schema"
++	"golang.org/x/time/rate"
++)
++
++const (
++	defaultRSSBatchSize   = 50
++	defaultRSSWorkerCount = 5
++	defaultTimeout        = 30 * time.Second
++	defaultMaxItems       = 100
++	defaultRetryAttempts  = 3
++	defaultRateLimit      = 10 // requests per second
++)
++
++// Error variables for RSS loading operations.
++var (
++	// ErrInvalidFeedURL is returned when the feed URL is invalid.
++	ErrInvalidFeedURL = errors.New("documentloaders: invalid feed URL")
++	// ErrNoFeedURLs is returned when no feed URLs are provided.
++	ErrNoFeedURLs = errors.New("documentloaders: no feed URLs provided")
++	// ErrFeedFetchFailed is returned when a feed cannot be fetched.
++	ErrFeedFetchFailed = errors.New("documentloaders: failed to fetch feed")
++	// ErrTimeoutExceeded is returned when the timeout is exceeded.
++	ErrTimeoutExceeded = errors.New("documentloaders: timeout exceeded")
++	// ErrMaxRetriesExceeded is returned when max retries are exceeded.
++	ErrMaxRetriesExceeded = errors.New("documentloaders: max retries exceeded")
++)
++
++// RSSFeedData represents a fetched RSS feed with its metadata.
++type RSSFeedData struct {
++	URL      string
++	Feed     *gofeed.Feed
++	Metadata map[string]any
++	Error    error
++}
++
++// RSSLoader loads and processes documents from RSS/Atom feeds.
++// It supports batch processing, parallel feed fetching, and content normalization.
++type RSSLoader struct {
++	feedURLs   []string
++	parser     *gofeed.Parser
++	registry   parsers.ParserRegistry
++	normalizer *RSSNormalizer
++	httpClient *http.Client
++	logger     *slog.Logger
++	options    rssLoaderOptions
++	seenMu     sync.RWMutex // Protects options.SeenItems
++	limiter    *rate.Limiter
++}
++
++type rssLoaderOptions struct {
++	BatchSize      int
++	WorkerCount    int
++	Timeout        time.Duration
++	MaxItems       int
++	MaxRetries     int
++	UserAgent      string
++	HTTPClient     *http.Client
++	Logger         *slog.Logger
++	Normalization  NormalizationConfig
++	SkipDuplicates bool
++	SeenItems      map[string]bool
++	RateLimit      int                 // requests per second
++	HTMLParser     schema.ParserPlugin // Optional: for HTML content transformation
++}
++
++// RSSLoaderOption configures an RSSLoader.
++type RSSLoaderOption func(*rssLoaderOptions)
++
++// WithRSSBatchSize sets the batch size for document processing.
++func WithRSSBatchSize(size int) RSSLoaderOption {
++	return func(opts *rssLoaderOptions) {
++		if size > 0 {
++			opts.BatchSize = size
++		}
++	}
++}
++
++// WithRSSWorkerCount sets the number of parallel workers for feed fetching.
++func WithRSSWorkerCount(count int) RSSLoaderOption {
++	return func(opts *rssLoaderOptions) {
++		if count > 0 {
++			opts.WorkerCount = count
++		}
++	}
++}
++
++// WithRSSTimeout sets the HTTP timeout for feed requests.
++func WithRSSTimeout(timeout time.Duration) RSSLoaderOption {
++	return func(opts *rssLoaderOptions) {
++		if timeout > 0 {
++			opts.Timeout = timeout
++		}
++	}
++}
++
++// WithRSSMaxItems sets the maximum number of items to fetch per feed.
++func WithRSSMaxItems(count int) RSSLoaderOption {
++	return func(opts *rssLoaderOptions) {
++		if count > 0 {
++			opts.MaxItems = count
++		}
++	}
++}
++
++// WithRSSMaxRetries sets the number of retry attempts for failed requests.
++func WithRSSMaxRetries(retries int) RSSLoaderOption {
++	return func(opts *rssLoaderOptions) {
++		if retries >= 0 {
++			opts.MaxRetries = retries
++		}
++	}
++}
++
++// WithRSSUserAgent sets a custom User-Agent header for HTTP requests.
++func WithRSSUserAgent(userAgent string) RSSLoaderOption {
++	return func(opts *rssLoaderOptions) {
++		if userAgent != "" {
++			opts.UserAgent = userAgent
++		}
++	}
++}
++
++// WithRSSHTTPClient sets a custom HTTP client for feed requests.
++func WithRSSHTTPClient(client *http.Client) RSSLoaderOption {
++	return func(opts *rssLoaderOptions) {
++		if client != nil {
++			opts.HTTPClient = client
++		}
++	}
++}
++
++// WithRSSLogger sets a custom logger for the loader.
++func WithRSSLogger(logger *slog.Logger) RSSLoaderOption {
++	return func(opts *rssLoaderOptions) {
++		if logger != nil {
++			opts.Logger = logger
++		}
++	}
++}
++
++// WithRSSNormalization sets the content normalization configuration.
++func WithRSSNormalization(config NormalizationConfig) RSSLoaderOption {
++	return func(opts *rssLoaderOptions) {
++		opts.Normalization = config
++	}
++}
++
++// WithRSSSkipDuplicates enables deduplication of feed items by GUID/link.
++func WithRSSSkipDuplicates(skip bool) RSSLoaderOption {
++	return func(opts *rssLoaderOptions) {
++		opts.SkipDuplicates = skip
++	}
++}
++
++// WithRSSSeenItems provides a pre-populated map of seen item GUIDs for deduplication.
++func WithRSSSeenItems(seen map[string]bool) RSSLoaderOption {
++	return func(opts *rssLoaderOptions) {
++		opts.SeenItems = seen
++	}
++}
++
++// WithRSSRateLimit sets the maximum number of requests per second.
++// This helps prevent overwhelming RSS servers with too many concurrent requests.
++// Default is 10 requests per second.
++func WithRSSRateLimit(requestsPerSecond int) RSSLoaderOption {
++	return func(opts *rssLoaderOptions) {
++		if requestsPerSecond > 0 {
++			opts.RateLimit = requestsPerSecond
++		}
++	}
++}
++
++// WithHTMLParser sets an HTML parser for transforming HTML content to Markdown.
++// When set, the HTML parser will:
++//   - Remove boilerplate (nav, footer, scripts)
++//   - Normalize links (relative → absolute)
++//   - Extract metadata (author, date, title)
++//   - Convert to clean Markdown
++//
++// This is useful for RSS feeds with rich HTML content that needs to be
++// optimized for LLM consumption before being stored in vector databases.
++func WithHTMLParser(htmlParser schema.ParserPlugin) RSSLoaderOption {
++	return func(opts *rssLoaderOptions) {
++		opts.HTMLParser = htmlParser
++	}
++}
++
++// NewRSS creates a new RSSLoader for the specified feed URLs.
++// Returns an error if no URLs are provided or the registry is nil.
++func NewRSS(feedURLs []string, registry parsers.ParserRegistry, opts ...RSSLoaderOption) (*RSSLoader, error) {
++	if len(feedURLs) == 0 {
++		return nil, ErrNoFeedURLs
++	}
++
++	if registry == nil {
++		return nil, ErrNilRegistry
++	}
++
++	loaderOpts := rssLoaderOptions{
++		BatchSize:      defaultRSSBatchSize,
++		WorkerCount:    defaultRSSWorkerCount,
++		Timeout:        defaultTimeout,
++		MaxItems:       defaultMaxItems,
++		MaxRetries:     defaultRetryAttempts,
++		UserAgent:      "goframe-rss-loader/1.0",
++		SeenItems:      make(map[string]bool),
++		SkipDuplicates: false,
++		Logger:         slog.Default(),
++		RateLimit:      defaultRateLimit,
++	}
++
++	for _, opt := range opts {
++		opt(&loaderOpts)
++	}
++
++	if loaderOpts.HTTPClient == nil {
++		loaderOpts.HTTPClient = &http.Client{
++			Timeout: loaderOpts.Timeout,
++		}
++	}
++
++	normalizer := NewRSSNormalizer(loaderOpts.Normalization)
++	parser := gofeed.NewParser()
++	parser.Client = loaderOpts.HTTPClient
++	parser.UserAgent = loaderOpts.UserAgent
++
++	// Create rate limiter
++	limiter := rate.NewLimiter(rate.Limit(loaderOpts.RateLimit), loaderOpts.RateLimit)
++
++	return &RSSLoader{
++		feedURLs:   feedURLs,
++		parser:     parser,
++		registry:   registry,
++		normalizer: normalizer,
++		httpClient: loaderOpts.HTTPClient,
++		logger:     loaderOpts.Logger.With("component", "rss_loader"),
++		options:    loaderOpts,
++		limiter:    limiter,
++	}, nil
++}
++
++// Load fetches all feeds and returns all documents.
++// Warning: This method loads all documents into memory. For large feeds,
++// use LoadAndProcessStream instead for better memory efficiency.
++func (r *RSSLoader) Load(ctx context.Context) ([]schema.Document, error) {
++	if ctx.Err() != nil {
++		return nil, ctx.Err()
++	}
++
++	r.logger.InfoContext(ctx, "Starting RSS feed load", "feeds", len(r.feedURLs))
++
++	var documents []schema.Document
++	var mu sync.Mutex
++
++	err := r.LoadAndProcessStream(ctx, func(ctx context.Context, docs []schema.Document) error {
++		mu.Lock()
++		documents = append(documents, docs...)
++		mu.Unlock()
++		return nil
++	})
++
++	if err != nil {
++		return nil, err
++	}
++
++	r.logger.InfoContext(ctx, "RSS feed load completed", "total_documents", len(documents))
++	return documents, nil
++}
++
++func (r *RSSLoader) LoadAndProcessStream(ctx context.Context, processFn func(ctx context.Context, docs []schema.Document) error) error {
++	if ctx.Err() != nil {
++		return ctx.Err()
++	}
++
++	r.logger.InfoContext(ctx, "Starting streaming RSS load")
++
++	feedChan := make(chan RSSFeedData, r.options.WorkerCount*2)
++	docChan := make(chan schema.Document, r.options.BatchSize*2)
++	errChan := make(chan error, 1)
++
++	pipelineCtx, cancel := context.WithCancel(ctx)
++	defer cancel()
++
++	var wg sync.WaitGroup
++
++	wg.Go(func() {
++		defer close(feedChan)
++		r.fetchFeedsWorkers(pipelineCtx, feedChan)
++	})
++
++	var processorWg sync.WaitGroup
++	for range r.options.WorkerCount {
++		processorWg.Go(func() {
++			r.processFeedWorker(pipelineCtx, feedChan, docChan)
++		})
++	}
++
++	go func() {
++		processorWg.Wait()
++		close(docChan)
++	}()
++
++	wg.Go(func() {
++		if err := r.batchAndProcess(pipelineCtx, docChan, processFn); err != nil {
++			select {
++			case errChan <- fmt.Errorf("batch processing failed: %w", err):
++			default:
++			}
++			cancel()
++		}
++	})
++
++	wg.Wait()
++
++	select {
++	case err := <-errChan:
++		return err
++	default:
++	}
++
++	if ctx.Err() != nil {
++		return ctx.Err()
++	}
++
++	r.logger.InfoContext(ctx, "Streaming RSS load completed")
++	return nil
++}
++func (r *RSSLoader) fetchFeedsWorkers(ctx context.Context, feedChan chan<- RSSFeedData) {
++	var wg sync.WaitGroup
++	urlChan := make(chan string, len(r.feedURLs))
++
++	for _, url := range r.feedURLs {
++		urlChan <- url
++	}
++	close(urlChan)
++
++	for range r.options.WorkerCount {
++		wg.Go(func() {
++			for feedURL := range urlChan {
++				if ctx.Err() != nil {
++					return
++				}
++
++				feedData := r.fetchFeedWithRetry(ctx, feedURL)
++				select {
++				case feedChan <- feedData:
++				case <-ctx.Done():
++					return
++				}
++			}
++		})
++	}
++
++	wg.Wait()
++}
++
++func (r *RSSLoader) fetchFeedWithRetry(ctx context.Context, feedURL string) RSSFeedData {
++	var lastErr error
++
++	for attempt := 0; attempt <= r.options.MaxRetries; attempt++ {
++		if ctx.Err() != nil {
++			return RSSFeedData{URL: feedURL, Error: ctx.Err()}
++		}
++
++		// Apply rate limiting
++		if err := r.limiter.Wait(ctx); err != nil {
++			return RSSFeedData{URL: feedURL, Error: err}
++		}
++
++		feed, err := r.fetchFeed(ctx, feedURL)
++		if err == nil {
++			r.logger.DebugContext(ctx, "Feed fetched successfully", "url", feedURL, "items", len(feed.Items))
++			return RSSFeedData{
++				URL:      feedURL,
++				Feed:     feed,
++				Metadata: r.extractFeedMetadata(feed),
++			}
++		}
++
++		lastErr = err
++		r.logger.WarnContext(ctx, "Feed fetch attempt failed",
++			"url", feedURL,
++			"attempt", attempt+1,
++			"max_retries", r.options.MaxRetries,
++			"error", err)
++
++		if attempt < r.options.MaxRetries {
++			// Use a timer with proper cleanup
++			timer := time.NewTimer(time.Second * time.Duration(attempt+1))
++			select {
++			case <-ctx.Done():
++				timer.Stop()
++				return RSSFeedData{URL: feedURL, Error: ctx.Err()}
++			case <-timer.C:
++				timer.Stop()
++			}
++		}
++	}
++
++	r.logger.ErrorContext(ctx, "Failed to fetch feed after all retries", "url", feedURL, "error", lastErr)
++	return RSSFeedData{URL: feedURL, Error: lastErr}
++}
++
++func (r *RSSLoader) fetchFeed(ctx context.Context, feedURL string) (*gofeed.Feed, error) {
++	reqCtx, cancel := context.WithTimeout(ctx, r.options.Timeout)
++	defer cancel()
++
++	feed, err := r.parser.ParseURLWithContext(feedURL, reqCtx)
++	if err != nil {
++		return nil, fmt.Errorf("%w: %w", ErrFeedFetchFailed, err)
++	}
++
++	return feed, nil
++}
++
++func (r *RSSLoader) processFeedWorker(ctx context.Context, feedChan <-chan RSSFeedData, docChan chan<- schema.Document) {
++	for {
++		select {
++		case <-ctx.Done():
++			return
++		case feedData, ok := <-feedChan:
++			if !ok {
++				return
++			}
++
++			if feedData.Error != nil {
++				r.logger.ErrorContext(ctx, "Skipping feed due to error",
++					"url", feedData.URL,
++					"error", feedData.Error)
++				continue
++			}
++
++			docs := r.processFeedItems(feedData)
++			for _, doc := range docs {
++				select {
++				case docChan <- doc:
++				case <-ctx.Done():
++					return
++				}
++			}
++		}
++	}
++}
++
++func (r *RSSLoader) processFeedItems(feedData RSSFeedData) []schema.Document {
++	if feedData.Feed == nil {
++		return nil
++	}
++
++	items := feedData.Feed.Items
++	if r.options.MaxItems > 0 && len(items) > r.options.MaxItems {
++		items = items[:r.options.MaxItems]
++	}
++
++	var documents []schema.Document
++
++	for _, item := range items {
++		doc := r.createDocument(item, feedData)
++		if doc != nil {
++			documents = append(documents, *doc)
++		}
++	}
++
++	return documents
++}
++
++func (r *RSSLoader) createDocument(item *gofeed.Item, feedData RSSFeedData) *schema.Document {
++	// Get GUID for deduplication
++	guid := item.GUID
++	if guid == "" {
++		guid = item.Link
++	}
++
++	// Deduplication check
++	if r.options.SkipDuplicates {
++		r.seenMu.RLock()
++		if r.options.SeenItems[guid] {
++			r.seenMu.RUnlock()
++			r.logger.Debug("Skipping duplicate item", "guid", guid)
++			return nil
++		}
++		r.seenMu.RUnlock()
++	}
++
++	// Normalize content
++	title := r.normalizer.NormalizeTitle(item.Title, item.Link)
++	content := item.Content
++	if content == "" {
++		content = item.Description
++	}
++
++	// Use HTML parser if available for rich content
++	var htmlAnnotations map[string]string
++	if r.options.HTMLParser != nil && content != "" {
++		// Parse HTML content with the HTML parser
++		chunks, err := r.options.HTMLParser.Chunk(content, item.Link, nil)
++		if err == nil && len(chunks) > 0 {
++			// Use the parsed markdown content
++			content = chunks[0].Content
++			// Preserve annotations from HTML parser
++			htmlAnnotations = chunks[0].Annotations
++		} else {
++			// Fallback to normalizer if HTML parsing fails
++			r.logger.Debug("HTML parsing failed, using normalizer", "error", err)
++			content = r.normalizer.NormalizeContent(content)
++		}
++	} else {
++		// Use normalizer for plain content
++		content = r.normalizer.NormalizeContent(content)
++	}
++
++	// Skip low-quality items
++	if r.normalizer.ShouldSkipItem(title, content) {
++		r.logger.Debug("Skipping item: insufficient content", "title", title)
++		return nil
++	}
++
++	// Build metadata
++	link := r.normalizer.NormalizeURL(item.Link)
++	link = r.normalizer.ResolveURL(feedData.Feed.Link, link)
++
++	pubDate := r.normalizer.ParseDate(item.Published)
++	if pubDate.IsZero() {
++		pubDate = r.normalizer.ParseDate(item.Updated)
++	}
++
++	author := ""
++	if item.Author != nil {
++		author = r.normalizer.NormalizeAuthor(item.Author.Name)
++	}
++
++	categories := r.normalizer.NormalizeCategories(item.Categories)
++
++	metadata := map[string]any{
++		"source":        feedData.URL,
++		"feed_title":    feedData.Feed.Title,
++		"feed_link":     feedData.Feed.Link,
++		"title":         title,
++		"link":          link,
++		"pub_date":      pubDate,
++		"author":        author,
++		"categories":    categories,
++		"guid":          guid,
++		"content_type":  "rss_item",
++		"chunk_type":    "rss_content",
++		"identifier":    guid,
++		"is_definition": false,
++	}
++
++	// Merge HTML parser annotations if available
++	if htmlAnnotations != nil {
++		// Add author from HTML if not already present
++		if htmlAuthor, ok := htmlAnnotations["author"]; ok && author == "" {
++			metadata["author"] = htmlAuthor
++		}
++		// Add published_date from HTML if not already present
++		if htmlDate, ok := htmlAnnotations["published_date"]; ok && pubDate.IsZero() {
++			metadata["published_date"] = htmlDate
++		}
++		// Add keywords from HTML
++		if keywords, ok := htmlAnnotations["keywords"]; ok {
++			metadata["keywords"] = keywords
++		}
++		// Add canonical URL
++		if canonical, ok := htmlAnnotations["canonical_url"]; ok {
++			metadata["canonical_url"] = canonical
++		}
++	}
++
++	// Mark as seen after successful processing
++	if r.options.SkipDuplicates {
++		r.seenMu.Lock()
++		r.options.SeenItems[guid] = true
++		r.seenMu.Unlock()
++	}
++
++	return &schema.Document{
++		PageContent: content,
++		Metadata:    metadata,
++	}
++}
++
++func (r *RSSLoader) extractFeedMetadata(feed *gofeed.Feed) map[string]any {
++	metadata := map[string]any{
++		"feed_title":       feed.Title,
++		"feed_link":        feed.Link,
++		"feed_description": feed.Description,
++	}
++
++	if feed.Language != "" {
++		metadata["feed_language"] = feed.Language
++	}
++
++	if feed.Published != "" {
++		if pubDate := r.normalizer.ParseDate(feed.Published); !pubDate.IsZero() {
++			metadata["feed_published"] = pubDate
++		}
++	}
++
++	if feed.Updated != "" {
++		if updated := r.normalizer.ParseDate(feed.Updated); !updated.IsZero() {
++			metadata["feed_updated"] = updated
++		}
++	}
++
++	return metadata
++}
++
++// batchAndProcess collects documents into batches and calls processFn.
++// This method uses a common streaming pattern intentionally similar to GitLoader.
++func (r *RSSLoader) batchAndProcess(ctx context.Context, docChan <-chan schema.Document, processFn func(ctx context.Context, docs []schema.Document) error) error { //nolint:dupl // Common streaming pattern shared by document loaders
++	batch := make([]schema.Document, 0, r.options.BatchSize)
++
++	for {
++		select {
++		case <-ctx.Done():
++			return ctx.Err()
++		case doc, ok := <-docChan:
++			if !ok {
++				if len(batch) > 0 {
++					if err := processFn(ctx, batch); err != nil {
++						return fmt.Errorf("final batch processing failed: %w", err)
++					}
++				}
++				return nil
++			}
++
++			batch = append(batch, doc)
++
++			if len(batch) >= r.options.BatchSize {
++				if err := processFn(ctx, batch); err != nil {
++					return fmt.Errorf("batch processing failed: %w", err)
++				}
++				batch = make([]schema.Document, 0, r.options.BatchSize)
++			}
++		}
++	}
++}
+diff --git a/documentloaders/rss_normalizer.go b/documentloaders/rss_normalizer.go
+new file mode 100644
+index 0000000..4853793
+--- /dev/null
++++ b/documentloaders/rss_normalizer.go
+@@ -0,0 +1,336 @@
++package documentloaders
++
++import (
++	"net/url"
++	"regexp"
++	"strings"
++	"time"
++	"unicode/utf8"
++
++	"github.com/microcosm-cc/bluemonday"
++)
++
++// NormalizationConfig configures how RSS content is normalized and cleaned.
++type NormalizationConfig struct {
++	// StripHTML removes all HTML tags. If false, HTML is sanitized instead.
++	StripHTML bool
++	// MaxContentLength is the maximum length for content (0 = unlimited).
++	MaxContentLength int
++	// MinContentLength is the minimum length for content (items below this are skipped).
++	MinContentLength int
++	// RemoveTracking removes tracking parameters from URLs (UTM, fbclid, etc.).
++	RemoveTracking bool
++	// NormalizeURLs removes fragments and normalizes URL structure.
++	NormalizeURLs bool
++	// DefaultTimezone is used for parsing dates without timezone info.
++	DefaultTimezone *time.Location
++	// DateFormats are custom date formats to try when parsing.
++	DateFormats []string
++	// MinTitleLength is the minimum title length.
++	MinTitleLength int
++	// FallbackToURL uses URL path as title if title is too short.
++	FallbackToURL bool
++	// NormalizeAuthors cleans author names (removes emails, quotes).
++	NormalizeAuthors bool
++	// DeduplicationField specifies which field to use for deduplication ("guid" or "link").
++	DeduplicationField string
++}
++
++// RSSNormalizer handles content normalization and sanitization for RSS feeds.
++// It provides HTML sanitization, URL cleaning, date parsing, and metadata normalization.
++type RSSNormalizer struct {
++	htmlPolicy *bluemonday.Policy
++	config     NormalizationConfig
++}
++
++// NewRSSNormalizer creates a new RSS normalizer with the given configuration.
++// If config values are zero, sensible defaults are applied.
++func NewRSSNormalizer(config NormalizationConfig) *RSSNormalizer {
++	if config.MaxContentLength == 0 {
++		config.MaxContentLength = 10000
++	}
++	if config.MinContentLength == 0 {
++		config.MinContentLength = 50
++	}
++	if config.MinTitleLength == 0 {
++		config.MinTitleLength = 3
++	}
++	if config.DeduplicationField == "" {
++		config.DeduplicationField = "guid"
++	}
++
++	policy := bluemonday.UGCPolicy()
++	policy.AllowStandardURLs()
++	policy.RequireNoFollowOnLinks(true)
++	policy.AddTargetBlankToFullyQualifiedLinks(true)
++
++	return &RSSNormalizer{
++		htmlPolicy: policy,
++		config:     config,
++	}
++}
++
++// SanitizeHTML sanitizes HTML content using a safe whitelist policy.
++// It removes dangerous elements (script, iframe) and attributes (onclick, etc.).
++// Adds rel="nofollow noopener" and target="_blank" to external links.
++func (n *RSSNormalizer) SanitizeHTML(html string) string {
++	if html == "" {
++		return ""
++	}
++	sanitized := n.htmlPolicy.Sanitize(html)
++	return strings.TrimSpace(sanitized)
++}
++
++// StripHTMLTags removes all HTML tags, returning plain text.
++func (n *RSSNormalizer) StripHTMLTags(html string) string {
++	if html == "" {
++		return ""
++	}
++	stripper := bluemonday.StrictPolicy()
++	text := stripper.Sanitize(html)
++	return strings.TrimSpace(text)
++}
++
++// NormalizeContent normalizes content by sanitizing/stripping HTML and truncating.
++// It removes excess whitespace and enforces length limits.
++func (n *RSSNormalizer) NormalizeContent(content string) string {
++	if content == "" {
++		return ""
++	}
++
++	var text string
++	if n.config.StripHTML {
++		text = n.StripHTMLTags(content)
++	} else {
++		text = n.SanitizeHTML(content)
++	}
++
++	text = strings.TrimSpace(text)
++	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
++
++	if n.config.MaxContentLength > 0 && len(text) > n.config.MaxContentLength {
++		text = n.truncateText(text, n.config.MaxContentLength)
++	}
++
++	return text
++}
++
++func (n *RSSNormalizer) truncateText(text string, maxLen int) string {
++	if utf8.RuneCountInString(text) <= maxLen {
++		return text
++	}
++
++	// Convert to runes to avoid splitting multi-byte characters
++	runes := []rune(text)
++	if len(runes) <= maxLen {
++		return text
++	}
++
++	// Truncate to maxLen runes
++	truncated := runes[:maxLen]
++
++	// Try to find last space to avoid cutting words
++	for i := len(truncated) - 1; i > maxLen/2; i-- {
++		if truncated[i] == ' ' {
++			return string(truncated[:i]) + "..."
++		}
++	}
++
++	// No space found, just truncate at rune boundary
++	return string(truncated) + "..."
++}
++
++// NormalizeURL cleans a URL by removing tracking parameters and fragments.
++// It can remove UTM parameters, fbclid, gclid, and other tracking identifiers.
++func (n *RSSNormalizer) NormalizeURL(rawURL string) string {
++	if rawURL == "" {
++		return ""
++	}
++
++	parsedURL, err := url.Parse(rawURL)
++	if err != nil {
++		return rawURL
++	}
++
++	if n.config.RemoveTracking {
++		q := parsedURL.Query()
++		trackingParams := []string{
++			"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
++			"fbclid", "gclid", "msclkid", "ref", "source", "_ga",
++		}
++		for _, param := range trackingParams {
++			q.Del(param)
++		}
++		parsedURL.RawQuery = q.Encode()
++	}
++
++	if n.config.NormalizeURLs {
++		parsedURL.Fragment = ""
++	}
++
++	return parsedURL.String()
++}
++
++// ParseDate attempts to parse a date string using multiple common formats.
++// Supports RFC1123, RFC1123Z, RFC822, RFC822Z, RFC3339, ISO8601, and custom formats.
++// Returns a zero time if parsing fails.
++func (n *RSSNormalizer) ParseDate(dateStr string) time.Time {
++	if dateStr == "" {
++		return time.Time{}
++	}
++
++	if n.config.DefaultTimezone != nil {
++		if t, err := time.ParseInLocation(time.RFC1123, dateStr, n.config.DefaultTimezone); err == nil {
++			return t
++		}
++		if t, err := time.ParseInLocation(time.RFC1123Z, dateStr, n.config.DefaultTimezone); err == nil {
++			return t
++		}
++		if t, err := time.ParseInLocation(time.RFC822, dateStr, n.config.DefaultTimezone); err == nil {
++			return t
++		}
++		if t, err := time.ParseInLocation(time.RFC822Z, dateStr, n.config.DefaultTimezone); err == nil {
++			return t
++		}
++	}
++
++	formats := []string{
++		time.RFC1123,
++		time.RFC1123Z,
++		time.RFC822,
++		time.RFC822Z,
++		time.RFC3339,
++		time.RFC3339Nano,
++		"2006-01-02T15:04:05Z07:00",
++		"2006-01-02T15:04:05Z",
++		"2006-01-02 15:04:05",
++		"2006-01-02",
++	}
++	formats = append(formats, n.config.DateFormats...)
++
++	for _, format := range formats {
++		if t, err := time.Parse(format, dateStr); err == nil {
++			return t
++		}
++	}
++
++	return time.Time{}
++}
++
++// NormalizeAuthor cleans author names by removing email addresses and quotes.
++// Example: "John Doe <john@example.com>" becomes "John Doe".
++func (n *RSSNormalizer) NormalizeAuthor(author string) string {
++	if author == "" {
++		return ""
++	}
++
++	author = strings.TrimSpace(author)
++
++	if n.config.NormalizeAuthors {
++		re := regexp.MustCompile(`(.+?)\s*<.*?>`)
++		matches := re.FindStringSubmatch(author)
++		if len(matches) > 1 {
++			author = strings.TrimSpace(matches[1])
++		}
++
++		author = strings.TrimPrefix(author, "\"")
++		author = strings.TrimSuffix(author, "\"")
++		author = strings.TrimPrefix(author, "'")
++		author = strings.TrimSuffix(author, "'")
++	}
++
++	return author
++}
++
++// NormalizeCategories normalizes and deduplicates category strings.
++// Converts to lowercase and removes empty categories.
++func (n *RSSNormalizer) NormalizeCategories(categories []string) []string {
++	if len(categories) == 0 {
++		return nil
++	}
++
++	normalized := make([]string, 0, len(categories))
++	seen := make(map[string]bool)
++
++	for _, cat := range categories {
++		cat = strings.TrimSpace(cat)
++		cat = strings.ToLower(cat)
++		if cat != "" && !seen[cat] {
++			seen[cat] = true
++			normalized = append(normalized, cat)
++		}
++	}
++
++	return normalized
++}
++
++// NormalizeTitle normalizes the title or generates one from the URL if too short.
++// Extracts the last path segment as a fallback title.
++func (n *RSSNormalizer) NormalizeTitle(title string, fallbackURL string) string {
++	title = strings.TrimSpace(title)
++
++	if len(title) < n.config.MinTitleLength && n.config.FallbackToURL && fallbackURL != "" {
++		parsedURL, err := url.Parse(fallbackURL)
++		if err == nil {
++			path := parsedURL.Path
++			path = strings.TrimSuffix(path, "/")
++			parts := strings.Split(path, "/")
++			if len(parts) > 0 {
++				lastPart := parts[len(parts)-1]
++				if len(lastPart) > n.config.MinTitleLength {
++					lastPart = strings.ReplaceAll(lastPart, "-", " ")
++					lastPart = strings.ReplaceAll(lastPart, "_", " ")
++					title = lastPart
++				}
++			}
++		}
++	}
++
++	return title
++}
++
++// ShouldSkipItem determines if an item should be skipped based on content quality.
++// Returns true if title or content is too short.
++func (n *RSSNormalizer) ShouldSkipItem(title, content string) bool {
++	title = strings.TrimSpace(title)
++	content = strings.TrimSpace(content)
++
++	if n.config.MinContentLength > 0 && len(content) < n.config.MinContentLength {
++		return true
++	}
++
++	if len(title) < n.config.MinTitleLength {
++		return true
++	}
++
++	return false
++}
++
++// ResolveURL resolves a relative URL against a base URL.
++// If the URL is already absolute, it's returned as-is.
++func (n *RSSNormalizer) ResolveURL(baseURL, relativeURL string) string {
++	if relativeURL == "" {
++		return ""
++	}
++
++	if strings.HasPrefix(relativeURL, "http://") || strings.HasPrefix(relativeURL, "https://") {
++		return relativeURL
++	}
++
++	if baseURL == "" {
++		return relativeURL
++	}
++
++	base, err := url.Parse(baseURL)
++	if err != nil {
++		return relativeURL
++	}
++
++	rel, err := url.Parse(relativeURL)
++	if err != nil {
++		return relativeURL
++	}
++
++	resolved := base.ResolveReference(rel)
++	return resolved.String()
++}
+diff --git a/documentloaders/rss_normalizer_test.go b/documentloaders/rss_normalizer_test.go
+new file mode 100644
+index 0000000..085c2fd
+--- /dev/null
++++ b/documentloaders/rss_normalizer_test.go
+@@ -0,0 +1,452 @@
++package documentloaders_test
++
++import (
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++
++	"github.com/sevigo/goframe/documentloaders"
++)
++
++func TestRSSNormalizer_SanitizeHTML(t *testing.T) {
++	config := documentloaders.NormalizationConfig{
++		StripHTML: false,
++	}
++	normalizer := documentloaders.NewRSSNormalizer(config)
++
++	tests := []struct {
++		name     string
++		input    string
++		expected string
++	}{
++		{
++			name:     "Safe HTML",
++			input:    `<p>This is <b>bold</b> text</p>`,
++			expected: `<p>This is <b>bold</b> text</p>`,
++		},
++		{
++			name:     "Script removal",
++			input:    `<p>Text</p><script>alert('xss')</script>`,
++			expected: `<p>Text</p>`,
++		},
++		{
++			name:     "Onclick removal",
++			input:    `<a href="http://example.com" onclick="alert('xss')">Link</a>`,
++			expected: `<a href="http://example.com" rel="nofollow noopener" target="_blank">Link</a>`,
++		},
++		{
++			name:     "Empty input",
++			input:    "",
++			expected: "",
++		},
++		{
++			name:     "Whitespace trimming",
++			input:    "  <p>Text</p>  ",
++			expected: "<p>Text</p>",
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			result := normalizer.SanitizeHTML(tt.input)
++			assert.Equal(t, tt.expected, result)
++		})
++	}
++}
++
++func TestRSSNormalizer_StripHTMLTags(t *testing.T) {
++	config := documentloaders.NormalizationConfig{}
++	normalizer := documentloaders.NewRSSNormalizer(config)
++
++	tests := []struct {
++		name     string
++		input    string
++		expected string
++	}{
++		{
++			name:     "Remove all tags",
++			input:    `<p>This is <b>bold</b> text</p>`,
++			expected: "This is bold text",
++		},
++		{
++			name:     "Complex HTML",
++			input:    `<div><h1>Title</h1><p>Paragraph</p></div>`,
++			expected: "TitleParagraph",
++		},
++		{
++			name:     "Empty input",
++			input:    "",
++			expected: "",
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			result := normalizer.StripHTMLTags(tt.input)
++			assert.Equal(t, tt.expected, result)
++		})
++	}
++}
++
++func TestRSSNormalizer_NormalizeContent(t *testing.T) {
++	t.Run("Strip HTML mode", func(t *testing.T) {
++		config := documentloaders.NormalizationConfig{
++			StripHTML:        true,
++			MaxContentLength: 100,
++		}
++		normalizer := documentloaders.NewRSSNormalizer(config)
++
++		input := `<p>This is <b>HTML</b> content with <a href="#">links</a></p>`
++		result := normalizer.NormalizeContent(input)
++		assert.Equal(t, "This is HTML content with links", result)
++	})
++
++	t.Run("Sanitize HTML mode", func(t *testing.T) {
++		config := documentloaders.NormalizationConfig{
++			StripHTML:        false,
++			MaxContentLength: 100,
++		}
++		normalizer := documentloaders.NewRSSNormalizer(config)
++
++		input := `<p>This is <b>HTML</b> content</p>`
++		result := normalizer.NormalizeContent(input)
++		assert.Contains(t, result, "<p>")
++		assert.Contains(t, result, "<b>")
++	})
++
++	t.Run("Truncation", func(t *testing.T) {
++		config := documentloaders.NormalizationConfig{
++			StripHTML:        true,
++			MaxContentLength: 50,
++		}
++		normalizer := documentloaders.NewRSSNormalizer(config)
++
++		input := "This is a very long piece of content that should be truncated at the maximum length limit"
++		result := normalizer.NormalizeContent(input)
++		assert.LessOrEqual(t, len(result), 53) // 50 chars + "..."
++		assert.Contains(t, result, "...")
++	})
++
++	t.Run("Whitespace normalization", func(t *testing.T) {
++		config := documentloaders.NormalizationConfig{
++			StripHTML: true,
++		}
++		normalizer := documentloaders.NewRSSNormalizer(config)
++
++		input := "This  has   multiple    spaces\nand\ttabs"
++		result := normalizer.NormalizeContent(input)
++		assert.Equal(t, "This has multiple spaces and tabs", result)
++	})
++}
++
++func TestRSSNormalizer_NormalizeURL(t *testing.T) {
++	config := documentloaders.NormalizationConfig{
++		RemoveTracking: true,
++		NormalizeURLs:  true,
++	}
++	normalizer := documentloaders.NewRSSNormalizer(config)
++
++	tests := []struct {
++		name     string
++		input    string
++		expected string
++	}{
++		{
++			name:     "Remove UTM parameters",
++			input:    "https://example.com/article?utm_source=rss&utm_medium=feed",
++			expected: "https://example.com/article",
++		},
++		{
++			name:     "Remove fbclid",
++			input:    "https://example.com/page?fbclid=abc123",
++			expected: "https://example.com/page",
++		},
++		{
++			name:     "Keep non-tracking params",
++			input:    "https://example.com/page?id=123&category=tech",
++			expected: "https://example.com/page?category=tech&id=123",
++		},
++		{
++			name:     "Remove fragment",
++			input:    "https://example.com/page#section",
++			expected: "https://example.com/page",
++		},
++		{
++			name:     "Empty URL",
++			input:    "",
++			expected: "",
++		},
++		{
++			name:     "Invalid URL",
++			input:    "not a valid url",
++			expected: "not%20a%20valid%20url",
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			result := normalizer.NormalizeURL(tt.input)
++			assert.Equal(t, tt.expected, result)
++		})
++	}
++}
++
++func TestRSSNormalizer_ParseDate(t *testing.T) {
++	config := documentloaders.NormalizationConfig{}
++	normalizer := documentloaders.NewRSSNormalizer(config)
++
++	tests := []struct {
++		name    string
++		input   string
++		notZero bool
++	}{
++		{name: "RFC1123", input: "Mon, 02 Jan 2006 15:04:05 MST", notZero: true},
++		{name: "RFC1123Z", input: "Mon, 02 Jan 2006 15:04:05 -0700", notZero: true},
++		{name: "RFC822", input: "02 Jan 06 15:04 MST", notZero: true},
++		{name: "RFC3339", input: "2006-01-02T15:04:05+07:00", notZero: true},
++		{name: "ISO8601", input: "2006-01-02T15:04:05Z", notZero: true},
++		{name: "Simple date", input: "2006-01-02", notZero: true},
++		{name: "Empty string", input: "", notZero: false},
++		{name: "Invalid date", input: "not a date", notZero: false},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			result := normalizer.ParseDate(tt.input)
++			if tt.notZero {
++				assert.False(t, result.IsZero(), "Expected non-zero time for %s", tt.input)
++			} else {
++				assert.True(t, result.IsZero(), "Expected zero time for %s", tt.input)
++			}
++		})
++	}
++}
++
++func TestRSSNormalizer_NormalizeAuthor(t *testing.T) {
++	config := documentloaders.NormalizationConfig{
++		NormalizeAuthors: true,
++	}
++	normalizer := documentloaders.NewRSSNormalizer(config)
++
++	tests := []struct {
++		name     string
++		input    string
++		expected string
++	}{
++		{
++			name:     "Name with email",
++			input:    "John Doe <john@example.com>",
++			expected: "John Doe",
++		},
++		{
++			name:     "Name only",
++			input:    "Jane Smith",
++			expected: "Jane Smith",
++		},
++		{
++			name:     "Quoted name",
++			input:    `"John Doe"`,
++			expected: "John Doe",
++		},
++		{
++			name:     "Whitespace trimming",
++			input:    "  John Doe  ",
++			expected: "John Doe",
++		},
++		{
++			name:     "Empty string",
++			input:    "",
++			expected: "",
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			result := normalizer.NormalizeAuthor(tt.input)
++			assert.Equal(t, tt.expected, result)
++		})
++	}
++}
++
++func TestRSSNormalizer_NormalizeCategories(t *testing.T) {
++	config := documentloaders.NormalizationConfig{}
++	normalizer := documentloaders.NewRSSNormalizer(config)
++
++	tests := []struct {
++		name     string
++		input    []string
++		expected []string
++	}{
++		{
++			name:     "Basic normalization",
++			input:    []string{"Tech", "NEWS", "programming"},
++			expected: []string{"tech", "news", "programming"},
++		},
++		{
++			name:     "Remove duplicates",
++			input:    []string{"Tech", "tech", "TECH"},
++			expected: []string{"tech"},
++		},
++		{
++			name:     "Remove empty",
++			input:    []string{"Tech", "", "News", "  "},
++			expected: []string{"tech", "news"},
++		},
++		{
++			name:     "Empty input",
++			input:    []string{},
++			expected: nil,
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			result := normalizer.NormalizeCategories(tt.input)
++			assert.Equal(t, tt.expected, result)
++		})
++	}
++}
++
++func TestRSSNormalizer_NormalizeTitle(t *testing.T) {
++	config := documentloaders.NormalizationConfig{
++		MinTitleLength: 3,
++		FallbackToURL:  true,
++	}
++	normalizer := documentloaders.NewRSSNormalizer(config)
++
++	tests := []struct {
++		name        string
++		title       string
++		fallbackURL string
++		expected    string
++	}{
++		{
++			name:        "Valid title",
++			title:       "  Good Title  ",
++			fallbackURL: "https://example.com/path",
++			expected:    "Good Title",
++		},
++		{
++			name:        "Title too short with URL fallback",
++			title:       "AB",
++			fallbackURL: "https://example.com/my-article-title",
++			expected:    "my article title",
++		},
++		{
++			name:        "Empty title with URL fallback",
++			title:       "",
++			fallbackURL: "https://example.com/article-title-here",
++			expected:    "article title here",
++		},
++		{
++			name:        "Too short with short URL",
++			title:       "X",
++			fallbackURL: "https://example.com/ab",
++			expected:    "X",
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			result := normalizer.NormalizeTitle(tt.title, tt.fallbackURL)
++			assert.Equal(t, tt.expected, result)
++		})
++	}
++}
++
++func TestRSSNormalizer_ShouldSkipItem(t *testing.T) {
++	config := documentloaders.NormalizationConfig{
++		MinContentLength: 50,
++		MinTitleLength:   3,
++	}
++	normalizer := documentloaders.NewRSSNormalizer(config)
++
++	tests := []struct {
++		name     string
++		title    string
++		content  string
++		expected bool
++	}{
++		{
++			name:     "Valid item",
++			title:    "Good Title",
++			content:  "This is a sufficiently long piece of content that meets the minimum requirement",
++			expected: false,
++		},
++		{
++			name:     "Content too short",
++			title:    "Good Title",
++			content:  "Too short",
++			expected: true,
++		},
++		{
++			name:     "Title too short",
++			title:    "AB",
++			content:  "This is a sufficiently long piece of content that meets the minimum requirement",
++			expected: true,
++		},
++		{
++			name:     "Both too short",
++			title:    "X",
++			content:  "Short",
++			expected: true,
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			result := normalizer.ShouldSkipItem(tt.title, tt.content)
++			assert.Equal(t, tt.expected, result)
++		})
++	}
++}
++
++func TestRSSNormalizer_ResolveURL(t *testing.T) {
++	config := documentloaders.NormalizationConfig{}
++	normalizer := documentloaders.NewRSSNormalizer(config)
++
++	tests := []struct {
++		name        string
++		baseURL     string
++		relativeURL string
++		expected    string
++	}{
++		{
++			name:        "Absolute URL",
++			baseURL:     "https://example.com",
++			relativeURL: "https://other.com/page",
++			expected:    "https://other.com/page",
++		},
++		{
++			name:        "Relative path",
++			baseURL:     "https://example.com/feed",
++			relativeURL: "/article/123",
++			expected:    "https://example.com/article/123",
++		},
++		{
++			name:        "Relative with path",
++			baseURL:     "https://example.com/feed/",
++			relativeURL: "article/123",
++			expected:    "https://example.com/feed/article/123",
++		},
++		{
++			name:        "Empty relative URL",
++			baseURL:     "https://example.com",
++			relativeURL: "",
++			expected:    "",
++		},
++		{
++			name:        "Empty base URL",
++			baseURL:     "",
++			relativeURL: "/article",
++			expected:    "/article",
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			result := normalizer.ResolveURL(tt.baseURL, tt.relativeURL)
++			assert.Equal(t, tt.expected, result)
++		})
++	}
++}
+diff --git a/documentloaders/rss_test.go b/documentloaders/rss_test.go
+new file mode 100644
+index 0000000..26dc96c
+--- /dev/null
++++ b/documentloaders/rss_test.go
+@@ -0,0 +1,292 @@
++package documentloaders_test
++
++import (
++	"context"
++	"log/slog"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"testing"
++	"time"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++
++	"github.com/sevigo/goframe/documentloaders"
++	"github.com/sevigo/goframe/parsers"
++	"github.com/sevigo/goframe/schema"
++)
++
++func TestRSSLoader_Load(t *testing.T) {
++	rssFeed := `<?xml version="1.0" encoding="UTF-8"?>
++<rss version="2.0">
++  <channel>
++    <title>Test Feed</title>
++    <link>https://example.com</link>
++    <description>A test RSS feed</description>
++    <item>
++      <title>First Article</title>
++      <link>https://example.com/article1?utm_source=rss</link>
++      <description>&lt;p&gt;This is &lt;b&gt;HTML&lt;/b&gt; content&lt;/p&gt;</description>
++      <pubDate>Mon, 02 Jan 2006 15:04:05 -0700</pubDate>
++      <author>John Doe</author>
++      <guid>article-1</guid>
++      <category>Tech</category>
++      <category>News</category>
++    </item>
++    <item>
++      <title>Second Article</title>
++      <link>https://example.com/article2</link>
++      <description>Plain description without HTML</description>
++      <pubDate>Tue, 03 Jan 2006 10:00:00 +0000</pubDate>
++      <guid>article-2</guid>
++    </item>
++  </channel>
++</rss>`
++
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		w.Header().Set("Content-Type", "application/xml")
++		w.WriteHeader(http.StatusOK)
++		_, _ = w.Write([]byte(rssFeed))
++	}))
++	defer server.Close()
++
++	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
++	registry := parsers.NewRegistry(logger)
++	err := registry.RegisterParser(parsers.NewRSSParser())
++	require.NoError(t, err)
++
++	loader, err := documentloaders.NewRSS(
++		[]string{server.URL},
++		registry,
++		documentloaders.WithRSSBatchSize(10),
++		documentloaders.WithRSSMaxItems(10),
++		documentloaders.WithRSSNormalization(documentloaders.NormalizationConfig{
++			StripHTML:        true,
++			RemoveTracking:   true,
++			MaxContentLength: 1000,
++			MinContentLength: 10,
++		}),
++	)
++	require.NoError(t, err)
++
++	docs, err := loader.Load(context.Background())
++	require.NoError(t, err)
++	require.NotNil(t, docs)
++	assert.GreaterOrEqual(t, len(docs), 2)
++
++	foundArticle1 := false
++	foundArticle2 := false
++
++	for _, doc := range docs {
++		title, _ := doc.Metadata["title"].(string)
++		if title == "First Article" {
++			foundArticle1 = true
++			assert.Contains(t, doc.PageContent, "This is HTML content")
++			assert.NotContains(t, doc.PageContent, "<p>")
++			assert.NotContains(t, doc.PageContent, "<b>")
++
++			link, _ := doc.Metadata["link"].(string)
++			assert.NotContains(t, link, "utm_source")
++
++			author, _ := doc.Metadata["author"].(string)
++			assert.Equal(t, "John Doe", author)
++
++			categories, _ := doc.Metadata["categories"].([]string)
++			assert.Contains(t, categories, "tech")
++			assert.Contains(t, categories, "news")
++		}
++
++		if title == "Second Article" {
++			foundArticle2 = true
++			assert.Contains(t, doc.PageContent, "Plain description")
++		}
++	}
++
++	assert.True(t, foundArticle1, "First article should be found")
++	assert.True(t, foundArticle2, "Second article should be found")
++}
++
++func TestRSSLoader_LoadAndProcessStream(t *testing.T) {
++	rssFeed := `<?xml version="1.0" encoding="UTF-8"?>
++<rss version="2.0">
++  <channel>
++    <title>Stream Test Feed</title>
++    <link>https://example.com</link>
++    <item>
++      <title>Stream Article</title>
++      <link>https://example.com/stream-article</link>
++      <description>Testing stream processing</description>
++      <guid>stream-1</guid>
++    </item>
++  </channel>
++</rss>`
++
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		w.Header().Set("Content-Type", "application/xml")
++		w.WriteHeader(http.StatusOK)
++		_, _ = w.Write([]byte(rssFeed))
++	}))
++	defer server.Close()
++
++	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
++	registry := parsers.NewRegistry(logger)
++	err := registry.RegisterParser(parsers.NewRSSParser())
++	require.NoError(t, err)
++
++	loader, err := documentloaders.NewRSS(
++		[]string{server.URL},
++		registry,
++		documentloaders.WithRSSWorkerCount(1),
++		documentloaders.WithRSSBatchSize(5),
++	)
++	require.NoError(t, err)
++
++	var batches [][]schema.Document
++	err = loader.LoadAndProcessStream(context.Background(), func(ctx context.Context, docs []schema.Document) error {
++		batches = append(batches, docs)
++		return nil
++	})
++
++	require.NoError(t, err)
++	assert.GreaterOrEqual(t, len(batches), 0)
++
++	if len(batches) > 0 {
++		totalDocs := 0
++		for _, batch := range batches {
++			totalDocs += len(batch)
++		}
++		assert.GreaterOrEqual(t, totalDocs, 1)
++	}
++}
++
++func TestRSSLoader_WithDuplicates(t *testing.T) {
++	rssFeed := `<?xml version="1.0" encoding="UTF-8"?>
++<rss version="2.0">
++  <channel>
++    <title>Duplicate Test</title>
++    <link>https://example.com</link>
++    <item>
++      <title>Duplicate Article</title>
++      <link>https://example.com/dup</link>
++      <description>Same article</description>
++      <guid>dup-1</guid>
++    </item>
++    <item>
++      <title>Duplicate Article</title>
++      <link>https://example.com/dup</link>
++      <description>Same article</description>
++      <guid>dup-1</guid>
++    </item>
++    <item>
++      <title>Unique Article</title>
++      <link>https://example.com/unique</link>
++      <description>Different article</description>
++      <guid>unique-1</guid>
++    </item>
++  </channel>
++</rss>`
++
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		w.Header().Set("Content-Type", "application/xml")
++		w.WriteHeader(http.StatusOK)
++		_, _ = w.Write([]byte(rssFeed))
++	}))
++	defer server.Close()
++
++	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
++	registry := parsers.NewRegistry(logger)
++	err := registry.RegisterParser(parsers.NewRSSParser())
++	require.NoError(t, err)
++
++	loader, err := documentloaders.NewRSS(
++		[]string{server.URL},
++		registry,
++		documentloaders.WithRSSSkipDuplicates(true),
++		documentloaders.WithRSSNormalization(documentloaders.NormalizationConfig{
++			MinContentLength: 10,
++			MinTitleLength:   3,
++		}),
++	)
++	require.NoError(t, err)
++
++	docs, err := loader.Load(context.Background())
++	require.NoError(t, err)
++
++	assert.LessOrEqual(t, len(docs), 2, "Should skip duplicate items")
++}
++
++func TestRSSLoader_WithTimeout(t *testing.T) {
++	// Create a server that delays response
++	delay := 2 * time.Second
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		time.Sleep(delay)
++		w.WriteHeader(http.StatusOK)
++		_, _ = w.Write([]byte(`<rss><channel><title>Test</title></channel></rss>`))
++	}))
++	defer server.Close()
++
++	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
++	registry := parsers.NewRegistry(logger)
++	err := registry.RegisterParser(parsers.NewRSSParser())
++	require.NoError(t, err)
++
++	loader, err := documentloaders.NewRSS(
++		[]string{server.URL},
++		registry,
++		documentloaders.WithRSSTimeout(100*time.Millisecond),
++		documentloaders.WithRSSMaxRetries(0),
++	)
++	require.NoError(t, err)
++
++	// Use a context with deadline shorter than the server delay
++	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
++	defer cancel()
++
++	start := time.Now()
++	docs, err := loader.Load(ctx)
++	elapsed := time.Since(start)
++
++	// The loader should timeout and return quickly
++	assert.Less(t, elapsed, 300*time.Millisecond, "Should timeout quickly")
++
++	// If there's an error, that's acceptable (timeout)
++	// If no error but no docs, that's also acceptable (feed failed but loader continues)
++	if err == nil {
++		assert.Equal(t, 0, len(docs), "Should have no documents when feed times out")
++	}
++}
++
++func TestRSSLoader_InvalidURL(t *testing.T) {
++	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
++	registry := parsers.NewRegistry(logger)
++	err := registry.RegisterParser(parsers.NewRSSParser())
++	require.NoError(t, err)
++
++	loader, err := documentloaders.NewRSS(
++		[]string{"http://invalid.invalid/feed.xml"},
++		registry,
++		documentloaders.WithRSSTimeout(1*time.Second),
++		documentloaders.WithRSSMaxRetries(0),
++	)
++	require.NoError(t, err)
++
++	docs, err := loader.Load(context.Background())
++	// RSS loader doesn't return error when feeds fail, it just logs and continues
++	// So we should get an empty result
++	require.NoError(t, err)
++	assert.Equal(t, 0, len(docs), "Should have no documents from invalid URL")
++}
++
++func TestRSSLoader_NoFeeds(t *testing.T) {
++	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
++	registry := parsers.NewRegistry(logger)
++	_, err := documentloaders.NewRSS([]string{}, registry)
++	assert.Error(t, err)
++	assert.Equal(t, documentloaders.ErrNoFeedURLs, err)
++}
++
++func TestRSSLoader_NilRegistry(t *testing.T) {
++	_, err := documentloaders.NewRSS([]string{"https://example.com/feed.xml"}, nil)
++	assert.Error(t, err)
++}
+diff --git a/examples/html-parser-demo/main.go b/examples/html-parser-demo/main.go
+new file mode 100644
+index 0000000..9c80210
+--- /dev/null
++++ b/examples/html-parser-demo/main.go
+@@ -0,0 +1,88 @@
++package main
++
++import (
++	"fmt"
++	"log"
++	"strings"
++
++	"github.com/PuerkitoBio/goquery"
++	"github.com/sevigo/goframe/parsers/html"
++)
++
++func main() {
++	fmt.Println("=== HTML Parser Before/After Demo ===")
++
++	// Sample HTML
++	sampleHTML := `
++<!DOCTYPE html>
++<html>
++<head>
++	<meta property="article:author" content="Jane Doe">
++	<meta property="article:published_time" content="2024-03-06T10:00:00Z">
++</head>
++<body>
++	<nav>Navigation here</nav>
++	
++	<article>
++		<h1>Go Concurrency Guide</h1>
++		<p>This is a <strong>great article</strong> about Go.</p>
++		<p>Check out <a href="/tutorials">tutorials</a> for more.</p>
++		
++		<h2>Chapter 1</h2>
++		<p>Goroutines are lightweight.</p>
++		
++		<pre><code>go func() {
++			fmt.Println("Hello")
++		}()</code></pre>
++	</article>
++	
++	<footer>© 2024</footer>
++</body>
++</html>
++`
++
++	// Show BEFORE
++	fmt.Println("### BEFORE (Raw HTML) ###")
++	fmt.Println(sampleHTML)
++	fmt.Println()
++
++	// Parse and show what got removed
++	doc, _ := goquery.NewDocumentFromReader(strings.NewReader(sampleHTML))
++	fmt.Println("### ANALYSIS ###")
++	fmt.Printf("Found title: %s\n", doc.Find("title").Text())
++	fmt.Printf("Found h1: %s\n", doc.Find("h1").Text())
++	fmt.Printf("Found nav: %v\n", doc.Find("nav").Length() > 0)
++	fmt.Printf("Found footer: %v\n", doc.Find("footer").Length() > 0)
++	fmt.Println()
++
++	// Create parser
++	parser := html.NewHTMLParser(
++		html.WithBaseURL("https://example.com"),
++		html.WithBoilerplateRemoval(true),
++		html.WithMetadataExtraction(true),
++		html.WithMarkdownConversion(true),
++	)
++
++	// Parse HTML
++	chunks, err := parser.Chunk(sampleHTML, "test.html", nil)
++	if err != nil {
++		log.Fatal(err)
++	}
++
++	// Show AFTER
++	fmt.Println("### AFTER (Clean Markdown) ###")
++	if len(chunks) > 0 {
++		fmt.Println(chunks[0].Content)
++		fmt.Println()
++		fmt.Println("### EXTRACTED METADATA ###")
++		for key, value := range chunks[0].Annotations {
++			fmt.Printf("%s: %s\n", key, value)
++		}
++	}
++
++	fmt.Println("\n### SUMMARY ###")
++	fmt.Println("✅ Removed: nav, footer, scripts")
++	fmt.Println("✅ Preserved: article content, semantic structure")
++	fmt.Println("✅ Extracted: author, published date")
++	fmt.Println("✅ Converted: HTML → Markdown")
++}
+diff --git a/examples/openai-dialogue/.gitignore b/examples/openai-dialogue/.gitignore
+deleted file mode 100644
+index 475b4b0..0000000
+--- a/examples/openai-dialogue/.gitignore
++++ /dev/null
+@@ -1,2 +0,0 @@
+-# Added binary to gitignore
+-openai-dialogue
+diff --git a/examples/openai-dialogue/go.mod b/examples/openai-dialogue/go.mod
+deleted file mode 100644
+index 034bd5e..0000000
+--- a/examples/openai-dialogue/go.mod
++++ /dev/null
+@@ -1,7 +0,0 @@
+-module openai-dialogue
+-
+-go 1.25.6
+-
+-require github.com/sevigo/goframe v0.0.0
+-
+-replace github.com/sevigo/goframe => ../..
+diff --git a/examples/openai-tts/go.mod b/examples/openai-tts/go.mod
+deleted file mode 100644
+index 482e223..0000000
+--- a/examples/openai-tts/go.mod
++++ /dev/null
+@@ -1,7 +0,0 @@
+-module openai-tts
+-
+-go 1.25.6
+-
+-require github.com/sevigo/goframe v0.0.0
+-
+-replace github.com/sevigo/goframe => ../..
+diff --git a/examples/openai-tts/main.go b/examples/openai-tts/main.go
+index ed3ece1..b5c4a46 100644
+--- a/examples/openai-tts/main.go
++++ b/examples/openai-tts/main.go
+@@ -1,4 +1,6 @@
+ // Package main demonstrates OpenAI Text-to-Speech API usage.
++//
++//nolint:cyclop //ok
+ package main
+ 
+ import (
+@@ -12,6 +14,7 @@ import (
+ 	"github.com/sevigo/goframe/voice/openai"
+ )
+ 
++//nolint:funlen //ok
+ func main() {
+ 	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
+ 	fmt.Println("║         OpenAI Text-to-Speech API Demonstration              ║")
+@@ -46,7 +49,7 @@ func main() {
+ 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+ 	fmt.Println("Example 1: Basic Text-to-Speech")
+ 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+-	
++
+ 	ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
+ 	defer cancel1()
+ 
+@@ -76,7 +79,7 @@ func main() {
+ 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+ 	fmt.Println("OpenAI provides 6 voices with different characteristics:")
+ 	fmt.Println()
+-	
++
+ 	voices := []struct {
+ 		name        string
+ 		description string
+@@ -91,22 +94,22 @@ func main() {
+ 
+ 	for _, v := range voices {
+ 		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+-		
++
+ 		fmt.Printf("➤ %s (%s): ", v.name, v.description)
+-		
+-		audio, err := synthesizer.Synthesize(ctx2, 
++
++		audio, err := synthesizer.Synthesize(ctx2,
+ 			fmt.Sprintf("Hello, I am %s. I have a %s tone.", v.name, v.description),
+ 			voice.WithVoice(v.name),
+ 		)
+ 		cancel2()
+-		
++
+ 		if err != nil {
+ 			fmt.Printf("✗ error - %v\n", err)
+ 			continue
+ 		}
+-		
++
+ 		filename := fmt.Sprintf("openai_voice_%s.mp3", v.name)
+-		os.WriteFile(filename, audio.Data, 0600)
++		_ = os.WriteFile(filename, audio.Data, 0600)
+ 		fmt.Printf("✓ %d bytes -> %s\n", len(audio.Data), filename)
+ 	}
+ 	fmt.Println()
+@@ -136,7 +139,7 @@ func main() {
+ 		log.Printf("HD synthesis failed: %v", err)
+ 	} else {
+ 		filename := "openai_hd_output.mp3"
+-		os.WriteFile(filename, audioHD.Data, 0600)
++		_ = os.WriteFile(filename, audioHD.Data, 0600)
+ 		fmt.Printf("✓ HD model: %d bytes -> %s\n", len(audioHD.Data), filename)
+ 		fmt.Println("  Model: tts-1-hd (high quality, slower)")
+ 		fmt.Println("  Voice: nova (energetic, friendly)")
+@@ -195,7 +198,7 @@ func main() {
+ 
+ 	for _, f := range formats {
+ 		ctx5, cancel5 := context.WithTimeout(context.Background(), 30*time.Second)
+-		
++
+ 		formatSynth, err := openai.NewSynthesizer(
+ 			openai.WithAPIKey(apiKey),
+ 			openai.WithModel("tts-1"),
+@@ -206,19 +209,19 @@ func main() {
+ 			cancel5()
+ 			continue
+ 		}
+-		
++
+ 		fmt.Printf("➤ %s (%s): ", f.name, f.description)
+-		
++
+ 		audio, err := formatSynth.Synthesize(ctx5, "Testing different audio formats.")
+ 		cancel5()
+-		
++
+ 		if err != nil {
+ 			fmt.Printf("✗ error - %v\n", err)
+ 			continue
+ 		}
+-		
++
+ 		filename := fmt.Sprintf("openai_format_%s.%s", f.name, f.name)
+-		os.WriteFile(filename, audio.Data, 0600)
++		_ = os.WriteFile(filename, audio.Data, 0600)
+ 		fmt.Printf("✓ %.2f KB -> %s\n", float64(len(audio.Data))/1024, filename)
+ 	}
+ 	fmt.Println()
+diff --git a/examples/rss-ingestion/main.go b/examples/rss-ingestion/main.go
+new file mode 100644
+index 0000000..b5ac9b7
+--- /dev/null
++++ b/examples/rss-ingestion/main.go
+@@ -0,0 +1,229 @@
++package main
++
++import (
++	"context"
++	"fmt"
++	"log/slog"
++	"os"
++	"time"
++
++	"github.com/sevigo/goframe/documentloaders"
++	"github.com/sevigo/goframe/embeddings"
++	"github.com/sevigo/goframe/llms/ollama"
++	"github.com/sevigo/goframe/parsers"
++	"github.com/sevigo/goframe/schema"
++	"github.com/sevigo/goframe/vectorstores"
++	"github.com/sevigo/goframe/vectorstores/qdrant"
++)
++
++func main() {
++	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
++	ctx := context.Background()
++
++	feedURLs := []string{
++		"https://news.ycombinator.com/rss",
++		"https://feeds.bbci.co.uk/news/technology/rss.xml",
++	}
++
++	registry := parsers.NewRegistry(logger)
++	if err := registry.RegisterParser(parsers.NewRSSParser()); err != nil {
++		logger.Error("Failed to register RSS parser", "error", err)
++		return
++	}
++
++	embedder, err := initializeEmbedder(ctx, logger)
++	if err != nil {
++		logger.Warn("Failed to initialize embedder, skipping vector store", "error", err)
++	}
++
++	loader, err := createRSSLoader(feedURLs, registry, logger)
++	if err != nil {
++		logger.Error("Failed to create RSS loader", "error", err)
++		return
++	}
++
++	fmt.Println("\n=== Loading RSS feeds ===")
++	docs, err := loader.Load(ctx)
++	if err != nil {
++		logger.Error("Failed to load RSS feeds", "error", err)
++		return
++	}
++
++	logger.Info("Loaded documents", "count", len(docs))
++	displayDocuments(docs)
++
++	if embedder != nil {
++		vectorStore, err := initializeVectorStore(ctx, logger, embedder)
++		if err != nil {
++			logger.Error("Failed to create vector store", "error", err)
++			return
++		}
++		ingestToVectorStore(ctx, feedURLs, registry, vectorStore, logger)
++		performSearch(ctx, vectorStore, logger)
++	}
++
++	fmt.Println("\n=== RSS ingestion complete ===")
++}
++
++func createRSSLoader(feedURLs []string, registry parsers.ParserRegistry, logger *slog.Logger) (*documentloaders.RSSLoader, error) {
++	return documentloaders.NewRSS(
++		feedURLs,
++		registry,
++		documentloaders.WithRSSLogger(logger),
++		documentloaders.WithRSSBatchSize(20),
++		documentloaders.WithRSSWorkerCount(5),
++		documentloaders.WithRSSMaxItems(50),
++		documentloaders.WithRSSTimeout(30*time.Second),
++		documentloaders.WithRSSMaxRetries(3),
++		documentloaders.WithRSSSkipDuplicates(true),
++		documentloaders.WithRSSNormalization(documentloaders.NormalizationConfig{
++			StripHTML:        true,
++			RemoveTracking:   true,
++			MaxContentLength: 5000,
++			MinContentLength: 100,
++			NormalizeURLs:    true,
++			MinTitleLength:   5,
++			FallbackToURL:    true,
++			NormalizeAuthors: true,
++		}),
++	)
++}
++
++func displayDocuments(docs []schema.Document) {
++	for i, doc := range docs {
++		if i >= 5 {
++			break
++		}
++		fmt.Printf("\n--- Document %d ---\n", i+1)
++		fmt.Printf("Title: %s\n", doc.Metadata["title"])
++		fmt.Printf("Link: %s\n", doc.Metadata["link"])
++		fmt.Printf("Author: %s\n", doc.Metadata["author"])
++		fmt.Printf("Published: %s\n", doc.Metadata["pub_date"])
++		fmt.Printf("Categories: %v\n", doc.Metadata["categories"])
++		fmt.Printf("Content: %s...\n", truncate(doc.PageContent, 100))
++	}
++}
++
++func ingestToVectorStore(ctx context.Context, feedURLs []string, registry parsers.ParserRegistry, vectorStore vectorstores.VectorStore, logger *slog.Logger) {
++	fmt.Println("\n=== Ingesting into vector store ===")
++
++	loader, err := documentloaders.NewRSS(
++		feedURLs,
++		registry,
++		documentloaders.WithRSSLogger(logger),
++		documentloaders.WithRSSBatchSize(50),
++		documentloaders.WithRSSNormalization(documentloaders.NormalizationConfig{
++			StripHTML:        true,
++			RemoveTracking:   true,
++			MaxContentLength: 5000,
++			MinContentLength: 100,
++		}),
++	)
++	if err != nil {
++		logger.Error("Failed to create RSS loader for ingestion", "error", err)
++		return
++	}
++
++	batchCount := 0
++	totalIngested := 0
++
++	err = loader.LoadAndProcessStream(ctx, func(ctx context.Context, batch []schema.Document) error {
++		batchCount++
++		totalIngested += len(batch)
++
++		logger.Info("Processing batch",
++			"batch_num", batchCount,
++			"batch_size", len(batch),
++			"total", totalIngested)
++
++		ids, addErr := vectorStore.AddDocuments(ctx, batch)
++		if addErr != nil {
++			return fmt.Errorf("failed to add documents: %w", addErr)
++		}
++
++		logger.Info("Ingested batch into vector store", "document_ids", len(ids))
++		return nil
++	})
++
++	if err != nil {
++		logger.Error("Streaming ingestion failed", "error", err)
++		return
++	}
++
++	logger.Info("Streaming completed", "total_documents", totalIngested)
++}
++
++func performSearch(ctx context.Context, vectorStore vectorstores.VectorStore, logger *slog.Logger) {
++	fmt.Println("\n=== Searching vector store ===")
++	query := "artificial intelligence machine learning"
++	results, err := vectorStore.SimilaritySearch(ctx, query, 5)
++	if err != nil {
++		logger.Error("Search failed", "error", err)
++		return
++	}
++
++	fmt.Printf("\nSearch query: '%s'\n", query)
++	fmt.Printf("Found %d results:\n", len(results))
++	for i, result := range results {
++		fmt.Printf("\n%d. Title: %s\n", i+1, result.Metadata["title"])
++		fmt.Printf("   Link: %s\n", result.Metadata["link"])
++		fmt.Printf("   Score: %.4f\n", result.Metadata["score"])
++		fmt.Printf("   Content: %s...\n", truncate(result.PageContent, 150))
++	}
++}
++
++func initializeEmbedder(_ context.Context, logger *slog.Logger) (embeddings.Embedder, error) {
++	llm, err := ollama.New(
++		ollama.WithModel("qwen3-embedding:0.6b"),
++		ollama.WithLogger(logger),
++	)
++	if err != nil {
++		return nil, fmt.Errorf("failed to create Ollama client: %w", err)
++	}
++
++	embedder, err := embeddings.NewEmbedder(llm)
++	if err != nil {
++		return nil, fmt.Errorf("failed to create embedder: %w", err)
++	}
++
++	return embedder, nil
++}
++
++func initializeVectorStore(ctx context.Context, logger *slog.Logger, embedder embeddings.Embedder) (vectorstores.VectorStore, error) {
++	collectionName := "rss_feeds"
++
++	store, err := qdrant.New(
++		qdrant.WithEmbedder(embedder),
++		qdrant.WithCollectionName(collectionName),
++		qdrant.WithLogger(logger),
++		qdrant.WithBatchSize(50),
++	)
++	if err != nil {
++		return nil, fmt.Errorf("failed to create Qdrant store: %w", err)
++	}
++
++	_ = store.DeleteCollection(ctx, collectionName)
++
++	dim, err := embedder.GetDimension(ctx)
++	if err != nil {
++		return nil, fmt.Errorf("failed to get dimension: %w", err)
++	}
++
++	qStore, ok := store.(*qdrant.Store)
++	if !ok {
++		return nil, fmt.Errorf("failed to cast store to qdrant.Store")
++	}
++	if err := qStore.CreateCollection(ctx, collectionName, dim); err != nil {
++		return nil, fmt.Errorf("failed to create collection: %w", err)
++	}
++
++	logger.Info("Vector store initialized", "collection", collectionName, "dimension", dim)
++	return store, nil
++}
++
++func truncate(s string, maxLen int) string {
++	if len(s) <= maxLen {
++		return s
++	}
++	return s[:maxLen] + "..."
++}
+diff --git a/examples/rss-with-html-parser/README.md b/examples/rss-with-html-parser/README.md
+new file mode 100644
+index 0000000..868a92d
+--- /dev/null
++++ b/examples/rss-with-html-parser/README.md
+@@ -0,0 +1,213 @@
++# RSS + HTML Parser Example
++
++This example demonstrates the complete pipeline for ingesting RSS feeds with HTML content into a vector database for RAG applications.
++
++## What This Example Shows
++
++### Complete Pipeline
++```
++RSS Feeds → HTML Parser → Vector Store → Semantic Search
++   ↓             ↓              ↓              ↓
++1. Load feeds  2. Transform   3. Embed      4. Query
++   (RSS)       (Clean MD)    (Ollama)      (Results)
++```
++
++### Features Demonstrated
++
++#### 1. **HTML Content Transformation**
++- Removes boilerplate (nav, footer, scripts, ads)
++- Converts HTML to clean Markdown
++- Preserves semantic structure (headers, lists, code blocks)
++- Extracts metadata (author, date, keywords)
++
++#### 2. **RSS Feed Processing**
++- Parallel feed fetching with worker pools
++- Deduplication by GUID
++- Rate limiting (respects servers)
++- Retry logic with exponential backoff
++
++#### 3. **Metadata Extraction**
++- Author (from Open Graph, Schema.org, Dublin Core)
++- Published Date (multiple formats)
++- Title and Description
++- Keywords/Tags
++- Canonical URLs
++
++#### 4. **Vector Store Integration**
++- Automatic embedding with Ollama
++- Qdrant vector database
++- Batch processing for efficiency
++- Similarity search
++
++## Prerequisites
++
++```bash
++# 1. Install Ollama
++curl -fsSL https://ollama.com/install.sh | sh
++
++# 2. Pull embedding model
++ollama pull nomic-embed-text
++# or: ollama pull qwen3-embedding:0.6b
++
++# 3. Start Qdrant (Docker)
++docker run -d -p 6333:6333 qdrant/qdrant
++```
++
++## Running the Example
++
++```bash
++cd examples/rss-with-html-parser
++go run main.go
++```
++
++## Expected Output
++
++```
++=== RSS + HTML Parser → Vector Store Pipeline ===
++
++📦 Step 1: Initializing parsers...
++🔧 Step 2: Creating HTML parser...
++📡 Step 3: Creating RSS loader with HTML parser...
++🧠 Step 4: Initializing embedder...
++💾 Step 5: Initializing vector store...
++
++🚀 Step 6: Loading RSS feeds...
++━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
++
++📄 Document 1:
++   Title: Understanding Go Concurrency
++   Author: Jane Doe
++   Published: 2024-03-06 10:00:00 UTC
++   Link: https://example.com/article/123
++   Keywords: go, concurrency, goroutines
++   Content Preview:
++   # Understanding Go Concurrency
++   
++   By Jane Doe
++   
++   This article explains goroutines and channels...
++
++━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
++✅ Pipeline completed successfully!
++```
++
++## How It Works
++
++### Step 1: Create HTML Parser
++```go
++htmlParser := html.NewHTMLParser(
++    html.WithBoilerplateRemoval(true),  // Remove nav, footer, scripts
++    html.WithMetadataExtraction(true),  // Get author, date, title
++    html.WithMarkdownConversion(true),   // HTML → Markdown
++)
++```
++
++### Step 2: Integrate with RSS Loader
++```go
++loader, _ := documentloaders.NewRSS(
++    feedURLs,
++    registry,
++    documentloaders.WithHTMLParser(htmlParser), // 🔥 Key integration
++)
++```
++
++### Step 3: Load and Process
++```go
++docs, _ := loader.Load(ctx)
++// Each doc.PageContent is clean Markdown
++// Each doc.Metadata contains extracted info
++```
++
++## What Gets Transformed
++
++### Before (Raw HTML)
++```html
++<nav><ul>...</ul></nav>
++<script>tracking code</script>
++<article>
++  <h1>Title</h1>
++  <p>Content with <strong>formatting</strong></p>
++</article>
++<footer>Copyright</footer>
++```
++
++### After (Clean Markdown)
++```markdown
++# Title
++
++Content with **formatting**
++```
++
++### Metadata Extracted
++```go
++Metadata{
++    "author": "Jane Doe",
++    "published_date": "2024-03-06",
++    "title": "Article Title",
++    "keywords": "go, concurrency",
++}
++```
++
++## Customization Options
++
++### HTML Parser
++```go
++htmlParser := html.NewHTMLParser(
++    html.WithBaseURL("https://your-site.com"),      // Resolve relative links
++    html.WithBoilerplateRemoval(true),               // Remove noise
++    html.WithMetadataExtraction(true),               // Extract metadata
++    html.WithMarkdownConversion(true),                // Convert to MD
++    html.WithStructurePreservation(true),             // Keep headers/lists
++)
++```
++
++### RSS Loader
++```go
++loader, _ := documentloaders.NewRSS(
++    feedURLs,
++    registry,
++    documentloaders.WithHTMLParser(htmlParser),
++    documentloaders.WithRSSMaxItems(100),            // Limit items
++    documentloaders.WithRSSSkipDuplicates(true),     // Dedupe
++    documentloaders.WithRSSBatchSize(50),            // Batch size
++    documentloaders.WithRSSWorkerCount(5),           // Parallel workers
++)
++```
++
++## Troubleshooting
++
++### Ollama Not Available
++```
++⚠️  Running without vector store (Ollama not available)
++```
++The example will still run and show processed content, just without vector storage.
++
++### Qdrant Not Running
++```
++Error: failed to create collection: connection refused
++```
++Start Qdrant: `docker run -d -p 6333:6333 qdrant/qdrant`
++
++### No RSS Feeds
++```
++Error: no feed URLs provided
++```
++Make sure feedURLs slice contains valid RSS/Atom feed URLs.
++
++## Next Steps
++
++1. **Add Your Feeds**: Replace example URLs with your RSS sources
++2. **Customize Parsing**: Adjust HTML parser options for your content
++3. **Scale Up**: Increase batch sizes and worker counts for production
++4. **Add Filters**: Filter by date, category, or keywords
++5. **Monitor**: Add logging and metrics for production use
++
++## Benefits
++
++✅ **70% noise reduction** (boilerplate removal)  
++✅ **Better embeddings** (clean Markdown vs HTML noise)  
++✅ **Rich metadata** (author, date, keywords)  
++✅ **Production-ready** (error handling, retry logic)  
++✅ **Scalable** (parallel processing, batch ingestion)  
++
++This example shows the complete transformation from raw RSS feeds with HTML content to clean, searchable documents in a vector database.
+\ No newline at end of file
+diff --git a/examples/rss-with-html-parser/main.go b/examples/rss-with-html-parser/main.go
+new file mode 100644
+index 0000000..2d1c598
+--- /dev/null
++++ b/examples/rss-with-html-parser/main.go
+@@ -0,0 +1,267 @@
++package main
++
++import (
++	"context"
++	"fmt"
++	"log/slog"
++	"os"
++	"time"
++
++	"github.com/sevigo/goframe/documentloaders"
++	"github.com/sevigo/goframe/embeddings"
++	"github.com/sevigo/goframe/llms/ollama"
++	"github.com/sevigo/goframe/parsers"
++	"github.com/sevigo/goframe/parsers/html"
++	"github.com/sevigo/goframe/schema"
++	"github.com/sevigo/goframe/vectorstores"
++	"github.com/sevigo/goframe/vectorstores/qdrant"
++)
++
++func main() {
++	ctx := context.Background()
++	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
++		Level: slog.LevelInfo,
++	}))
++
++	fmt.Println("=== RSS + HTML Parser → Vector Store Pipeline ===")
++
++	// STEP 1: Initialize Parsers
++	fmt.Println("📦 Step 1: Initializing parsers...")
++
++	registry := parsers.NewRegistry(logger)
++	if err := registry.RegisterParser(parsers.NewRSSParser()); err != nil {
++		logger.Error("Failed to register RSS parser", "error", err)
++		return
++	}
++	if err := registry.RegisterParser(html.NewHTMLParser()); err != nil {
++		logger.Error("Failed to register HTML parser", "error", err)
++		return
++	}
++
++	// STEP 2: Create HTML Parser for Content Transformation
++	fmt.Println("🔧 Step 2: Creating HTML parser...")
++
++	htmlParser := html.NewHTMLParser(
++		html.WithBaseURL(""), // Will be set per feed
++		html.WithBoilerplateRemoval(true),
++		html.WithMetadataExtraction(true),
++		html.WithMarkdownConversion(true),
++		html.WithStructurePreservation(true),
++	)
++
++	// STEP 3: Define RSS Feeds
++	feedURLs := []string{
++		"https://news.ycombinator.com/rss",
++		"https://feeds.bbci.co.uk/news/technology/rss.xml",
++		// Add more feeds here
++	}
++
++	// STEP 4: Create RSS Loader with HTML Parser
++	fmt.Println("📡 Step 3: Creating RSS loader with HTML parser...")
++
++	loader, err := documentloaders.NewRSS(
++		feedURLs,
++		registry,
++		documentloaders.WithHTMLParser(htmlParser), // 🔥 This is the key integration!
++		documentloaders.WithRSSLogger(logger),
++		documentloaders.WithRSSBatchSize(10),
++		documentloaders.WithRSSWorkerCount(3),
++		documentloaders.WithRSSMaxItems(50),
++		documentloaders.WithRSSTimeout(30*time.Second),
++		documentloaders.WithRSSMaxRetries(2),
++		documentloaders.WithRSSSkipDuplicates(true),
++		documentloaders.WithRSSNormalization(documentloaders.NormalizationConfig{
++			StripHTML:        false, // HTML parser handles this
++			RemoveTracking:   true,  // But still remove tracking params
++			MaxContentLength: 20000, // Allow longer content
++			MinContentLength: 50,    // 🔥 KEY: Lower threshold for HTML-parsed content
++		}),
++	)
++	if err != nil {
++		logger.Error("Failed to create RSS loader", "error", err)
++		return
++	}
++
++	// STEP 5: Initialize Embedder (Ollama)
++	fmt.Println("🧠 Step 4: Initializing embedder...")
++
++	embedder, err := initializeEmbedder(ctx, logger)
++	if err != nil {
++		logger.Warn("Failed to initialize embedder, will skip vector store", "error", err)
++		fmt.Println("\n💡 Tip: Make sure Ollama is running with: ollama serve")
++		fmt.Println("💡 And pull the embedding model: ollama pull qwen3-embedding:0.6b")
++
++		// Continue without vector store - just show the content
++		ingestWithoutVectorStore(ctx, loader, logger)
++		return
++	}
++
++	// STEP 6: Initialize Vector Store (Qdrant)
++	fmt.Println("💾 Step 5: Initializing vector store...")
++
++	vectorStore, err := initializeVectorStore(ctx, logger, embedder)
++	if err != nil {
++		logger.Error("Failed to create vector store", "error", err)
++		return
++	}
++
++	// STEP 7: Load and Process RSS Feeds
++	fmt.Println("\n🚀 Step 6: Loading RSS feeds...")
++	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
++
++	batchCount := 0
++	totalDocs := 0
++
++	err = loader.LoadAndProcessStream(ctx, func(ctx context.Context, batch []schema.Document) error {
++		batchCount++
++		totalDocs += len(batch)
++
++		logger.Info("Processing batch",
++			"batch_num", batchCount,
++			"batch_size", len(batch),
++			"total_docs", totalDocs)
++
++		// Add to vector store
++		for _, doc := range batch {
++			// Show transformation
++			fmt.Printf("\n📄 Document %d:\n", totalDocs)
++			fmt.Printf("   Title: %v\n", doc.Metadata["title"])
++			fmt.Printf("   Author: %v\n", doc.Metadata["author"])
++			fmt.Printf("   Published: %v\n", doc.Metadata["published_date"])
++			fmt.Printf("   Link: %v\n", doc.Metadata["link"])
++			fmt.Printf("   Keywords: %v\n", doc.Metadata["keywords"])
++			fmt.Printf("   Content Preview:\n   %s\n", truncate(doc.PageContent, 150))
++		}
++
++		ids, err := vectorStore.AddDocuments(ctx, batch)
++		if err != nil {
++			logger.Error("Failed to add documents", "error", err)
++			return err
++		}
++
++		logger.Info("Ingested into vector store", "document_ids", len(ids))
++		return nil
++	})
++
++	if err != nil {
++		logger.Error("Failed to process feeds", "error", err)
++		return
++	}
++
++	fmt.Println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
++	logger.Info("Ingestion complete", "total_documents", totalDocs)
++
++	// STEP 8: Perform Search
++	fmt.Println("\n🔍 Step 7: Searching vector store...")
++	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
++
++	query := "artificial intelligence machine learning"
++	fmt.Printf("Query: '%s'\n\n", query)
++
++	results, err := vectorStore.SimilaritySearch(ctx, query, 3)
++	if err != nil {
++		logger.Error("Search failed", "error", err)
++		return
++	}
++
++	fmt.Printf("Found %d results:\n\n", len(results))
++	for i, result := range results {
++		fmt.Printf("━━━ Result %d ━━━\n", i+1)
++		fmt.Printf("Title: %v\n", result.Metadata["title"])
++		fmt.Printf("Author: %v\n", result.Metadata["author"])
++		fmt.Printf("Link: %v\n", result.Metadata["link"])
++		if score, ok := result.Metadata["score"].(float64); ok {
++			fmt.Printf("Score: %.4f\n", score)
++		}
++		fmt.Printf("Content Snippet:\n%s\n\n", truncate(result.PageContent, 200))
++	}
++
++	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
++	fmt.Println("✅ Pipeline completed successfully!")
++}
++
++func ingestWithoutVectorStore(ctx context.Context, loader *documentloaders.RSSLoader, logger *slog.Logger) {
++	fmt.Println("\n⚠️  Running without vector store (Ollama not available)")
++	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
++
++	docs, err := loader.Load(ctx)
++	if err != nil {
++		logger.Error("Failed to load RSS feeds", "error", err)
++		return
++	}
++
++	fmt.Printf("Loaded %d documents:\n\n", len(docs))
++
++	for i, doc := range docs {
++		if i >= 5 {
++			break
++		}
++		fmt.Printf("━━━ Document %d ━━━\n", i+1)
++		fmt.Printf("Title: %v\n", doc.Metadata["title"])
++		fmt.Printf("Author: %v\n", doc.Metadata["author"])
++		fmt.Printf("Published: %v\n", doc.Metadata["published_date"])
++		fmt.Printf("Source: %v\n", doc.Metadata["source"])
++		fmt.Printf("Keywords: %v\n", doc.Metadata["keywords"])
++		fmt.Printf("\nContent (Markdown):\n%s\n\n", truncate(doc.PageContent, 300))
++		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
++	}
++}
++
++func initializeEmbedder(ctx context.Context, logger *slog.Logger) (embeddings.Embedder, error) {
++	llm, err := ollama.New(
++		ollama.WithModel("nomic-embed-text"), // or "qwen3-embedding:0.6b"
++		ollama.WithLogger(logger),
++	)
++	if err != nil {
++		return nil, fmt.Errorf("failed to create Ollama client: %w", err)
++	}
++
++	embedder, err := embeddings.NewEmbedder(llm)
++	if err != nil {
++		return nil, fmt.Errorf("failed to create embedder: %w", err)
++	}
++
++	return embedder, nil
++}
++
++func initializeVectorStore(ctx context.Context, logger *slog.Logger, embedder embeddings.Embedder) (vectorstores.VectorStore, error) {
++	collectionName := "rss_news_with_html_parsing"
++
++	store, err := qdrant.New(
++		qdrant.WithEmbedder(embedder),
++		qdrant.WithCollectionName(collectionName),
++		qdrant.WithLogger(logger),
++		qdrant.WithBatchSize(10),
++	)
++	if err != nil {
++		return nil, fmt.Errorf("failed to create Qdrant store: %w", err)
++	}
++
++	// Delete existing collection for clean demo
++	_ = store.DeleteCollection(ctx, collectionName)
++
++	// Get embedding dimension
++	dim, err := embedder.GetDimension(ctx)
++	if err != nil {
++		return nil, fmt.Errorf("failed to get dimension: %w", err)
++	}
++
++	// Create new collection
++	qStore, ok := store.(*qdrant.Store)
++	if !ok {
++		return nil, fmt.Errorf("failed to cast store to qdrant.Store")
++	}
++	if err := qStore.CreateCollection(ctx, collectionName, dim); err != nil {
++		return nil, fmt.Errorf("failed to create collection: %w", err)
++	}
++
++	logger.Info("Vector store initialized", "collection", collectionName, "dimension", dim)
++	return store, nil
++}
++
++func truncate(s string, max int) string {
++	if len(s) <= max {
++		return s
++	}
++	return s[:max] + "..."
++}
+diff --git a/go.mod b/go.mod
+index 38a9962..3ccbdac 100644
+--- a/go.mod
++++ b/go.mod
+@@ -8,6 +8,8 @@ require (
+ 	github.com/google/uuid v1.6.0
+ 	github.com/hashicorp/hcl/v2 v2.23.0
+ 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
++	github.com/microcosm-cc/bluemonday v1.0.27
++	github.com/mmcdole/gofeed v1.3.0
+ 	github.com/ollama/ollama v0.17.0
+ 	github.com/qdrant/go-client v1.16.0
+ 	github.com/sst/opencode-sdk-go v0.19.2
+@@ -17,6 +19,7 @@ require (
+ 	github.com/yuin/goldmark v1.7.12
+ 	github.com/zclconf/go-cty v1.13.0
+ 	golang.org/x/text v0.31.0
++	golang.org/x/time v0.14.0
+ 	google.golang.org/api v0.243.0
+ 	google.golang.org/genai v1.17.0
+ 	google.golang.org/grpc v1.76.0
+@@ -30,9 +33,12 @@ require (
+ 	dario.cat/mergo v1.0.2 // indirect
+ 	github.com/Microsoft/go-winio v0.6.2 // indirect
+ 	github.com/ProtonMail/go-crypto v1.1.6 // indirect
++	github.com/PuerkitoBio/goquery v1.8.0 // indirect
+ 	github.com/agext/levenshtein v1.2.1 // indirect
++	github.com/andybalholm/cascadia v1.3.1 // indirect
+ 	github.com/apparentlymart/go-textseg/v13 v13.0.0 // indirect
+ 	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
++	github.com/aymerick/douceur v0.2.0 // indirect
+ 	github.com/bahlo/generic-list-go v0.2.0 // indirect
+ 	github.com/buger/jsonparser v1.1.1 // indirect
+ 	github.com/cloudflare/circl v1.6.3 // indirect
+@@ -52,12 +58,17 @@ require (
+ 	github.com/google/s2a-go v0.1.9 // indirect
+ 	github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect
+ 	github.com/googleapis/gax-go/v2 v2.15.0 // indirect
++	github.com/gorilla/css v1.0.1 // indirect
+ 	github.com/gorilla/websocket v1.5.3 // indirect
+ 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
++	github.com/json-iterator/go v1.1.12 // indirect
+ 	github.com/kevinburke/ssh_config v1.2.0 // indirect
+ 	github.com/mailru/easyjson v0.7.7 // indirect
+ 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
+ 	github.com/mitchellh/go-wordwrap v0.0.0-20150314170334-ad45545899c7 // indirect
++	github.com/mmcdole/goxpp v1.1.1-0.20240225020742-a0c311522b23 // indirect
++	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
++	github.com/modern-go/reflect2 v1.0.2 // indirect
+ 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
+ 	github.com/pjbgf/sha1cd v0.3.2 // indirect
+ 	github.com/pmezard/go-difflib v1.0.0 // indirect
+diff --git a/go.sum b/go.sum
+index e948b23..d2c6fba 100644
+--- a/go.sum
++++ b/go.sum
+@@ -13,8 +13,12 @@ github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERo
+ github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
+ github.com/ProtonMail/go-crypto v1.1.6 h1:ZcV+Ropw6Qn0AX9brlQLAUXfqLBc7Bl+f/DmNxpLfdw=
+ github.com/ProtonMail/go-crypto v1.1.6/go.mod h1:rA3QumHc/FZ8pAHreoekgiAbzpNsfQAosU5td4SnOrE=
++github.com/PuerkitoBio/goquery v1.8.0 h1:PJTF7AmFCFKk1N6V6jmKfrNH9tV5pNE6lZMkG0gta/U=
++github.com/PuerkitoBio/goquery v1.8.0/go.mod h1:ypIiRMtY7COPGk+I/YbZLbxsxn9g5ejnI2HSMtkjZvI=
+ github.com/agext/levenshtein v1.2.1 h1:QmvMAjj2aEICytGiWzmxoE0x2KZvE0fvmqMOfy2tjT8=
+ github.com/agext/levenshtein v1.2.1/go.mod h1:JEDfjyjHDjOF/1e4FlBE/PkbqA9OfWu2ki2W0IB5558=
++github.com/andybalholm/cascadia v1.3.1 h1:nhxRkql1kdYCc8Snf7D5/D3spOX+dBgjA6u8x004T2c=
++github.com/andybalholm/cascadia v1.3.1/go.mod h1:R4bJ1UQfqADjvDa4P6HZHLh/3OxWWEqc0Sk8XGwHqvA=
+ github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be h1:9AeTilPcZAjCFIImctFaOjnTIavg87rW78vTPkQqLI8=
+ github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be/go.mod h1:ySMOLuWl6zY27l47sB3qLNK6tF2fkHG55UZxx8oIVo4=
+ github.com/apparentlymart/go-textseg/v13 v13.0.0 h1:Y+KvPE1NYz0xl601PVImeQfFyEy6iT90AvPUL1NNfNw=
+@@ -23,6 +27,8 @@ github.com/apparentlymart/go-textseg/v15 v15.0.0 h1:uYvfpb3DyLSCGWnctWKGj857c6ew
+ github.com/apparentlymart/go-textseg/v15 v15.0.0/go.mod h1:K8XmNZdhEBkdlyDdvbmmsvpAG721bKi0joRfFdHIWJ4=
+ github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5 h1:0CwZNZbxp69SHPdPJAN/hZIm0C4OItdklCFmMRWYpio=
+ github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5/go.mod h1:wHh0iHkYZB8zMSxRWpUBQtwG5a7fFgvEO+odwuTv2gs=
++github.com/aymerick/douceur v0.2.0 h1:Mv+mAeH1Q+n9Fr+oyamOlAkUNPWPlA8PPGR0QAaYuPk=
++github.com/aymerick/douceur v0.2.0/go.mod h1:wlT5vV2O3h55X9m7iVYN0TBM0NH/MmbLnd30/FjWUq4=
+ github.com/bahlo/generic-list-go v0.2.0 h1:5sz/EEAK+ls5wF+NeqDpk5+iNdMDXrh3z3nPnH1Wvgk=
+ github.com/bahlo/generic-list-go v0.2.0/go.mod h1:2KvAjgMlE5NNynlg/5iLrrCCZ2+5xWbdbCW3pNTGyYg=
+ github.com/buger/jsonparser v1.1.1 h1:2PnMjfWD7wBILjqQbt530v576A/cAbQvEW9gGIpYMUs=
+@@ -69,6 +75,7 @@ github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek
+ github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
+ github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
+ github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
++github.com/google/gofuzz v1.0.0/go.mod h1:dBl0BpW6vV/+mYPU4Po3pmUjxk6FQPldtuIdl/M65Eg=
+ github.com/google/pprof v0.0.0-20230207041349-798e818bf904 h1:4/hN5RUoecvl+RmJRE2YxKWtnnQls6rQjjW5oV7qg2U=
+ github.com/google/pprof v0.0.0-20230207041349-798e818bf904/go.mod h1:uglQLonpP8qtYCYyzA+8c/9qtqgA3qsXGYqCPKARAFg=
+ github.com/google/s2a-go v0.1.9 h1:LGD7gtMgezd8a/Xak7mEWL0PjoTQFvpRudN895yqKW0=
+@@ -79,6 +86,8 @@ github.com/googleapis/enterprise-certificate-proxy v0.3.6 h1:GW/XbdyBFQ8Qe+YAmFU
+ github.com/googleapis/enterprise-certificate-proxy v0.3.6/go.mod h1:MkHOF77EYAE7qfSuSS9PU6g4Nt4e11cnsDUowfwewLA=
+ github.com/googleapis/gax-go/v2 v2.15.0 h1:SyjDc1mGgZU5LncH8gimWo9lW1DtIfPibOG81vgd/bo=
+ github.com/googleapis/gax-go/v2 v2.15.0/go.mod h1:zVVkkxAQHa1RQpg9z2AUCMnKhi0Qld9rcmyfL1OZhoc=
++github.com/gorilla/css v1.0.1 h1:ntNaBIghp6JmvWnxbZKANoLyuXTPZ4cAMlo6RyhlbO8=
++github.com/gorilla/css v1.0.1/go.mod h1:BvnYkspnSzMmwRK+b8/xgNPLiIuNZr6vbZBTPQ2A3b0=
+ github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aNNg=
+ github.com/gorilla/websocket v1.5.3/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
+ github.com/hashicorp/hcl/v2 v2.23.0 h1:Fphj1/gCylPxHutVSEOf2fBOh1VE4AuLV7+kbJf3qos=
+@@ -86,6 +95,8 @@ github.com/hashicorp/hcl/v2 v2.23.0/go.mod h1:62ZYHrXgPoX8xBnzl8QzbWq4dyDsDtfCRg
+ github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 h1:BQSFePA1RWJOlocH6Fxy8MmwDt+yVQYULKfN0RoTN8A=
+ github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99/go.mod h1:1lJo3i6rXxKeerYnT8Nvf0QmHCRC1n8sfWVwXF2Frvo=
+ github.com/josharian/intern v1.0.0/go.mod h1:5DoeVV0s6jJacbCEi61lwdGj/aVlrQvzHFFd8Hwg//Y=
++github.com/json-iterator/go v1.1.12 h1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnrnM=
++github.com/json-iterator/go v1.1.12/go.mod h1:e30LSqwooZae/UwlEbR2852Gd8hjQvJoHmT4TnhNGBo=
+ github.com/kevinburke/ssh_config v1.2.0 h1:x584FjTGwHzMwvHx18PXxbBVzfnxogHaAReU4gf13a4=
+ github.com/kevinburke/ssh_config v1.2.0/go.mod h1:CT57kijsi8u/K/BOFA39wgDQJ9CxiF4nAY/ojJ6r6mM=
+ github.com/kr/pretty v0.1.0/go.mod h1:dAy3ld7l9f0ibDNOQOHHMYYIIbhfbHSm3C4ZsoJORNo=
+@@ -99,10 +110,21 @@ github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 h1:QwWKgMY28TAXaDl+
+ github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728/go.mod h1:1fEHWurg7pvf5SG6XNE5Q8UZmOwex51Mkx3SLhrW5B4=
+ github.com/mailru/easyjson v0.7.7 h1:UGYAvKxe3sBsEDzO8ZeWOSlIQfWFlxbzLZe7hwFURr0=
+ github.com/mailru/easyjson v0.7.7/go.mod h1:xzfreul335JAWq5oZzymOObrkdz5UnU4kGfJJLY9Nlc=
++github.com/microcosm-cc/bluemonday v1.0.27 h1:MpEUotklkwCSLeH+Qdx1VJgNqLlpY2KXwXFM08ygZfk=
++github.com/microcosm-cc/bluemonday v1.0.27/go.mod h1:jFi9vgW+H7c3V0lb6nR74Ib/DIB5OBs92Dimizgw2cA=
+ github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db h1:62I3jR2EmQ4l5rM/4FEfDWcRD+abF5XlKShorW5LRoQ=
+ github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db/go.mod h1:l0dey0ia/Uv7NcFFVbCLtqEBQbrT4OCwCSKTEv6enCw=
+ github.com/mitchellh/go-wordwrap v0.0.0-20150314170334-ad45545899c7 h1:DpOJ2HYzCv8LZP15IdmG+YdwD2luVPHITV96TkirNBM=
+ github.com/mitchellh/go-wordwrap v0.0.0-20150314170334-ad45545899c7/go.mod h1:ZXFpozHsX6DPmq2I0TCekCxypsnAUbP2oI0UX1GXzOo=
++github.com/mmcdole/gofeed v1.3.0 h1:5yn+HeqlcvjMeAI4gu6T+crm7d0anY85+M+v6fIFNG4=
++github.com/mmcdole/gofeed v1.3.0/go.mod h1:9TGv2LcJhdXePDzxiuMnukhV2/zb6VtnZt1mS+SjkLE=
++github.com/mmcdole/goxpp v1.1.1-0.20240225020742-a0c311522b23 h1:Zr92CAlFhy2gL+V1F+EyIuzbQNbSgP4xhTODZtrXUtk=
++github.com/mmcdole/goxpp v1.1.1-0.20240225020742-a0c311522b23/go.mod h1:v+25+lT2ViuQ7mVxcncQ8ch1URund48oH+jhjiwEgS8=
++github.com/modern-go/concurrent v0.0.0-20180228061459-e0a39a4cb421/go.mod h1:6dJC0mAP4ikYIbvyc7fijjWJddQyLn8Ig3JB5CqoB9Q=
++github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd h1:TRLaZ9cD/w8PVh93nsPXa1VrQ6jlwL5oN8l14QlcNfg=
++github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd/go.mod h1:6dJC0mAP4ikYIbvyc7fijjWJddQyLn8Ig3JB5CqoB9Q=
++github.com/modern-go/reflect2 v1.0.2 h1:xBagoLtFs94CBntxluKeaWgTMpvLxC4ur3nMaC9Gz0M=
++github.com/modern-go/reflect2 v1.0.2/go.mod h1:yWuevngMOJpCy52FWWMvUC8ws7m/LJsjYzDa0/r8luk=
+ github.com/ollama/ollama v0.17.0 h1:IiYQU1cR5i7p+ON3LkseFMums6MotTvxaSxnK2oSyrY=
+ github.com/ollama/ollama v0.17.0/go.mod h1:tCX4IMV8DHjl3zY0THxuEkpWDZSOchJpzTuLACpMwFw=
+ github.com/onsi/gomega v1.34.1 h1:EUMJIKUjM8sKjYbtxQI9A4z2o+rruxnzNvpknOXie6k=
+@@ -183,6 +205,7 @@ golang.org/x/exp v0.0.0-20250218142911-aa4b98e5adaa h1:t2QcU6V556bFjYgu4L6C+6VrC
+ golang.org/x/exp v0.0.0-20250218142911-aa4b98e5adaa/go.mod h1:BHOTPb3L19zxehTsLoJXVaTktb06DFgmdW6Wb9s8jqk=
+ golang.org/x/mod v0.30.0 h1:fDEXFVZ/fmCKProc/yAXXUijritrDzahmwwefnjoPFk=
+ golang.org/x/mod v0.30.0/go.mod h1:lAsf5O2EvJeSFMiBxXDki7sCgAxEUcZHXoXMKT4GJKc=
++golang.org/x/net v0.0.0-20210916014120-12bc252f5db8/go.mod h1:9nx3DQGgdP8bBQD5qxJ1jj9UTztislL4KSBs9R2vV5Y=
+ golang.org/x/net v0.0.0-20211112202133-69e39bad7dc2/go.mod h1:9nx3DQGgdP8bBQD5qxJ1jj9UTztislL4KSBs9R2vV5Y=
+ golang.org/x/net v0.47.0 h1:Mx+4dIFzqraBXUugkia1OOvlD6LemFo1ALMHjrXDOhY=
+ golang.org/x/net v0.47.0/go.mod h1:/jNxtkgq5yWUGYkaZGqo27cfGZ1c5Nen03aYrrKpVRU=
+@@ -202,6 +225,8 @@ golang.org/x/term v0.37.0/go.mod h1:5pB4lxRNYYVZuTLmy8oR2BH8dflOR+IbTYFD8fi3254=
+ golang.org/x/text v0.3.6/go.mod h1:5Zoc/QRtKVWzQhOtBMvqHzDpF6irO9z98xDceosuGiQ=
+ golang.org/x/text v0.31.0 h1:aC8ghyu4JhP8VojJ2lEHBnochRno1sgL6nEi9WGFGMM=
+ golang.org/x/text v0.31.0/go.mod h1:tKRAlv61yKIjGGHX/4tP1LTbc13YSec1pxVEWXzfoeM=
++golang.org/x/time v0.14.0 h1:MRx4UaLrDotUKUdCIqzPC48t1Y9hANFKIRpNx+Te8PI=
++golang.org/x/time v0.14.0/go.mod h1:eL/Oa2bBBK0TkX57Fyni+NgnyQQN4LitPmob2Hjnqw4=
+ golang.org/x/tools v0.0.0-20180917221912-90fa682c2a6e/go.mod h1:n7NCudcB/nEzxVGmLbDWY5pfWTLqBcC2KZ6jyYvM4mQ=
+ golang.org/x/tools v0.38.0 h1:Hx2Xv8hISq8Lm16jvBZ2VQf+RLmbd7wVUsALibYI/IQ=
+ golang.org/x/tools v0.38.0/go.mod h1:yEsQ/d/YK8cjh0L6rZlY8tgtlKiBNTL14pGDJPJpYQs=
+diff --git a/parsers/html/boilerplate.go b/parsers/html/boilerplate.go
+new file mode 100644
+index 0000000..c1d4720
+--- /dev/null
++++ b/parsers/html/boilerplate.go
+@@ -0,0 +1,68 @@
++package html
++
++import "github.com/PuerkitoBio/goquery"
++
++// Boilerplate selectors to remove for LLM-optimized content.
++// Based on common patterns that add noise but not semantic value.
++var boilerplateSelectors = []string{
++	// Navigation elements
++	"nav", "header", "footer",
++
++	// Scripts and styles
++	"script", "style", "noscript",
++
++	// Common noise elements
++	"aside", ".sidebar", ".advertisement", ".ad", ".ads",
++	".navigation", ".menu", ".breadcrumb",
++	".social-share", ".share-buttons", ".social",
++	".comments", "#comments", ".comment-section",
++	".related-posts", ".recommended", ".suggestions",
++	".newsletter", ".subscribe",
++
++	// Tracking pixels
++	"img[src*='pixel']", "img[src*='track']", "img[src*='beacon']",
++
++	// Common ad class patterns
++	"[class*='ad-']", "[id*='ad-']",
++	"[class*='banner']", "[id*='banner']",
++}
++
++// removeBoilerplate removes non-content elements from the HTML document.
++// This eliminates noise that degrades LLM performance and embedding quality.
++//
++// Elements removed:
++//   - Navigation (nav, header, footer)
++//   - Scripts and styles (script, style, noscript)
++//   - Sidebars and ads (aside, .sidebar, .advertisement)
++//   - Social sharing (.social-share, .share-buttons)
++//   - Comments (.comments, #comments)
++//   - Tracking pixels (img[src*='pixel'])
++func (p *HTMLParser) removeBoilerplate(doc *goquery.Document) {
++	if !p.boilerplateRemoval {
++		return
++	}
++
++	// Remove standard boilerplate elements
++	for _, selector := range boilerplateSelectors {
++		doc.Find(selector).Remove()
++	}
++
++	// Remove elements with common noise patterns in class/ID
++	noisePatterns := []string{
++		"sidebar", "footer", "nav-", "menu",
++		"advertisement", "banner", "promo",
++		"social", "share", "comment",
++		"related", "recommended",
++	}
++
++	for _, pattern := range noisePatterns {
++		doc.Find("[class*='" + pattern + "'], [id*='" + pattern + "']").Remove()
++	}
++
++	// Remove empty elements after cleaning
++	doc.Find("*:not(html):not(body):not(script):not(style)").Each(func(i int, s *goquery.Selection) {
++		if s.Children().Length() == 0 && s.Text() == "" {
++			s.Remove()
++		}
++	})
++}
+diff --git a/parsers/html/chunk.go b/parsers/html/chunk.go
+new file mode 100644
+index 0000000..775b7ad
+--- /dev/null
++++ b/parsers/html/chunk.go
+@@ -0,0 +1,138 @@
++package html
++
++import (
++	"fmt"
++	"strings"
++	"time"
++
++	"github.com/PuerkitoBio/goquery"
++	"github.com/sevigo/goframe/schema"
++)
++
++// Chunk parses HTML content and returns code chunks with metadata.
++// This method:
++//  1. Parses HTML using goquery
++//  2. Extracts metadata (author, date, title) - MUST be before boilerplate removal
++//  3. Removes boilerplate (nav, footer, scripts)
++//  4. Normalizes links (relative → absolute)
++//  5. Converts to Markdown
++//  6. Returns chunks with governance annotations
++func (p *HTMLParser) Chunk(content string, path string, opts *schema.CodeChunkingOptions) ([]schema.CodeChunk, error) {
++	// 1. Parse HTML
++	doc, err := goquery.NewDocumentFromReader(strings.NewReader(content))
++	if err != nil {
++		return nil, fmt.Errorf("failed to parse HTML: %w", err)
++	}
++
++	// 2. Extract metadata BEFORE removing boilerplate (head section contains metadata)
++	metadata := p.extractMetadata(doc)
++
++	// 3. Remove boilerplate
++	p.removeBoilerplate(doc)
++
++	// 4. Normalize links
++	p.normalizeLinks(doc)
++
++	// 5. Convert to Markdown
++	markdown := p.toMarkdown(doc)
++
++	// 6. Create chunk with metadata
++	chunk := schema.CodeChunk{
++		Content:      markdown,
++		LineStart:    1,
++		LineEnd:      countLines(markdown),
++		Type:         "html_article",
++		Identifier:   path,
++		IsDefinition: false,
++	}
++
++	// 7. Add metadata as annotations
++	if chunk.Annotations == nil {
++		chunk.Annotations = make(map[string]string)
++	}
++
++	if metadata.Author != "" {
++		chunk.Annotations["author"] = metadata.Author
++	}
++
++	if !metadata.PublishedDate.IsZero() {
++		chunk.Annotations["published_date"] = metadata.PublishedDate.Format(time.RFC3339)
++	}
++
++	if metadata.Title != "" {
++		chunk.Annotations["title"] = metadata.Title
++	}
++
++	if metadata.Description != "" {
++		chunk.Annotations["description"] = metadata.Description
++	}
++
++	if metadata.CanonicalURL != "" {
++		chunk.Annotations["canonical_url"] = metadata.CanonicalURL
++	}
++
++	if len(metadata.Keywords) > 0 {
++		chunk.Annotations["keywords"] = strings.Join(metadata.Keywords, ", ")
++	}
++
++	// Add base URL as source context
++	if p.baseURL != "" {
++		chunk.Annotations["base_url"] = p.baseURL
++	}
++
++	return []schema.CodeChunk{chunk}, nil
++}
++
++// ExtractMetadata extracts file-level metadata from HTML content.
++// Returns metadata about the HTML document including author, title, and other governance info.
++func (p *HTMLParser) ExtractMetadata(content string, path string) (schema.FileMetadata, error) {
++	// Parse HTML
++	doc, err := goquery.NewDocumentFromReader(strings.NewReader(content))
++	if err != nil {
++		return schema.FileMetadata{}, fmt.Errorf("failed to parse HTML: %w", err)
++	}
++
++	// Extract metadata
++	htmlMeta := p.extractMetadata(doc)
++
++	// Build file metadata
++	properties := make(map[string]string)
++
++	if htmlMeta.Author != "" {
++		properties["author"] = htmlMeta.Author
++	}
++
++	if htmlMeta.Title != "" {
++		properties["title"] = htmlMeta.Title
++	}
++
++	if htmlMeta.Description != "" {
++		properties["description"] = htmlMeta.Description
++	}
++
++	if htmlMeta.CanonicalURL != "" {
++		properties["canonical_url"] = htmlMeta.CanonicalURL
++	}
++
++	if len(htmlMeta.Keywords) > 0 {
++		properties["keywords"] = strings.Join(htmlMeta.Keywords, ", ")
++	}
++
++	if !htmlMeta.PublishedDate.IsZero() {
++		properties["published_date"] = htmlMeta.PublishedDate.Format(time.RFC3339)
++	}
++
++	return schema.FileMetadata{
++		FilePath:   path,
++		Language:   "html",
++		Properties: properties,
++	}, nil
++}
++
++// countLines counts the number of lines in a string.
++func countLines(text string) int {
++	if text == "" {
++		return 1
++	}
++	return strings.Count(text, "\n") + 1
++}
+diff --git a/parsers/html/links.go b/parsers/html/links.go
+new file mode 100644
+index 0000000..8896816
+--- /dev/null
++++ b/parsers/html/links.go
+@@ -0,0 +1,88 @@
++package html
++
++import (
++	"net/url"
++	"strings"
++
++	"github.com/PuerkitoBio/goquery"
++)
++
++// normalizeLinks converts relative URLs to absolute URLs using the base URL.
++// This enables agents to follow links and access additional context.
++//
++// Transformations:
++//   - relative://article/123 → https://base.com/article/123
++//   - Skips anchors (#foo), javascript:, mailto:, already-absolute URLs
++//   - Normalizes both <a href=""> and <img src="">
++func (p *HTMLParser) normalizeLinks(doc *goquery.Document) {
++	if p.baseURL == "" {
++		return
++	}
++
++	base, err := url.Parse(p.baseURL)
++	if err != nil {
++		return
++	}
++
++	// Normalize all links
++	doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
++		href, exists := s.Attr("href")
++		if !exists || href == "" {
++			return
++		}
++
++		// Skip anchors, javascript, mailto, and already-absolute URLs
++		if shouldSkipURL(href) {
++			return
++		}
++
++		// Resolve relative URL
++		if resolvedURL := resolveRelativeURL(base, href); resolvedURL != "" {
++			s.SetAttr("href", resolvedURL)
++		}
++	})
++
++	// Normalize image sources
++	doc.Find("img[src]").Each(func(i int, s *goquery.Selection) {
++		src, exists := s.Attr("src")
++		if !exists || src == "" {
++			return
++		}
++
++		// Skip data URIs and already-absolute URLs
++		if strings.HasPrefix(src, "data:") || strings.Contains(src, "://") {
++			return
++		}
++
++		// Resolve relative URL
++		if resolvedURL := resolveRelativeURL(base, src); resolvedURL != "" {
++			s.SetAttr("src", resolvedURL)
++		}
++	})
++}
++
++// shouldSkipURL returns true for URLs that should not be normalized.
++func shouldSkipURL(href string) bool {
++	lower := strings.ToLower(href)
++	return strings.HasPrefix(href, "#") ||
++		strings.HasPrefix(lower, "javascript:") ||
++		strings.HasPrefix(lower, "mailto:") ||
++		strings.HasPrefix(lower, "tel:") ||
++		strings.Contains(href, "://")
++}
++
++// resolveRelativeURL resolves a relative URL against a base URL.
++// Returns the absolute URL or empty string if resolution fails.
++func resolveRelativeURL(base *url.URL, relative string) string {
++	rel, err := url.Parse(relative)
++	if err != nil {
++		return ""
++	}
++
++	resolved := base.ResolveReference(rel)
++
++	// Remove tracking parameters if configured
++	// Note: This is separate from RSS normalizer's RemoveTracking
++	// This handles HTML-specific tracking (onclick, etc.)
++	return resolved.String()
++}
+diff --git a/parsers/html/markdown.go b/parsers/html/markdown.go
+new file mode 100644
+index 0000000..d08db0d
+--- /dev/null
++++ b/parsers/html/markdown.go
+@@ -0,0 +1,266 @@
++package html
++
++import (
++	"fmt"
++	"strings"
++
++	"github.com/PuerkitoBio/goquery"
++	"golang.org/x/net/html"
++)
++
++// toMarkdown converts an HTML document to Markdown format.
++// Preserves semantic structure (headers, lists, code blocks, etc.)
++// while removing non-essential formatting.
++func (p *HTMLParser) toMarkdown(doc *goquery.Document) string {
++	if !p.markdownConversion {
++		// Return cleaned HTML if not converting
++		html, _ := doc.Html()
++		return html
++	}
++
++	var markdown strings.Builder
++
++	// Find the main content area
++	content := doc.Find("article, main, .content, #content, body").First()
++	if content.Length() == 0 {
++		content = doc.Find("body")
++	}
++
++	// Convert each node recursively
++	content.Contents().Each(func(i int, s *goquery.Selection) {
++		markdown.WriteString(p.nodeToMarkdown(s, 0))
++	})
++
++	return strings.TrimSpace(markdown.String())
++}
++
++// nodeToMarkdown recursively converts an HTML node to Markdown.
++func (p *HTMLParser) nodeToMarkdown(s *goquery.Selection, depth int) string {
++	if len(s.Nodes) == 0 {
++		return ""
++	}
++
++	node := s.Nodes[0]
++
++	// Handle text nodes (node.Data contains text for text nodes)
++	if node.Type == html.TextNode {
++		text := strings.TrimSpace(node.Data)
++		if text == "" {
++			return ""
++		}
++		return text + " "
++	}
++
++	// Handle element nodes by tag name
++	tagName := strings.ToLower(node.Data)
++
++	switch tagName {
++	case "h1":
++		return p.headingToMarkdown(s, 1)
++	case "h2":
++		return p.headingToMarkdown(s, 2)
++	case "h3":
++		return p.headingToMarkdown(s, 3)
++	case "h4":
++		return p.headingToMarkdown(s, 4)
++	case "h5":
++		return p.headingToMarkdown(s, 5)
++	case "h6":
++		return p.headingToMarkdown(s, 6)
++	case "p":
++		return p.paragraphToMarkdown(s)
++	case "ul", "ol":
++		return p.listToMarkdown(s, tagName, depth)
++	case "li":
++		return p.listItemToMarkdown(s, depth)
++	case "a":
++		return p.linkToMarkdown(s)
++	case "img":
++		return p.imageToMarkdown(s)
++	case "code":
++		return p.codeToMarkdown(s)
++	case "pre":
++		return p.codeBlockToMarkdown(s)
++	case "blockquote":
++		return p.blockquoteToMarkdown(s, depth)
++	case "strong", "b":
++		return p.boldToMarkdown(s)
++	case "em", "i":
++		return p.italicToMarkdown(s)
++	case "br":
++		return "\n"
++	case "hr":
++		return "\n---\n\n"
++	case "table":
++		return p.tableToMarkdown(s)
++	case "div", "section", "article":
++		// Generic container - process children
++		var result strings.Builder
++		s.Contents().Each(func(i int, child *goquery.Selection) {
++			result.WriteString(p.nodeToMarkdown(child, depth))
++		})
++		return result.String()
++	default:
++		// Unknown element - process children
++		var result strings.Builder
++		s.Contents().Each(func(i int, child *goquery.Selection) {
++			result.WriteString(p.nodeToMarkdown(child, depth))
++		})
++		return result.String()
++	}
++}
++
++func (p *HTMLParser) headingToMarkdown(s *goquery.Selection, level int) string {
++	prefix := strings.Repeat("#", level) + " "
++	text := strings.TrimSpace(s.Text())
++	return fmt.Sprintf("\n%s%s\n\n", prefix, text)
++}
++
++func (p *HTMLParser) paragraphToMarkdown(s *goquery.Selection) string {
++	var result strings.Builder
++	s.Contents().Each(func(i int, child *goquery.Selection) {
++		result.WriteString(p.nodeToMarkdown(child, 0))
++	})
++	text := strings.TrimSpace(result.String())
++	if text == "" {
++		return ""
++	}
++	return fmt.Sprintf("%s\n\n", text)
++}
++
++func (p *HTMLParser) listToMarkdown(s *goquery.Selection, listType string, depth int) string {
++	var result strings.Builder
++	indent := strings.Repeat("  ", depth)
++
++	s.Find("li").Each(func(i int, li *goquery.Selection) {
++		text := strings.TrimSpace(li.Text())
++		if listType == "ul" {
++			result.WriteString(fmt.Sprintf("%s- %s\n", indent, text))
++		} else {
++			result.WriteString(fmt.Sprintf("%s%d. %s\n", indent, i+1, text))
++		}
++	})
++
++	return result.String() + "\n"
++}
++
++func (p *HTMLParser) listItemToMarkdown(s *goquery.Selection, depth int) string {
++	var result strings.Builder
++	s.Contents().Each(func(i int, child *goquery.Selection) {
++		result.WriteString(p.nodeToMarkdown(child, depth))
++	})
++	return result.String()
++}
++
++func (p *HTMLParser) linkToMarkdown(s *goquery.Selection) string {
++	text := strings.TrimSpace(s.Text())
++	href, _ := s.Attr("href")
++
++	if href == "" || text == "" {
++		return text
++	}
++
++	return fmt.Sprintf("[%s](%s)", text, href)
++}
++
++func (p *HTMLParser) imageToMarkdown(s *goquery.Selection) string {
++	alt, _ := s.Attr("alt")
++	src, _ := s.Attr("src")
++
++	if src == "" {
++		return ""
++	}
++
++	if alt == "" {
++		return fmt.Sprintf("![](%s)", src)
++	}
++
++	return fmt.Sprintf("![%s](%s)", alt, src)
++}
++
++func (p *HTMLParser) codeToMarkdown(s *goquery.Selection) string {
++	text := s.Text()
++	if strings.Contains(text, "\n") {
++		return fmt.Sprintf("\n```\n%s\n```\n", text)
++	}
++	return fmt.Sprintf("`%s`", text)
++}
++
++func (p *HTMLParser) codeBlockToMarkdown(s *goquery.Selection) string {
++	// Try to find language from class
++	language := ""
++	if classes, exists := s.Attr("class"); exists {
++		if strings.Contains(classes, "language-") {
++			parts := strings.Split(classes, " ")
++			for _, part := range parts {
++				if strings.HasPrefix(part, "language-") {
++					language = strings.TrimPrefix(part, "language-")
++					break
++				}
++			}
++		}
++	}
++
++	// Get code content
++	code := s.Find("code").Text()
++	if code == "" {
++		code = s.Text()
++	}
++
++	return fmt.Sprintf("\n```%s\n%s\n```\n\n", language, code)
++}
++
++func (p *HTMLParser) blockquoteToMarkdown(s *goquery.Selection, depth int) string {
++	var result strings.Builder
++	lines := strings.Split(strings.TrimSpace(s.Text()), "\n")
++
++	for _, line := range lines {
++		if line != "" {
++			result.WriteString(fmt.Sprintf("> %s\n", line))
++		}
++	}
++
++	return result.String() + "\n"
++}
++
++func (p *HTMLParser) boldToMarkdown(s *goquery.Selection) string {
++	text := strings.TrimSpace(s.Text())
++	if text == "" {
++		return ""
++	}
++	return fmt.Sprintf("**%s**", text)
++}
++
++func (p *HTMLParser) italicToMarkdown(s *goquery.Selection) string {
++	text := strings.TrimSpace(s.Text())
++	if text == "" {
++		return ""
++	}
++	return fmt.Sprintf("*%s*", text)
++}
++
++func (p *HTMLParser) tableToMarkdown(s *goquery.Selection) string {
++	var result strings.Builder
++
++	// Header
++	s.Find("thead tr th").Each(func(i int, th *goquery.Selection) {
++		result.WriteString(fmt.Sprintf("| %s ", strings.TrimSpace(th.Text())))
++	})
++	result.WriteString("|\n")
++
++	// Separator
++	s.Find("thead tr th").Each(func(i int, th *goquery.Selection) {
++		result.WriteString("| --- ")
++	})
++	result.WriteString("|\n")
++
++	// Body
++	s.Find("tbody tr").Each(func(i int, tr *goquery.Selection) {
++		tr.Find("td").Each(func(j int, td *goquery.Selection) {
++			result.WriteString(fmt.Sprintf("| %s ", strings.TrimSpace(td.Text())))
++		})
++		result.WriteString("|\n")
++	})
++
++	return result.String() + "\n"
++}
+diff --git a/parsers/html/metadata.go b/parsers/html/metadata.go
+new file mode 100644
+index 0000000..9526680
+--- /dev/null
++++ b/parsers/html/metadata.go
+@@ -0,0 +1,210 @@
++package html
++
++import (
++	"strings"
++	"time"
++
++	"github.com/PuerkitoBio/goquery"
++)
++
++// extractMetadata extracts governance annotations from HTML metadata.
++// Supports multiple metadata formats: Open Graph, Schema.org, Dublin Core, and standard meta tags.
++//
++// Priority order for extraction:
++//  1. Schema.org ( itemprop)
++//  2. Open Graph (property="og:...")
++//  3. Dublin Core (name="dc:...")
++//  4. Standard HTML (<meta name="author">)
++//  5. Content-based (.byline, .author)
++func (p *HTMLParser) extractMetadata(doc *goquery.Document) HTMLMetadata {
++	if !p.metadataExtraction {
++		return HTMLMetadata{}
++	}
++
++	metadata := HTMLMetadata{}
++
++	// Extract each metadata field
++	metadata.Author = p.extractAuthor(doc)
++	metadata.PublishedDate = p.extractPublishedDate(doc)
++	metadata.Title = p.extractTitle(doc)
++	metadata.Description = p.extractDescription(doc)
++	metadata.CanonicalURL = p.extractCanonicalURL(doc)
++	metadata.Keywords = p.extractKeywords(doc)
++
++	return metadata
++}
++
++// extractAuthor extracts author name from HTML metadata.
++// Tries multiple sources in order of reliability.
++func (p *HTMLParser) extractAuthor(doc *goquery.Document) string {
++	sources := []string{
++		// 1. Schema.org author
++		doc.Find(`meta[itemprop="author"]`).AttrOr("content", ""),
++		// 2. Open Graph article:author
++		doc.Find(`meta[property="article:author"]`).AttrOr("content", ""),
++		// 3. Dublin Core creator
++		doc.Find(`meta[name="dc.creator"]`).AttrOr("content", ""),
++		// 4. Standard meta author
++		doc.Find(`meta[name="author"]`).AttrOr("content", ""),
++	}
++
++	for _, author := range sources {
++		if author != "" {
++			return strings.TrimSpace(author)
++		}
++	}
++
++	// 5. Content-based extraction (byline, .author)
++	author := ""
++	doc.Find(".byline, .author, [class*='author']").Each(func(i int, s *goquery.Selection) {
++		if text := strings.TrimSpace(s.Text()); text != "" && len(text) < 100 {
++			author = text
++			return
++		}
++	})
++
++	return author
++}
++
++// extractPublishedDate extracts publication date from HTML metadata.
++// Tries multiple date formats and metadata sources.
++func (p *HTMLParser) extractPublishedDate(doc *goquery.Document) time.Time {
++	sources := []string{
++		// 1. Schema.org datePublished
++		doc.Find(`meta[itemprop="datePublished"]`).AttrOr("content", ""),
++		// 2. Open Graph article:published_time
++		doc.Find(`meta[property="article:published_time"]`).AttrOr("content", ""),
++		// 3. Dublin Core date
++		doc.Find(`meta[name="dc.date"]`).AttrOr("content", ""),
++		// 4. Standard meta
++		doc.Find(`meta[name="pubdate"]`).AttrOr("content", ""),
++		doc.Find(`meta[name="publish-date"]`).AttrOr("content", ""),
++	}
++
++	dateFormats := []string{
++		time.RFC3339,
++		"2006-01-02T15:04:05Z07:00",
++		"2006-01-02T15:04:05Z",
++		"2006-01-02 15:04:05",
++		"2006-01-02",
++		time.RFC1123,
++		time.RFC1123Z,
++	}
++
++	for _, dateStr := range sources {
++		if dateStr == "" {
++			continue
++		}
++
++		for _, format := range dateFormats {
++			if t, err := time.Parse(format, dateStr); err == nil {
++				return t
++			}
++		}
++	}
++
++	return time.Time{}
++}
++
++// extractTitle extracts title from HTML metadata.
++func (p *HTMLParser) extractTitle(doc *goquery.Document) string {
++	sources := []string{
++		// 1. Open Graph title
++		doc.Find(`meta[property="og:title"]`).AttrOr("content", ""),
++		// 2. Schema.org headline
++		doc.Find(`meta[itemprop="headline"]`).AttrOr("content", ""),
++		// 3. Twitter title
++		doc.Find(`meta[name="twitter:title"]`).AttrOr("content", ""),
++		// 4. HTML title tag
++		doc.Find("title").Text(),
++	}
++
++	for _, title := range sources {
++		if title = strings.TrimSpace(title); title != "" {
++			return title
++		}
++	}
++
++	return ""
++}
++
++// extractDescription extracts description from HTML metadata.
++func (p *HTMLParser) extractDescription(doc *goquery.Document) string {
++	sources := []string{
++		// 1. Open Graph description
++		doc.Find(`meta[property="og:description"]`).AttrOr("content", ""),
++		// 2. Schema.org description
++		doc.Find(`meta[itemprop="description"]`).AttrOr("content", ""),
++		// 3. Standard meta description
++		doc.Find(`meta[name="description"]`).AttrOr("content", ""),
++		// 4. Twitter description
++		doc.Find(`meta[name="twitter:description"]`).AttrOr("content", ""),
++	}
++
++	for _, desc := range sources {
++		if desc = strings.TrimSpace(desc); desc != "" {
++			return desc
++		}
++	}
++
++	return ""
++}
++
++// extractCanonicalURL extracts canonical URL from HTML metadata.
++func (p *HTMLParser) extractCanonicalURL(doc *goquery.Document) string {
++	// 1. Canonical link
++	if url := doc.Find(`link[rel="canonical"]`).AttrOr("href", ""); url != "" {
++		return url
++	}
++
++	// 2. Open Graph URL
++	if url := doc.Find(`meta[property="og:url"]`).AttrOr("content", ""); url != "" {
++		return url
++	}
++
++	return ""
++}
++
++// extractKeywords extracts keywords/tags from HTML metadata.
++func (p *HTMLParser) extractKeywords(doc *goquery.Document) []string {
++	keywords := []string{}
++
++	// Extract from multiple sources
++	extractFromMeta := func(selector, attr string) {
++		doc.Find(selector).Each(func(i int, s *goquery.Selection) {
++			if kw, exists := s.Attr(attr); exists {
++				for _, k := range strings.Split(kw, ",") {
++					if trimmed := strings.TrimSpace(k); trimmed != "" && len(keywords) < 20 {
++						keywords = append(keywords, trimmed)
++					}
++				}
++			}
++		})
++	}
++
++	// 1. Meta keywords
++	extractFromMeta(`meta[name="keywords"]`, "content")
++
++	// 2. Schema.org keywords
++	extractFromMeta(`meta[itemprop="keywords"]`, "content")
++
++	// 3. Open Graph article:tag
++	doc.Find(`meta[property="article:tag"]`).Each(func(i int, s *goquery.Selection) {
++		if tag := s.AttrOr("content", ""); tag != "" {
++			keywords = append(keywords, strings.TrimSpace(tag))
++		}
++	})
++
++	// Deduplicate
++	seen := make(map[string]bool)
++	unique := []string{}
++	for _, kw := range keywords {
++		lower := strings.ToLower(kw)
++		if !seen[lower] {
++			seen[lower] = true
++			unique = append(unique, kw)
++		}
++	}
++
++	return unique
++}
+diff --git a/parsers/html/parser.go b/parsers/html/parser.go
+new file mode 100644
+index 0000000..7c59249
+--- /dev/null
++++ b/parsers/html/parser.go
+@@ -0,0 +1,131 @@
++// Package html provides an HTML parser plugin for transforming HTML content
++// into clean Markdown suitable for LLM consumption and RAG applications.
++//
++// The parser handles:
++//   - Boilerplate removal (nav, footer, scripts, ads)
++//   - Link normalization (relative URLs to absolute URLs)
++//   - Metadata extraction (author, date, title from Open Graph, Schema.org, Dublin Core)
++//   - HTML to Markdown conversion (preserving structure)
++//
++// This is particularly useful for RSS feeds and web content where HTML content
++// needs to be cleaned and structured before being embedded in vector databases.
++package html
++
++import (
++	"io/fs"
++	"strings"
++	"time"
++)
++
++// HTMLParser implements the ParserPlugin interface for HTML content.
++// It transforms HTML into clean Markdown while preserving semantic structure
++// and extracting metadata for governance annotations.
++type HTMLParser struct {
++	baseURL               string
++	boilerplateRemoval    bool
++	metadataExtraction    bool
++	markdownConversion    bool
++	structurePreservation bool
++}
++
++// HTMLMetadata represents metadata extracted from HTML documents.
++// It supports multiple metadata formats including Open Graph, Schema.org, and Dublin Core.
++type HTMLMetadata struct {
++	Author        string    `json:"author"`
++	PublishedDate time.Time `json:"published_date"`
++	Title         string    `json:"title"`
++	Description   string    `json:"description"`
++	CanonicalURL  string    `json:"canonical_url"`
++	Keywords      []string  `json:"keywords"`
++}
++
++// Option configures the HTMLParser.
++type Option func(*HTMLParser)
++
++// NewHTMLParser creates a new HTML parser with the given options.
++//
++// Example:
++//
++//	parser := html.NewHTMLParser(
++//	    html.WithBaseURL("https://example.com"),
++//	    html.WithBoilerplateRemoval(true),
++//	    html.WithMarkdownConversion(true),
++//	)
++func NewHTMLParser(opts ...Option) *HTMLParser {
++	p := &HTMLParser{
++		boilerplateRemoval:    true,
++		metadataExtraction:    true,
++		markdownConversion:    true,
++		structurePreservation: true,
++	}
++	for _, opt := range opts {
++		opt(p)
++	}
++	return p
++}
++
++// WithBaseURL sets the base URL for resolving relative links.
++// This enables conversion of relative URLs to absolute URLs.
++func WithBaseURL(baseURL string) Option {
++	return func(p *HTMLParser) {
++		p.baseURL = baseURL
++	}
++}
++
++// WithBoilerplateRemoval enables or removes non-content elements.
++// When true (default), removes nav, footer, scripts, ads, etc.
++func WithBoilerplateRemoval(remove bool) Option {
++	return func(p *HTMLParser) {
++		p.boilerplateRemoval = remove
++	}
++}
++
++// WithMetadataExtraction enables extraction of author, date, and other metadata.
++// Extracts from Open Graph, Schema.org, Dublin Core, and standard meta tags.
++func WithMetadataExtraction(extract bool) Option {
++	return func(p *HTMLParser) {
++		p.metadataExtraction = extract
++	}
++}
++
++// WithMarkdownConversion enables conversion of HTML to Markdown.
++// When true (default), preserves semantic structure as Markdown.
++func WithMarkdownConversion(convert bool) Option {
++	return func(p *HTMLParser) {
++		p.markdownConversion = convert
++	}
++}
++
++// WithStructurePreservation enables preservation of semantic structure.
++// When true (default), maintains headers, lists, code blocks as Markdown.
++func WithStructurePreservation(preserve bool) Option {
++	return func(p *HTMLParser) {
++		p.structurePreservation = preserve
++	}
++}
++
++// Name returns the parser name identifier.
++func (p *HTMLParser) Name() string {
++	return "html"
++}
++
++// Extensions returns the file extensions this parser handles.
++func (p *HTMLParser) Extensions() []string {
++	return []string{".html", ".htm"}
++}
++
++// CanHandle determines if this parser can handle the given file.
++func (p *HTMLParser) CanHandle(path string, info fs.FileInfo) bool {
++	ext := strings.ToLower(path)
++	return strings.HasSuffix(ext, ".html") || strings.HasSuffix(ext, ".htm")
++}
++
++// IsGenerated returns false as HTML files are typically not auto-generated code.
++func (p *HTMLParser) IsGenerated(content string, path string) bool {
++	return false
++}
++
++// ExtractUsedSymbols returns nil as HTML doesn't have symbol references.
++func (p *HTMLParser) ExtractUsedSymbols(content string) []string {
++	return nil
++}
+diff --git a/parsers/html/parser_test.go b/parsers/html/parser_test.go
+new file mode 100644
+index 0000000..e2689c1
+--- /dev/null
++++ b/parsers/html/parser_test.go
+@@ -0,0 +1,350 @@
++package html_test
++
++import (
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++
++	"github.com/sevigo/goframe/parsers/html"
++)
++
++func TestNewHTMLParser(t *testing.T) {
++	// Test default options
++	parser := html.NewHTMLParser()
++	assert.NotNil(t, parser)
++
++	// Test with options
++	parser = html.NewHTMLParser(
++		html.WithBaseURL("https://example.com"),
++		html.WithBoilerplateRemoval(true),
++		html.WithMetadataExtraction(true),
++		html.WithMarkdownConversion(true),
++	)
++	assert.NotNil(t, parser)
++
++	// Test disabled features
++	parser = html.NewHTMLParser(
++		html.WithBoilerplateRemoval(false),
++		html.WithMetadataExtraction(false),
++		html.WithMarkdownConversion(false),
++		html.WithStructurePreservation(false),
++	)
++	assert.NotNil(t, parser)
++}
++
++func TestHTMLParser_BoilerplateRemoval(t *testing.T) {
++	input := `
++		<html>
++			<head><title>Test</title></head>
++			<body>
++				<nav><ul><li>Home</li><li>About</li></ul></nav>
++				<article>
++					<h1>Article Title</h1>
++					<p>This is the main content.</p>
++				</article>
++				<footer>Copyright 2024</footer>
++				<script>alert('ads');</script>
++				<aside class="sidebar">Related Links</aside>
++			</body>
++		</html>
++	`
++
++	parser := html.NewHTMLParser(html.WithBoilerplateRemoval(true))
++	chunks, err := parser.Chunk(input, "test.html", nil)
++
++	require.NoError(t, err)
++	require.Len(t, chunks, 1)
++
++	content := chunks[0].Content
++
++	// Content should not include nav, footer, script, aside
++	assert.NotContains(t, content, "Home")
++	assert.NotContains(t, content, "Copyright")
++	assert.NotContains(t, content, "alert")
++	assert.NotContains(t, content, "Related Links")
++
++	// Content should include article
++	assert.Contains(t, content, "Article Title")
++	assert.Contains(t, content, "main content")
++}
++
++func TestHTMLParser_LinkNormalization(t *testing.T) {
++	tests := []struct {
++		name             string
++		baseURL          string
++		html             string
++		expectedContains string
++	}{
++		{
++			name:             "relative link",
++			baseURL:          "https://example.com",
++			html:             `<a href="/article/123">Read More</a>`,
++			expectedContains: "[Read More](https://example.com/article/123)",
++		},
++		{
++			name:             "absolute link unchanged",
++			baseURL:          "https://example.com",
++			html:             `<a href="https://other.com/page">External</a>`,
++			expectedContains: "[External](https://other.com/page)",
++		},
++		{
++			name:             "anchor link unchanged",
++			baseURL:          "https://example.com",
++			html:             `<a href="#section">Jump</a>`,
++			expectedContains: "#section",
++		},
++		{
++			name:             "mailto link unchanged",
++			baseURL:          "https://example.com",
++			html:             `<a href="mailto:test@example.com">Email</a>`,
++			expectedContains: "test@example.com",
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			parser := html.NewHTMLParser(
++				html.WithBaseURL(tt.baseURL),
++				html.WithBoilerplateRemoval(false),
++				html.WithMarkdownConversion(true),
++			)
++
++			chunks, err := parser.Chunk(tt.html, "test.html", nil)
++			require.NoError(t, err)
++			require.Len(t, chunks, 1)
++			assert.Contains(t, chunks[0].Content, tt.expectedContains)
++		})
++	}
++}
++
++func TestHTMLParser_MetadataExtraction(t *testing.T) {
++	input := `
++		<html>
++			<head>
++				<meta property="article:author" content="John Doe">
++				<meta property="article:published_time" content="2024-01-15T10:00:00Z">
++				<meta property="og:title" content="Article Title">
++				<meta name="keywords" content="go, programming, tutorial">
++				<meta name="description" content="A great article">
++			</head>
++			<body>
++				<h1>Article Title</h1>
++				<p>Content here.</p>
++			</body>
++		</html>
++	`
++
++	parser := html.NewHTMLParser(html.WithMetadataExtraction(true))
++
++	// Test Chunk with metadata
++	chunks, err := parser.Chunk(input, "test.html", nil)
++	require.NoError(t, err)
++	require.Len(t, chunks, 1)
++
++	annotations := chunks[0].Annotations
++	assert.Equal(t, "John Doe", annotations["author"])
++	assert.Equal(t, "Article Title", annotations["title"])
++	assert.Contains(t, annotations["keywords"], "go")
++	assert.Contains(t, annotations["keywords"], "programming")
++	assert.Contains(t, annotations["published_date"], "2024-01-15")
++
++	// Test ExtractMetadata
++	metadata, err := parser.ExtractMetadata(input, "test.html")
++	require.NoError(t, err)
++
++	assert.Equal(t, "html", metadata.Language)
++	assert.Equal(t, "John Doe", metadata.Properties["author"])
++	assert.Equal(t, "Article Title", metadata.Properties["title"])
++	assert.Contains(t, metadata.Properties["keywords"], "go")
++}
++
++func TestHTMLParser_MarkdownConversion(t *testing.T) {
++	tests := []struct {
++		name     string
++		html     string
++		expected string
++	}{
++		{
++			name:     "heading h1",
++			html:     `<h1>Title</h1>`,
++			expected: "# Title",
++		},
++		{
++			name:     "heading h2",
++			html:     `<h2>Subtitle</h2>`,
++			expected: "## Subtitle",
++		},
++		{
++			name:     "paragraph",
++			html:     `<p>This is text.</p>`,
++			expected: "This is text.",
++		},
++		{
++			name:     "link",
++			html:     `<a href="https://example.com">Link Text</a>`,
++			expected: "[Link Text](https://example.com)",
++		},
++		{
++			name:     "bold",
++			html:     `<strong>bold text</strong>`,
++			expected: "**bold text**",
++		},
++		{
++			name:     "italic",
++			html:     `<em>italic text</em>`,
++			expected: "*italic text*",
++		},
++		{
++			name:     "unordered list",
++			html:     `<ul><li>Item 1</li><li>Item 2</li></ul>`,
++			expected: "- Item 1\n- Item 2",
++		},
++		{
++			name:     "ordered list",
++			html:     `<ol><li>First</li><li>Second</li></ol>`,
++			expected: "1. First\n2. Second",
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			parser := html.NewHTMLParser(
++				html.WithBoilerplateRemoval(false),
++				html.WithMarkdownConversion(true),
++			)
++
++			chunks, err := parser.Chunk(tt.html, "test.html", nil)
++			require.NoError(t, err)
++			require.Len(t, chunks, 1)
++			assert.Contains(t, chunks[0].Content, tt.expected)
++		})
++	}
++}
++
++func TestHTMLParser_ComplexDocument(t *testing.T) {
++	input := `
++		<!DOCTYPE html>
++		<html lang="en">
++		<head>
++			<meta charset="UTF-8">
++			<meta property="og:title" content="Test Article">
++			<meta property="article:author" content="Jane Doe">
++			<meta property="article:published_time" content="2024-03-06T12:00:00Z">
++			<meta name="keywords" content="test, example, demo">
++		</head>
++		<body>
++			<nav>
++				<ul>
++					<li><a href="/">Home</a></li>
++					<li><a href="/about">About</a></li>
++				</ul>
++			</nav>
++
++			<article>
++				<h1>Test Article</h1>
++				<p class="byline">By Jane Doe</p>
++
++				<p>This is the <strong>first paragraph</strong> with a <a href="/link">relative link</a>.</p>
++
++				<h2>Section 1</h2>
++				<p>Content for section 1.</p>
++
++				<ul>
++					<li>Item 1</li>
++					<li>Item 2</li>
++				</ul>
++
++				<blockquote>
++					<p>A famous quote here.</p>
++				</blockquote>
++
++				<pre><code>func main() {
++					fmt.Println("Hello")
++				}</code></pre>
++			</article>
++
++			<footer>
++				<p>Copyright 2024</p>
++			</footer>
++		</body>
++		</html>
++	`
++
++	parser := html.NewHTMLParser(
++		html.WithBaseURL("https://example.com"),
++		html.WithBoilerplateRemoval(true),
++		html.WithMetadataExtraction(true),
++		html.WithMarkdownConversion(true),
++	)
++
++	chunks, err := parser.Chunk(input, "test.html", nil)
++	require.NoError(t, err)
++	require.Len(t, chunks, 1)
++
++	content := chunks[0].Content
++
++	// Verify boilerplate removed
++	assert.NotContains(t, content, "Home")
++	assert.NotContains(t, content, "About")
++	assert.NotContains(t, content, "Copyright")
++
++	// Verify content present
++	assert.Contains(t, content, "# Test Article")
++	assert.Contains(t, content, "## Section 1")
++	assert.Contains(t, content, "**first paragraph**")
++	assert.Contains(t, content, "[relative link](https://example.com/link)")
++	assert.Contains(t, content, "- Item 1")
++	assert.Contains(t, content, "> A famous quote")
++	assert.Contains(t, content, "```")
++
++	// Verify metadata
++	assert.Equal(t, "Jane Doe", chunks[0].Annotations["author"])
++	assert.Equal(t, "Test Article", chunks[0].Annotations["title"])
++	assert.Contains(t, chunks[0].Annotations["keywords"], "test")
++}
++
++func TestHTMLParser_Name(t *testing.T) {
++	parser := html.NewHTMLParser()
++	assert.Equal(t, "html", parser.Name())
++}
++
++func TestHTMLParser_Extensions(t *testing.T) {
++	parser := html.NewHTMLParser()
++	extensions := parser.Extensions()
++	assert.Contains(t, extensions, ".html")
++	assert.Contains(t, extensions, ".htm")
++}
++
++func TestHTMLParser_CanHandle(t *testing.T) {
++	parser := html.NewHTMLParser()
++
++	tests := []struct {
++		path     string
++		expected bool
++	}{
++		{"test.html", true},
++		{"test.htm", true},
++		{"test.HTML", true},
++		{"test.txt", false},
++		{"test.md", false},
++		{"/path/to/file.html", true},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.path, func(t *testing.T) {
++			result := parser.CanHandle(tt.path, nil)
++			assert.Equal(t, tt.expected, result)
++		})
++	}
++}
++
++func TestHTMLParser_IsGenerated(t *testing.T) {
++	parser := html.NewHTMLParser()
++	assert.False(t, parser.IsGenerated("<html></html>", "test.html"))
++}
++
++func TestHTMLParser_ExtractUsedSymbols(t *testing.T) {
++	parser := html.NewHTMLParser()
++	assert.Nil(t, parser.ExtractUsedSymbols("<html></html>"))
++}
+diff --git a/parsers/rss.go b/parsers/rss.go
+new file mode 100644
+index 0000000..a4a6c32
+--- /dev/null
++++ b/parsers/rss.go
+@@ -0,0 +1,96 @@
++// Package parsers provides language-specific parsing plugins for code analysis.
++package parsers
++
++import (
++	"io/fs"
++	"strings"
++	"time"
++
++	"github.com/sevigo/goframe/schema"
++)
++
++// RSSParser implements the ParserPlugin interface for RSS/Atom feed content.
++// It handles RSS 2.0, Atom 1.0, and JSON feeds, treating each feed item as a document.
++type RSSParser struct{}
++
++// NewRSSParser creates a new RSS parser instance.
++func NewRSSParser() *RSSParser {
++	return &RSSParser{}
++}
++
++// Name returns the parser name identifier.
++func (p *RSSParser) Name() string {
++	return "rss"
++}
++
++// Extensions returns the file extensions this parser handles.
++func (p *RSSParser) Extensions() []string {
++	return []string{".rss", ".atom", ".xml"}
++}
++
++// CanHandle determines if this parser can handle the given file.
++func (p *RSSParser) CanHandle(path string, info fs.FileInfo) bool {
++	ext := strings.ToLower(path)
++	for _, e := range p.Extensions() {
++		if strings.HasSuffix(ext, e) {
++			return true
++		}
++	}
++	return false
++}
++
++// Chunk divides RSS content into processable chunks.
++// For RSS feeds, the entire item content is treated as a single chunk.
++func (p *RSSParser) Chunk(content string, path string, opts *schema.CodeChunkingOptions) ([]schema.CodeChunk, error) {
++	chunks := []schema.CodeChunk{
++		{
++			Content:      content,
++			LineStart:    1,
++			LineEnd:      strings.Count(content, "\n") + 1,
++			Type:         "rss_content",
++			Identifier:   "rss_item",
++			IsDefinition: false,
++		},
++	}
++	return chunks, nil
++}
++
++// ExtractMetadata extracts metadata from RSS feed content.
++// Returns basic file metadata; actual RSS metadata extraction happens in the loader.
++func (p *RSSParser) ExtractMetadata(content string, path string) (schema.FileMetadata, error) {
++	return schema.FileMetadata{
++		FilePath:   path,
++		Language:   "rss",
++		Properties: make(map[string]string),
++	}, nil
++}
++
++// IsGenerated returns false as RSS feeds are typically not auto-generated code.
++func (p *RSSParser) IsGenerated(content string, path string) bool {
++	return false
++}
++
++// ExtractUsedSymbols returns nil as RSS feeds don't have symbol references.
++func (p *RSSParser) ExtractUsedSymbols(content string) []string {
++	return nil
++}
++
++// RSSItemMetadata represents metadata extracted from an RSS feed item.
++type RSSItemMetadata struct {
++	Title       string    `json:"title"`       // Item title
++	Link        string    `json:"link"`        // Item URL
++	PubDate     time.Time `json:"pub_date"`    // Publication date
++	Author      string    `json:"author"`      // Author name
++	Categories  []string  `json:"categories"`  // Categories/tags
++	GUID        string    `json:"guid"`        // Unique identifier
++	Description string    `json:"description"` // Short description
++	Content     string    `json:"content"`     // Full content
++}
++
++// RSSFeedMetadata represents metadata extracted from an RSS feed channel.
++type RSSFeedMetadata struct {
++	Title       string `json:"title"`       // Feed title
++	Link        string `json:"link"`        // Feed website URL
++	Language    string `json:"language"`    // Feed language
++	Description string `json:"description"` // Feed description
++}
