@@ -41,8 +41,8 @@ func (p *HTMLParser) nodeToMarkdown(s *goquery.Selection, depth int) string {
 
 	node := s.Nodes[0]
 
-	// Handle text nodes
-	if node.Type == goquery.TextNode {
+	// Handle text nodes (node.Data contains text for text nodes)
+	if node.Type == 3 { // goquery.TextNode = 3
 		return strings.TrimSpace(node.Data)
 	}
 

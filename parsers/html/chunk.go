@@ -2,7 +2,6 @@ package html
 
 import (
 	"fmt"
-	"io/fs"
 	"strings"
 	"time"
 
