@@ -23,7 +23,7 @@ func main() {
 		Level: slog.LevelInfo,
 	}))
 
-	fmt.Println("=== RSS + HTML Parser → Vector Store Pipeline ===\n")
+	fmt.Println("=== RSS + HTML Parser → Vector Store Pipeline ===")
 
 	// STEP 1: Initialize Parsers
 	fmt.Println("📦 Step 1: Initializing parsers...")
