@@ -8,6 +8,8 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/hcl/v2 v2.23.0
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
+	github.com/microcosm-cc/bluemonday v1.0.27
+	github.com/mmcdole/gofeed v1.3.0
 	github.com/ollama/ollama v0.17.0
 	github.com/qdrant/go-client v1.16.0
 	github.com/sst/opencode-sdk-go v0.19.2
@@ -17,6 +19,7 @@ require (
 	github.com/yuin/goldmark v1.7.12
 	github.com/zclconf/go-cty v1.13.0
 	golang.org/x/text v0.31.0
+	golang.org/x/time v0.14.0
 	google.golang.org/api v0.243.0
 	google.golang.org/genai v1.17.0
 	google.golang.org/grpc v1.76.0
@@ -30,9 +33,12 @@ require (
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.1.6 // indirect
+	github.com/PuerkitoBio/goquery v1.8.0 // indirect
 	github.com/agext/levenshtein v1.2.1 // indirect
+	github.com/andybalholm/cascadia v1.3.1 // indirect
 	github.com/apparentlymart/go-textseg/v13 v13.0.0 // indirect
 	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
+	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.1 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
@@ -52,12 +58,17 @@ require (
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect
 	github.com/googleapis/gax-go/v2 v2.15.0 // indirect
+	github.com/gorilla/css v1.0.1 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
+	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kevinburke/ssh_config v1.2.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
 	github.com/mitchellh/go-wordwrap v0.0.0-20150314170334-ad45545899c7 // indirect
+	github.com/mmcdole/goxpp v1.1.1-0.20240225020742-a0c311522b23 // indirect
+	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
+	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pjbgf/sha1cd v0.3.2 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect

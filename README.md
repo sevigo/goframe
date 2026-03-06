@@ -32,8 +32,9 @@ The framework is built around a set of core interfaces for LLMs, Embedders, and 
     -   **Embeddings**: Decoupled embedding generation.
 -   **Advanced Document Processing**:
     -   **GitLoader**: Smart loading with automatic metadata extraction (imports, packages).
+    -   **RSSLoader**: Ingest RSS/Atom/JSON feeds with HTML sanitization and content normalization.
     -   **Code-Aware Splitter**: Semantically chunks code while preserving context.
-    -   **Parsers**: Plugins for Go, TypeScript, Markdown, JSON, YAML, PDF, and more.
+    -   **Parsers**: Plugins for Go, TypeScript, Markdown, JSON, YAML, PDF, and RSS.
 
 ## Quick Start
 
@@ -133,7 +134,62 @@ store.AddDocuments(ctx, docs)
 results, _ := store.SimilaritySearch(ctx, "Europe capital", 1)
 ```
 
-### 2. Graph / Dependency Analysis
+### 3. RSS Feed Ingestion
+
+Ingest RSS/Atom/JSON feeds into your RAG pipeline:
+
+```go
+import (
+    "github.com/sevigo/goframe/documentloaders"
+    "github.com/sevigo/goframe/parsers"
+)
+
+// Initialize parser registry
+registry := parsers.NewRegistry(logger)
+registry.RegisterParser(parsers.NewRSSParser())
+
+// Create RSS loader with normalization
+loader, _ := documentloaders.NewRSS(
+    []string{
+        "https://news.ycombinator.com/rss",
+        "https://feeds.bbci.co.uk/news/technology/rss.xml",
+    },
+    registry,
+    documentloaders.WithRSSNormalization(documentloaders.NormalizationConfig{
+        StripHTML:        true,    // Strip HTML tags vs sanitize
+        RemoveTracking:   true,    // Remove UTM/fbclid parameters
+        MaxContentLength: 10000,   // Truncate long content
+        MinContentLength: 100,     // Skip short items
+        NormalizeURLs:    true,    // Remove fragments
+        MinTitleLength:   5,       // Minimum title length
+        FallbackToURL:    true,    // Use URL as title if missing
+        NormalizeAuthors: true,    // Clean author names
+    }),
+    documentloaders.WithRSSMaxItems(100),           // Max items per feed
+    documentloaders.WithRSSSkipDuplicates(true),     // Skip duplicate items
+    documentloaders.WithRSSBatchSize(50),            // Batch size
+)
+
+// Load documents
+docs, _ := loader.Load(ctx)
+
+// Or stream to vector store
+loader.LoadAndProcessStream(ctx, func(ctx context.Context, batch []schema.Document) error {
+    vectorStore.AddDocuments(ctx, batch)
+    return nil
+})
+```
+
+**Features:**
+- HTML sanitization with OWASP-compliant XSS protection
+- URL normalization (remove tracking parameters)
+- Date parsing (RFC1123, RFC3339, ISO8601)
+- Content deduplication by GUID/link
+- Parallel feed fetching with worker pools
+- Batch processing with backpressure
+- Retry logic with exponential backoff
+
+### 4. Graph / Dependency Analysis
 
 Perform sophisticated code navigation using the `DependencyRetriever`.
 
