@@ -402,7 +402,7 @@ func (g *GitLoader) processFilesWorker(ctx context.Context, fileChan <-chan File
 	}
 }
 
-func (g *GitLoader) batchAndProcess(ctx context.Context, docChan <-chan schema.Document, processFn func(ctx context.Context, docs []schema.Document) error) error { //nolint:dupl // Common streaming pattern shared by document loaders
+func (g *GitLoader) batchAndProcess(ctx context.Context, docChan <-chan schema.Document, processFn func(ctx context.Context, docs []schema.Document) error) error {
 	batch := make([]schema.Document, 0, g.options.BatchSize)
 
 	for {
