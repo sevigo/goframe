@@ -75,8 +75,8 @@ type rssLoaderOptions struct {
 	Normalization  NormalizationConfig
 	SkipDuplicates bool
 	SeenItems      map[string]bool
-	RateLimit      int                  // requests per second
-	HTMLParser     parsers.ParserPlugin // Optional: for HTML content transformation
+	RateLimit      int                 // requests per second
+	HTMLParser     schema.ParserPlugin // Optional: for HTML content transformation
 }
 
 // RSSLoaderOption configures an RSSLoader.
@@ -195,7 +195,7 @@ func WithRSSRateLimit(requestsPerSecond int) RSSLoaderOption {
 //
 // This is useful for RSS feeds with rich HTML content that needs to be
 // optimized for LLM consumption before being stored in vector databases.
-func WithHTMLParser(htmlParser parsers.ParserPlugin) RSSLoaderOption {
+func WithHTMLParser(htmlParser schema.ParserPlugin) RSSLoaderOption {
 	return func(opts *rssLoaderOptions) {
 		opts.HTMLParser = htmlParser
 	}
