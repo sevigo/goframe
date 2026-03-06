@@ -399,6 +399,9 @@ linters:
     presets:
       - std-error-handling
       - common-false-positives
+    # Paths to exclude from all analysis.
+    paths:
+      - examples
     # Excluding configuration per-path, per-linter, per-text and per-source.
     rules:
       - text: 'should have a package comment'
@@ -411,6 +414,7 @@ linters:
       - text: 'comment on exported \S+ \S+ should be of the form ".+"'
         source: '// ?(nolint|TODO)'
         linters: [ revive, staticcheck ]
+
       - path: '_test\.go'
         linters:
           - bodyclose

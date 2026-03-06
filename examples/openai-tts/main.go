@@ -1,4 +1,6 @@
 // Package main demonstrates OpenAI Text-to-Speech API usage.
+//
+//nolint:cyclop //ok
 package main
 
 import (
@@ -12,6 +14,7 @@ import (
 	"github.com/sevigo/goframe/voice/openai"
 )
 
+//nolint:funlen //ok
 func main() {
 	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
 	fmt.Println("║         OpenAI Text-to-Speech API Demonstration              ║")
@@ -46,7 +49,7 @@ func main() {
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Println("Example 1: Basic Text-to-Speech")
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	
+
 	ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel1()
 
@@ -76,7 +79,7 @@ func main() {
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Println("OpenAI provides 6 voices with different characteristics:")
 	fmt.Println()
-	
+
 	voices := []struct {
 		name        string
 		description string
@@ -91,22 +94,22 @@ func main() {
 
 	for _, v := range voices {
 		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
-		
+
 		fmt.Printf("➤ %s (%s): ", v.name, v.description)
-		
-		audio, err := synthesizer.Synthesize(ctx2, 
+
+		audio, err := synthesizer.Synthesize(ctx2,
 			fmt.Sprintf("Hello, I am %s. I have a %s tone.", v.name, v.description),
 			voice.WithVoice(v.name),
 		)
 		cancel2()
-		
+
 		if err != nil {
 			fmt.Printf("✗ error - %v\n", err)
 			continue
 		}
-		
+
 		filename := fmt.Sprintf("openai_voice_%s.mp3", v.name)
-		os.WriteFile(filename, audio.Data, 0600)
+		_ = os.WriteFile(filename, audio.Data, 0600)
 		fmt.Printf("✓ %d bytes -> %s\n", len(audio.Data), filename)
 	}
 	fmt.Println()
@@ -136,7 +139,7 @@ func main() {
 		log.Printf("HD synthesis failed: %v", err)
 	} else {
 		filename := "openai_hd_output.mp3"
-		os.WriteFile(filename, audioHD.Data, 0600)
+		_ = os.WriteFile(filename, audioHD.Data, 0600)
 		fmt.Printf("✓ HD model: %d bytes -> %s\n", len(audioHD.Data), filename)
 		fmt.Println("  Model: tts-1-hd (high quality, slower)")
 		fmt.Println("  Voice: nova (energetic, friendly)")
@@ -195,7 +198,7 @@ func main() {
 
 	for _, f := range formats {
 		ctx5, cancel5 := context.WithTimeout(context.Background(), 30*time.Second)
-		
+
 		formatSynth, err := openai.NewSynthesizer(
 			openai.WithAPIKey(apiKey),
 			openai.WithModel("tts-1"),
@@ -206,19 +209,19 @@ func main() {
 			cancel5()
 			continue
 		}
-		
+
 		fmt.Printf("➤ %s (%s): ", f.name, f.description)
-		
+
 		audio, err := formatSynth.Synthesize(ctx5, "Testing different audio formats.")
 		cancel5()
-		
+
 		if err != nil {
 			fmt.Printf("✗ error - %v\n", err)
 			continue
 		}
-		
+
 		filename := fmt.Sprintf("openai_format_%s.%s", f.name, f.name)
-		os.WriteFile(filename, audio.Data, 0600)
+		_ = os.WriteFile(filename, audio.Data, 0600)
 		fmt.Printf("✓ %.2f KB -> %s\n", float64(len(audio.Data))/1024, filename)
 	}
 	fmt.Println()

@@ -35,7 +35,7 @@ func (p *HTMLParser) toMarkdown(doc *goquery.Document) string {
 
 // nodeToMarkdown recursively converts an HTML node to Markdown.
 func (p *HTMLParser) nodeToMarkdown(s *goquery.Selection, depth int) string {
-	if s.Nodes == nil || len(s.Nodes) == 0 {
+	if len(s.Nodes) == 0 {
 		return ""
 	}
 

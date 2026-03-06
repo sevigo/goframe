@@ -66,15 +66,15 @@ func main() {
 		documentloaders.WithRSSLogger(logger),
 		documentloaders.WithRSSBatchSize(10),
 		documentloaders.WithRSSWorkerCount(3),
-		documentloaders.WithRSSMaxItems(20), // Limit for demo
+		documentloaders.WithRSSMaxItems(50),
 		documentloaders.WithRSSTimeout(30*time.Second),
 		documentloaders.WithRSSMaxRetries(2),
 		documentloaders.WithRSSSkipDuplicates(true),
 		documentloaders.WithRSSNormalization(documentloaders.NormalizationConfig{
-			StripHTML:        false, // HTML parser will handle this
+			StripHTML:        false, // HTML parser handles this
 			RemoveTracking:   true,  // But still remove tracking params
-			MaxContentLength: 10000,
-			MinContentLength: 100,
+			MaxContentLength: 20000, // Allow longer content
+			MinContentLength: 50,    // 🔥 KEY: Lower threshold for HTML-parsed content
 		}),
 	)
 	if err != nil {
