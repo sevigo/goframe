@@ -3,6 +3,7 @@ module github.com/sevigo/goframe
 go 1.25.6
 
 require (
+	github.com/PuerkitoBio/goquery v1.8.0
 	github.com/dop251/goja v0.0.0-20250630131328-58d95d85e994
 	github.com/go-git/go-git/v5 v5.16.2
 	github.com/google/uuid v1.6.0
@@ -18,6 +19,7 @@ require (
 	github.com/yoheimuta/go-protoparser/v4 v4.14.2
 	github.com/yuin/goldmark v1.7.12
 	github.com/zclconf/go-cty v1.13.0
+	golang.org/x/net v0.47.0
 	golang.org/x/text v0.31.0
 	golang.org/x/time v0.14.0
 	google.golang.org/api v0.243.0
@@ -33,7 +35,6 @@ require (
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.1.6 // indirect
-	github.com/PuerkitoBio/goquery v1.8.0 // indirect
 	github.com/agext/levenshtein v1.2.1 // indirect
 	github.com/andybalholm/cascadia v1.3.1 // indirect
 	github.com/apparentlymart/go-textseg/v13 v13.0.0 // indirect
@@ -90,7 +91,6 @@ require (
 	go.opentelemetry.io/otel/trace v1.38.0 // indirect
 	golang.org/x/crypto v0.44.0 // indirect
 	golang.org/x/mod v0.30.0 // indirect
-	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sync v0.18.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/tools v0.38.0 // indirect
