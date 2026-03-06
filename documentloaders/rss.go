@@ -283,12 +283,10 @@ func (r *RSSLoader) LoadAndProcessStream(ctx context.Context, processFn func(ctx
 
 	var wg sync.WaitGroup
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		defer close(feedChan)
 		r.fetchFeedsWorkers(pipelineCtx, feedChan)
-	}()
+	})
 
 	var processorWg sync.WaitGroup
 	for range r.options.WorkerCount {
@@ -304,9 +302,7 @@ func (r *RSSLoader) LoadAndProcessStream(ctx context.Context, processFn func(ctx
 		close(docChan)
 	}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		if err := r.batchAndProcess(pipelineCtx, docChan, processFn); err != nil {
 			select {
 			case errChan <- fmt.Errorf("batch processing failed: %w", err):
@@ -314,7 +310,7 @@ func (r *RSSLoader) LoadAndProcessStream(ctx context.Context, processFn func(ctx
 			}
 			cancel()
 		}
-	}()
+	})
 
 	wg.Wait()
 
@@ -331,7 +327,6 @@ func (r *RSSLoader) LoadAndProcessStream(ctx context.Context, processFn func(ctx
 	r.logger.InfoContext(ctx, "Streaming RSS load completed")
 	return nil
 }
-
 func (r *RSSLoader) fetchFeedsWorkers(ctx context.Context, feedChan chan<- RSSFeedData) {
 	var wg sync.WaitGroup
 	urlChan := make(chan string, len(r.feedURLs))
