@@ -567,7 +567,9 @@ func (r *RSSLoader) extractFeedMetadata(feed *gofeed.Feed) map[string]any {
 	return metadata
 }
 
-func (r *RSSLoader) batchAndProcess(ctx context.Context, docChan <-chan schema.Document, processFn func(ctx context.Context, docs []schema.Document) error) error {
+// batchAndProcess collects documents into batches and calls processFn.
+// This method uses a common streaming pattern intentionally similar to GitLoader.
+func (r *RSSLoader) batchAndProcess(ctx context.Context, docChan <-chan schema.Document, processFn func(ctx context.Context, docs []schema.Document) error) error { //nolint:dupl // Common streaming pattern shared by document loaders
 	batch := make([]schema.Document, 0, r.options.BatchSize)
 
 	for {
