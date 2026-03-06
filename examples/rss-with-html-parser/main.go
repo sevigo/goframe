@@ -12,6 +12,7 @@ import (
 	"github.com/sevigo/goframe/llms/ollama"
 	"github.com/sevigo/goframe/parsers"
 	"github.com/sevigo/goframe/parsers/html"
+	"github.com/sevigo/goframe/schema"
 	"github.com/sevigo/goframe/vectorstores"
 	"github.com/sevigo/goframe/vectorstores/qdrant"
 )
@@ -111,7 +112,7 @@ func main() {
 	batchCount := 0
 	totalDocs := 0
 
-	err = loader.LoadAndProcessStream(ctx, func(ctx context.Context, batch []vectorstores.Document) error {
+	err = loader.LoadAndProcessStream(ctx, func(ctx context.Context, batch []schema.Document) error {
 		batchCount++
 		totalDocs += len(batch)
 

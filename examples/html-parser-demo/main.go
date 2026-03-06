@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	fmt.Println("=== HTML Parser Before/After Demo ===\n")
+	fmt.Println("=== HTML Parser Before/After Demo ===")
 
 	// Sample HTML
 	sampleHTML := `
