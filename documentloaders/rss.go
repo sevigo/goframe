@@ -341,10 +341,8 @@ func (r *RSSLoader) fetchFeedsWorkers(ctx context.Context, feedChan chan<- RSSFe
 	}
 	close(urlChan)
 
-	for i := 0; i < r.options.WorkerCount; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range r.options.WorkerCount {
+		wg.Go(func() {
 			for feedURL := range urlChan {
 				if ctx.Err() != nil {
 					return
@@ -357,7 +355,7 @@ func (r *RSSLoader) fetchFeedsWorkers(ctx context.Context, feedChan chan<- RSSFe
 					return
 				}
 			}
-		}()
+		})
 	}
 
 	wg.Wait()
