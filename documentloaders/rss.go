@@ -75,7 +75,8 @@ type rssLoaderOptions struct {
 	Normalization  NormalizationConfig
 	SkipDuplicates bool
 	SeenItems      map[string]bool
-	RateLimit      int // requests per second
+	RateLimit      int                  // requests per second
+	HTMLParser     parsers.ParserPlugin // Optional: for HTML content transformation
 }
 
 // RSSLoaderOption configures an RSSLoader.
@@ -182,6 +183,21 @@ func WithRSSRateLimit(requestsPerSecond int) RSSLoaderOption {
 		if requestsPerSecond > 0 {
 			opts.RateLimit = requestsPerSecond
 		}
+	}
+}
+
+// WithHTMLParser sets an HTML parser for transforming HTML content to Markdown.
+// When set, the HTML parser will:
+//   - Remove boilerplate (nav, footer, scripts)
+//   - Normalize links (relative → absolute)
+//   - Extract metadata (author, date, title)
+//   - Convert to clean Markdown
+//
+// This is useful for RSS feeds with rich HTML content that needs to be
+// optimized for LLM consumption before being stored in vector databases.
+func WithHTMLParser(htmlParser parsers.ParserPlugin) RSSLoaderOption {
+	return func(opts *rssLoaderOptions) {
+		opts.HTMLParser = htmlParser
 	}
 }
 
@@ -488,7 +504,26 @@ func (r *RSSLoader) createDocument(item *gofeed.Item, feedData RSSFeedData) *sch
 	if content == "" {
 		content = item.Description
 	}
-	content = r.normalizer.NormalizeContent(content)
+
+	// Use HTML parser if available for rich content
+	var htmlAnnotations map[string]string
+	if r.options.HTMLParser != nil && content != "" {
+		// Parse HTML content with the HTML parser
+		chunks, err := r.options.HTMLParser.Chunk(content, item.Link, nil)
+		if err == nil && len(chunks) > 0 {
+			// Use the parsed markdown content
+			content = chunks[0].Content
+			// Preserve annotations from HTML parser
+			htmlAnnotations = chunks[0].Annotations
+		} else {
+			// Fallback to normalizer if HTML parsing fails
+			r.logger.Debug("HTML parsing failed, using normalizer", "error", err)
+			content = r.normalizer.NormalizeContent(content)
+		}
+	} else {
+		// Use normalizer for plain content
+		content = r.normalizer.NormalizeContent(content)
+	}
 
 	// Skip low-quality items
 	if r.normalizer.ShouldSkipItem(title, content) {
@@ -526,6 +561,26 @@ func (r *RSSLoader) createDocument(item *gofeed.Item, feedData RSSFeedData) *sch
 		"chunk_type":    "rss_content",
 		"identifier":    guid,
 		"is_definition": false,
+	}
+
+	// Merge HTML parser annotations if available
+	if htmlAnnotations != nil {
+		// Add author from HTML if not already present
+		if htmlAuthor, ok := htmlAnnotations["author"]; ok && author == "" {
+			metadata["author"] = htmlAuthor
+		}
+		// Add published_date from HTML if not already present
+		if htmlDate, ok := htmlAnnotations["published_date"]; ok && pubDate.IsZero() {
+			metadata["published_date"] = htmlDate
+		}
+		// Add keywords from HTML
+		if keywords, ok := htmlAnnotations["keywords"]; ok {
+			metadata["keywords"] = keywords
+		}
+		// Add canonical URL
+		if canonical, ok := htmlAnnotations["canonical_url"]; ok {
+			metadata["canonical_url"] = canonical
+		}
 	}
 
 	// Mark as seen after successful processing
