@@ -242,3 +242,53 @@ func TestToolLogger(t *testing.T) {
 		t.Error("tool was not called")
 	}
 }
+
+func TestRegistry_GetSchemaMap(t *testing.T) {
+	registry := NewRegistry()
+
+	_ = registry.Register(&mockTool{
+		name:        "search",
+		description: "Search for documents",
+		schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{"type": "string"},
+			},
+		},
+	})
+
+	_ = registry.Register(&mockTool{
+		name:        "count",
+		description: "Count items",
+		schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"filter": map[string]any{"type": "string"},
+			},
+		},
+	})
+
+	schemaMap := registry.GetSchemaMap()
+
+	if len(schemaMap) != 2 {
+		t.Errorf("expected 2 schemas, got %d", len(schemaMap))
+	}
+
+	searchSchema, ok := schemaMap["search"]
+	if !ok {
+		t.Error("expected 'search' tool in schema map")
+	}
+
+	fn, ok := searchSchema["function"].(map[string]any)
+	if !ok {
+		t.Error("expected function in schema")
+	}
+
+	if fn["name"] != "search" {
+		t.Errorf("expected name 'search', got %v", fn["name"])
+	}
+
+	if fn["description"] != "Search for documents" {
+		t.Errorf("expected description 'Search for documents', got %v", fn["description"])
+	}
+}
