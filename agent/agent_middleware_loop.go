@@ -314,7 +314,7 @@ func (l *AgentLoopWithMiddleware) requestHumanApproval(ctx context.Context, tool
 }
 
 // verifyAndSelfHeal verifies the action and attempts self-healing if failed.
-func (l *AgentLoopWithMiddleware) verifyAndSelfHeal(ctx context.Context, toolName string, params map[string]any, result any, attempts *int) (verified bool, healAttempted bool) {
+func (l *AgentLoopWithMiddleware) verifyAndSelfHeal(ctx context.Context, toolName string, params map[string]any, result any, attempts *int) (bool, bool) {
 	if *attempts >= l.middleware.MaxSelfHealingAttempts {
 		l.logger.Warn("max self-healing attempts reached",
 			"tool", toolName,
