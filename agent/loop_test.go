@@ -226,10 +226,8 @@ func TestAgentLoop_Run_GovernanceDenied(t *testing.T) {
 	// Tool should have error from governance
 	if len(result.ToolCalls) == 0 {
 		t.Error("expected tool call record")
-	} else {
-		if result.ToolCalls[0].Error == nil {
-			t.Error("expected governance error")
-		}
+	} else if result.ToolCalls[0].Error == nil {
+		t.Error("expected governance error")
 	}
 }
 

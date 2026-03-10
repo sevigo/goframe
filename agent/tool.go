@@ -62,6 +62,17 @@ func NewRegistry() *Registry {
 	}
 }
 
+// NewRegistryWithTools creates a registry pre-populated with tools.
+func NewRegistryWithTools(tools ...Tool) (*Registry, error) {
+	r := NewRegistry()
+	for _, tool := range tools {
+		if err := r.Register(tool); err != nil {
+			return nil, err
+		}
+	}
+	return r, nil
+}
+
 // Register adds a tool to the registry.
 // Returns an error if a tool with the same name already exists.
 func (r *Registry) Register(tool Tool) error {
@@ -142,7 +153,7 @@ func (r *Registry) Execute(ctx context.Context, name string, params map[string]a
 
 	result, err := tool.Execute(ctx, params)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrToolExecution, err)
+		return nil, fmt.Errorf("%w: %w", ErrToolExecution, err)
 	}
 
 	return result, nil
@@ -220,7 +231,7 @@ func generateJSONSchema(t reflect.Type, isRoot bool) map[string]any {
 		properties := make(map[string]any)
 		required := make([]string, 0)
 
-		for i := 0; i < t.NumField(); i++ {
+		for i := range t.NumField() {
 			field := t.Field(i)
 			fieldName := getJSONFieldName(field)
 			if fieldName == "-" || fieldName == "" {
@@ -360,17 +371,6 @@ func (r *Registry) MustRegisterTool(tool Tool) {
 	if err := r.Register(tool); err != nil {
 		panic(fmt.Sprintf("agent: failed to register tool: %v", err))
 	}
-}
-
-// NewRegistryWithTools creates a registry pre-populated with tools.
-func NewRegistryWithTools(tools ...Tool) (*Registry, error) {
-	r := NewRegistry()
-	for _, tool := range tools {
-		if err := r.Register(tool); err != nil {
-			return nil, err
-		}
-	}
-	return r, nil
 }
 
 // ToolLogger wraps a tool with logging.

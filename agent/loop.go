@@ -8,7 +8,6 @@ import (
 	"log/slog"
 
 	"github.com/sevigo/goframe/llms"
-	"github.com/sevigo/goframe/output"
 	"github.com/sevigo/goframe/schema"
 )
 
@@ -167,7 +166,7 @@ func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.Message
 	messages = append(messages, history...)
 
 	// Run the think-act-observe loop
-	for i := 0; i < l.maxIterations; i++ {
+	for i := range l.maxIterations {
 		select {
 		case <-ctx.Done():
 			result.State = StateError
@@ -396,10 +395,4 @@ func (l *AgentLoop) RunStream(ctx context.Context, task Task, history []schema.M
 	}()
 
 	return results, nil
-}
-
-// Helper function to parse JSON output from LLM.
-func parseJSONOutput[T any](text string) (T, error) {
-	parser := output.NewJSONParser[T]()
-	return parser.Parse(context.Background(), text)
 }

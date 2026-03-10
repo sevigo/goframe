@@ -78,7 +78,7 @@ func (g *Governance) Validate(ctx context.Context, toolName string, params map[s
 				"tool", toolName,
 				"error", err,
 			)
-			return fmt.Errorf("%w: %v", ErrGovernanceDenied, err)
+			return fmt.Errorf("%w: %w", ErrGovernanceDenied, err)
 		}
 	}
 
@@ -187,9 +187,8 @@ type RateLimitCheck struct {
 }
 
 type rateLimiter struct {
-	count   int
-	max     int
-	counter int64
+	count int
+	max   int
 }
 
 func NewRateLimitCheck() *RateLimitCheck {
