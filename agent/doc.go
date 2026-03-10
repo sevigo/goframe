@@ -16,6 +16,49 @@
 //   - Prompt: Structured message construction
 //   - Event: Asynchronous response handling
 //
+// # Native Agentic Framework
+//
+// The package also provides a standalone, LLM-agnostic agentic framework for building
+// autonomous agents that can run locally using standard goframe components.
+//
+// The native framework includes three core primitives:
+//
+// # 1. Tool Registry (agent.Tool)
+//
+// The Registry manages available tools with automatic schema generation:
+//
+//	registry := agent.NewRegistry()
+//
+//	// Create tool from function
+//	searchTool, _ := agent.NewToolFromFunc(
+//	    "search",
+//	    "Search for documents matching a query",
+//	    func(ctx context.Context, params SearchParams) (SearchResult, error) {
+//	        // implementation
+//	    },
+//	)
+//	registry.MustRegisterTool(searchTool)
+//
+// # 2. Governance (agent.IntegrityCheck)
+//
+// Integrity checks validate tool executions before they run:
+//
+//	governance := agent.NewGovernance(
+//	    agent.NewPermissionCheck().Allow("read", "write").Deny("delete"),
+//	    agent.NewParameterCheck().Require("write", "path"),
+//	)
+//
+// # 3. Autonomous Loop (agent.AgentLoop)
+//
+// The AgentLoop manages the think-act-observe lifecycle:
+//
+//	loop, _ := agent.NewAgentLoop(model, registry,
+//	    agent.WithLoopMaxIterations(20),
+//	    agent.WithLoopGovernance(governance),
+//	    agent.WithLoopSystemPrompt("You are a helpful assistant"),
+//	)
+//	result, _ := loop.Run(ctx, task, nil)
+//
 // # MCP Server Configuration
 //
 // MCP servers are the primary focus of this package. They enable agents to access
