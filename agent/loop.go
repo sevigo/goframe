@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/sevigo/goframe/llms"
 	"github.com/sevigo/goframe/schema"
@@ -53,6 +54,8 @@ type LoopResult struct {
 	Tokens TokenUsage
 	// State is the final loop state.
 	State LoopState
+	// TraceID is a unique identifier for tracing loop execution.
+	TraceID string
 }
 
 // ToolCallRecord records a single tool execution.
@@ -86,6 +89,9 @@ type AgentLoop struct {
 	temperature float64
 	// Logger records loop execution details.
 	logger *slog.Logger
+	// GenerateTraceID generates a unique trace ID for the loop.
+	// If nil, a default UUID-based ID is generated.
+	GenerateTraceID func() string
 }
 
 // NewAgentLoop creates a new agent loop with the given configuration.
@@ -152,11 +158,37 @@ func WithLoopLogger(logger *slog.Logger) NativeLoopOption {
 	}
 }
 
+// WithLoopTraceID sets a custom trace ID generator.
+// The trace ID is useful for correlating logs across a multi-step agent execution.
+func WithLoopTraceID(gen func() string) NativeLoopOption {
+	return func(l *AgentLoop) {
+		l.GenerateTraceID = gen
+	}
+}
+
+// generateTraceID creates a default trace ID if none is provided.
+func generateDefaultTraceID() string {
+	// Simple UUID-like ID without external dependencies
+	return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
 // Run executes the autonomous loop for a given task and session.
 // The session maintains the conversation history across iterations.
 func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.MessageContent) (*LoopResult, error) {
+	// Generate or use provided trace ID
+	var traceID string
+	if l.GenerateTraceID != nil {
+		traceID = l.GenerateTraceID()
+	} else {
+		traceID = generateDefaultTraceID()
+	}
+
+	// Create logger with trace ID for consistent log correlation
+	logger := l.logger.With("trace_id", traceID)
+
 	result := &LoopResult{
-		State: StateThinking,
+		State:   StateThinking,
+		TraceID: traceID,
 	}
 
 	// Build the initial message history with system prompt
@@ -174,7 +206,7 @@ func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.Message
 		default:
 		}
 
-		l.logger.Debug("starting iteration",
+		logger.Debug("starting iteration",
 			"iteration", i+1,
 			"state", "thinking",
 		)
@@ -194,7 +226,7 @@ func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.Message
 			result.Response = response
 			result.State = StateComplete
 			result.Iterations = i + 1
-			l.logger.Info("loop completed",
+			logger.Info("loop completed",
 				"iterations", result.Iterations,
 				"response_length", len(response),
 			)

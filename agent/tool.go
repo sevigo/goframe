@@ -125,6 +125,7 @@ func (r *Registry) List() []Tool {
 }
 
 // Definitions returns tool definitions in the format expected by LLMs.
+// This returns a slice format suitable for most LLM APIs.
 func (r *Registry) Definitions() []map[string]any {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -141,6 +142,33 @@ func (r *Registry) Definitions() []map[string]any {
 		})
 	}
 	return defs
+}
+
+// GetSchemaMap returns tool schemas as a map keyed by tool name.
+// This format is useful for parallel tool-calling protocols and
+// supports complex tool orchestration workflows.
+//
+// Example:
+//
+//	schemas := registry.GetSchemaMap()
+//	searchSchema := schemas["search"]
+//	// Use schema for validation or introspection
+func (r *Registry) GetSchemaMap() map[string]map[string]any {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	schemas := make(map[string]map[string]any, len(r.tools))
+	for _, tool := range r.tools {
+		schemas[tool.Name()] = map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        tool.Name(),
+				"description": tool.Description(),
+				"parameters":  tool.ParametersSchema(),
+			},
+		}
+	}
+	return schemas
 }
 
 // Execute runs a tool by name with the given parameters.
