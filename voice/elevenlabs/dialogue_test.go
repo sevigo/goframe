@@ -1,6 +1,7 @@
 package elevenlabs
 
 import (
+	"context"
 	"testing"
 
 	"github.com/sevigo/goframe/voice"
@@ -171,12 +172,12 @@ func TestGenerateSubtitlesEmpty(t *testing.T) {
 func TestSynthesizeDialogueValidation(t *testing.T) {
 	syn, _ := NewSynthesizer(WithAPIKey("test"), WithVoiceID("voice-123"))
 
-	_, err := syn.SynthesizeDialogue(nil, nil)
+	_, err := syn.SynthesizeDialogue(context.TODO(), nil)
 	if err == nil {
 		t.Error("SynthesizeDialogue with nil should return error")
 	}
 
-	_, err = syn.SynthesizeDialogue(nil, []voice.DialogueSegment{})
+	_, err = syn.SynthesizeDialogue(context.TODO(), []voice.DialogueSegment{})
 	if err == nil {
 		t.Error("SynthesizeDialogue with empty segments should return error")
 	}
