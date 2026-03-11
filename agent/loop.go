@@ -350,7 +350,7 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 		record.Error = err
 		toolRecords = append(toolRecords, record)
 
-		// Create observation message - check for images first (vision support)
+		// Create observation message
 		if err != nil {
 			l.logger.Error("tool execution failed",
 				"tool", toolName,
@@ -361,36 +361,32 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 		} else {
 			l.logger.Debug("tool execution succeeded", "tool", toolName)
 
-			// Check if result contains image for vision models
+			// Extract base64 image if present (for vision models)
+			// Store it so we can send as a follow-up user message (Ollama only supports images in user role)
+			var imageData string
 			if resultMap, ok := result.(map[string]any); ok {
-				var imageData string
-				var found bool
-
-				// Check various image field names
-				if img, ok := resultMap["imageBase64"].(string); ok && img != "" {
+				if img, ok := resultMap["imageBase64"].(string); ok && img != "" && len(img) > 100 {
 					imageData = img
-					found = true
-				} else if img, ok := resultMap["image"].(string); ok && img != "" {
+				} else if img, ok := resultMap["image"].(string); ok && img != "" && len(img) > 100 {
 					imageData = img
-					found = true
-				}
-
-				// If image found, create multimodal message for vision models
-				if found && len(imageData) > 100 {
-					textPart := schema.TextContent{Text: fmt.Sprintf("Tool '%s' returned (see image):", toolName)}
-					imagePart := schema.ImageContent{Data: imageData, MimeType: "image/png"}
-
-					obsMsg := schema.MessageContent{
-						Role:  schema.ChatMessageTypeTool,
-						Parts: []schema.ContentPart{textPart, imagePart},
-					}
-					observations = append(observations, obsMsg)
-					continue
 				}
 			}
 
-			// Default: serialize result to JSON text
-			jsonBytes, jsonErr := json.Marshal(result)
+			// Serialize result to JSON (without the image data to reduce token usage)
+			resultForJSON := result
+			if imageData != "" {
+				// Create a copy without the image for the JSON representation
+				if resultMap, ok := result.(map[string]any); ok {
+					resultForJSON = make(map[string]any)
+					for k, v := range resultMap {
+						if k != "imageBase64" && k != "image" {
+							resultForJSON.(map[string]any)[k] = v
+						}
+					}
+				}
+			}
+
+			jsonBytes, jsonErr := json.Marshal(resultForJSON)
 			var obsContent string
 			if jsonErr != nil {
 				obsContent = fmt.Sprintf("Tool '%s' returned: %v", toolName, result)
@@ -398,6 +394,20 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 				obsContent = fmt.Sprintf("Tool '%s' returned: %s", toolName, string(jsonBytes))
 			}
 			observations = append(observations, schema.NewToolResultMessage(toolName, obsContent))
+
+			// If image present, add a user message with the image for vision models
+			// Ollama only supports images in user role messages
+			if imageData != "" {
+				imagePart := schema.ImageContent{Data: imageData, MimeType: "image/png"}
+				userMsg := schema.MessageContent{
+					Role: schema.ChatMessageTypeHuman,
+					Parts: []schema.ContentPart{
+						schema.TextContent{Text: fmt.Sprintf("Here is the screenshot from tool '%s':", toolName)},
+						imagePart,
+					},
+				}
+				observations = append(observations, userMsg)
+			}
 		}
 	}
 

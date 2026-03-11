@@ -136,7 +136,7 @@ func (o *LLM) Call(ctx context.Context, prompt string, options ...llms.CallOptio
 // buildChatMessages converts schema messages to API messages.
 func buildChatMessages(messages []schema.MessageContent) []api.Message {
 	chatMsgs := make([]api.Message, 0, len(messages))
-	for _, mc := range messages {
+	for i, mc := range messages {
 		msg := api.Message{
 			Role:    typeToRole(mc.Role),
 			Content: mc.String(),
@@ -149,6 +149,8 @@ func buildChatMessages(messages []schema.MessageContent) []api.Message {
 				msg.Images = append(msg.Images, api.ImageData(img.Data))
 			}
 		}
+		// Debug: log what GetImages returns
+		slog.Info("buildChatMessages", "index", i, "role", typeToRole(mc.Role), "parts_count", len(mc.Parts), "images_found", len(images), "images_in_msg", len(msg.Images))
 		chatMsgs = append(chatMsgs, msg)
 	}
 	return chatMsgs
@@ -242,6 +244,48 @@ func (o *LLM) GenerateContent(
 	model := o.determineModel(opts)
 
 	req := o.buildChatRequest(model, messages, opts)
+
+	// Log request details at INFO level for debugging
+	msgCount := len(req.Messages)
+	hasImages := false
+	for _, m := range req.Messages {
+		if len(m.Images) > 0 {
+			hasImages = true
+			break
+		}
+	}
+	msgRoles := make([]string, len(req.Messages))
+	for i, m := range req.Messages {
+		msgRoles[i] = fmt.Sprintf("%s(images=%d)", m.Role, len(m.Images))
+	}
+	o.logger.InfoContext(ctx, "Sending chat request",
+		"model", model,
+		"msg_count", msgCount,
+		"msg_roles", msgRoles,
+		"has_images", hasImages,
+		"tool_count", len(req.Tools))
+
+	// Debug: log full request JSON (without base64 images for readability)
+	debugReq := *req
+	debugReq.Messages = make([]api.Message, len(req.Messages))
+	for i, m := range req.Messages {
+		debugReq.Messages[i] = m
+		if len(m.Images) > 0 {
+			debugReq.Messages[i].Images = nil // Skip huge base64 data
+		}
+	}
+	if debugJSON, err := json.Marshal(debugReq); err == nil {
+		o.logger.Debug("Request (without images)", "json", string(debugJSON))
+	}
+
+	// Also log image sizes
+	for i, m := range req.Messages {
+		if len(m.Images) > 0 {
+			for j, img := range m.Images {
+				o.logger.Info("Image in request", "msg_index", i, "img_index", j, "size_bytes", len(img))
+			}
+		}
+	}
 
 	handler := &chatResponseHandler{streamingFn: opts.StreamingFunc}
 	err := o.doWithRetry(ctx, func() error {
