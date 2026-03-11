@@ -288,7 +288,10 @@ func (l *AgentLoop) think(ctx context.Context, messages []schema.MessageContent)
 	// Check for tool calls in generation info
 	var toolCalls []llms.ToolCall
 	if genInfo := choice.GenerationInfo; genInfo != nil {
-		if tc, ok := genInfo["tool_calls"].([]llms.ToolCall); ok {
+		// Try both keys for compatibility
+		if tc, ok := genInfo["ToolCalls"].([]llms.ToolCall); ok {
+			toolCalls = tc
+		} else if tc, ok := genInfo["tool_calls"].([]llms.ToolCall); ok {
 			toolCalls = tc
 		}
 	}
@@ -304,6 +307,13 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 	for _, tc := range toolCalls {
 		toolName := tc.Function.Name
 		params := tc.Function.Arguments
+
+		// Normalize params if wrapped in "properties" key
+		if props, ok := params["properties"]; ok {
+			if propsMap, ok := props.(map[string]any); ok {
+				params = propsMap
+			}
+		}
 
 		l.logger.Debug("executing tool",
 			"tool", toolName,

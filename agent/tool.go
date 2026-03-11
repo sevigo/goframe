@@ -311,10 +311,7 @@ func generateJSONSchema(t reflect.Type, isRoot bool) map[string]any {
 	}
 
 	if isRoot {
-		return map[string]any{
-			"type":       "object",
-			"properties": schema,
-		}
+		return schema
 	}
 
 	return schema
