@@ -315,7 +315,7 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 			}
 		}
 
-		l.logger.Debug("executing tool",
+		l.logger.Info("executing tool",
 			"tool", toolName,
 			"params", params,
 		)
@@ -344,7 +344,9 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 		}
 
 		// Execute the tool
+		startTime := time.Now()
 		result, err := l.registry.Execute(ctx, toolName, params)
+		duration := time.Since(startTime)
 
 		record.Result = result
 		record.Error = err
@@ -355,11 +357,15 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 			l.logger.Error("tool execution failed",
 				"tool", toolName,
 				"error", err,
+				"duration_ms", duration.Milliseconds(),
 			)
 			obsContent := fmt.Sprintf("Tool '%s' failed: %s", toolName, err.Error())
 			observations = append(observations, schema.NewToolResultMessage(toolName, obsContent))
 		} else {
-			l.logger.Debug("tool execution succeeded", "tool", toolName)
+			l.logger.Info("tool execution succeeded",
+				"tool", toolName,
+				"duration_ms", duration.Milliseconds(),
+			)
 
 			// Extract base64 image if present (for vision models)
 			// Store it so we can send as a follow-up user message (Ollama only supports images in user role)
