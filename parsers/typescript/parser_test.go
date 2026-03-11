@@ -238,7 +238,7 @@ func TestTypeScriptParser_LargeFile(t *testing.T) {
 	// Generate a large file with many classes
 	var sb strings.Builder
 	for i := range 100 {
-		sb.WriteString(fmt.Sprintf(`
+		fmt.Fprintf(&sb, `
 export class Class%d {
     private field%d: number;
     
@@ -250,7 +250,7 @@ export class Class%d {
         return this.field%d;
     }
 }
-`, i, i, i, i, i))
+`, i, i, i, i, i)
 	}
 
 	content := sb.String()

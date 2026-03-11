@@ -472,9 +472,9 @@ value: 42
 		yamlBuilder.WriteString("---\nlarge_list:\n")
 
 		for i := range 25 {
-			yamlBuilder.WriteString(fmt.Sprintf("  - id: %d\n", i))
-			yamlBuilder.WriteString(fmt.Sprintf("    name: item%d\n", i))
-			yamlBuilder.WriteString(fmt.Sprintf("    value: %d\n", i*10))
+			fmt.Fprintf(&yamlBuilder, "  - id: %d\n", i)
+			fmt.Fprintf(&yamlBuilder, "    name: item%d\n", i)
+			fmt.Fprintf(&yamlBuilder, "    value: %d\n", i*10)
 		}
 
 		chunks, err := plugin.Chunk(yamlBuilder.String(), "large-list.yaml", &model.CodeChunkingOptions{})

@@ -175,14 +175,14 @@ func (c *CodeAwareTextSplitter) truncateToTokenLimit(ctx context.Context, conten
 func (c *CodeAwareTextSplitter) buildFileContextHeader(metadata model.FileMetadata) string {
 	var header strings.Builder
 
-	header.WriteString(fmt.Sprintf("// File: %s", metadata.FilePath))
+	fmt.Fprintf(&header, "// File: %s", metadata.FilePath)
 
 	if metadata.Language != "" {
-		header.WriteString(fmt.Sprintf(" [%s]", metadata.Language))
+		fmt.Fprintf(&header, " [%s]", metadata.Language)
 	}
 
 	if purpose, exists := metadata.Properties["file_purpose"]; exists {
-		header.WriteString(fmt.Sprintf(" - %s", purpose))
+		fmt.Fprintf(&header, " - %s", purpose)
 	}
 
 	header.WriteString("\n")

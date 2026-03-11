@@ -186,7 +186,7 @@ func EnsureModelDownloaded(ctx context.Context) (string, error) {
 	}
 	modelPath := filepath.Join(cacheDir, modelName)
 
-	if _, err := os.Stat(modelPath); err == nil {
+	if _, err := os.Stat(modelPath); err == nil { //nolint:gosec // path constructed from trusted model names
 		return modelPath, nil
 	}
 
@@ -251,15 +251,15 @@ func downloadAndExtract(ctx context.Context, url, destination string) error {
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0750); err != nil {
+			if err := os.MkdirAll(target, 0750); err != nil { //nolint:gosec // target is within user's cache directory
 				return fmt.Errorf("failed to create dir: %w", err)
 			}
 		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), 0750); err != nil {
+			if err := os.MkdirAll(filepath.Dir(target), 0750); err != nil { //nolint:gosec // target is within user's cache directory
 				return fmt.Errorf("failed to create parent dir: %w", err)
 			}
 			// Use restricted permissions (0600) for cached model files
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, 0600)
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, 0600) //nolint:gosec // target is within user's cache directory
 			if err != nil {
 				return fmt.Errorf("failed to open file: %w", err)
 			}

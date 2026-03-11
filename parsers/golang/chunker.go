@@ -128,7 +128,7 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
 func (p *GoPlugin) extractPackageAndImports(file *ast.File, lines []string, fset *token.FileSet) string {
 	var header strings.Builder
 	if file.Name != nil {
-		header.WriteString(fmt.Sprintf("package %s\n\n", file.Name.Name))
+		fmt.Fprintf(&header, "package %s\n\n", file.Name.Name)
 	}
 
 	for _, decl := range file.Decls {

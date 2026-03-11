@@ -380,7 +380,9 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 					resultForJSON = make(map[string]any)
 					for k, v := range resultMap {
 						if k != "imageBase64" && k != "image" {
-							resultForJSON.(map[string]any)[k] = v
+							if m, ok := resultForJSON.(map[string]any); ok {
+								m[k] = v
+							}
 						}
 					}
 				}

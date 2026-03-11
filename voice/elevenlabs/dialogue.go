@@ -284,23 +284,21 @@ func (s *Synthesizer) generateSubtitles(segments []DialogueSegmentResult) string
 
 	for _, seg := range segments {
 		if len(seg.WordTimestamps) == 0 {
-			sb.WriteString(fmt.Sprintf("%d\n%02d:%02d:%02d,%03d --> %02d:%02d:%02d,%03d\n%s\n\n",
+			fmt.Fprintf(&sb, "%d\n%02d:%02d:%02d,%03d --> %02d:%02d:%02d,%03d\n%s\n\n",
 				entryNum,
 				seg.StartMs/3600000, (seg.StartMs%3600000)/60000, (seg.StartMs%60000)/1000, seg.StartMs%1000,
 				seg.EndMs/3600000, (seg.EndMs%3600000)/60000, (seg.EndMs%60000)/1000, seg.EndMs%1000,
-				seg.Text,
-			))
+				seg.Text)
 			entryNum++
 			continue
 		}
 
 		for _, word := range seg.WordTimestamps {
-			sb.WriteString(fmt.Sprintf("%d\n%02d:%02d:%02d,%03d --> %02d:%02d:%02d,%03d\n%s\n\n",
+			fmt.Fprintf(&sb, "%d\n%02d:%02d:%02d,%03d --> %02d:%02d:%02d,%03d\n%s\n\n",
 				entryNum,
 				word.StartMs/3600000, (word.StartMs%3600000)/60000, (word.StartMs%60000)/1000, word.StartMs%1000,
 				word.EndMs/3600000, (word.EndMs%3600000)/60000, (word.EndMs%60000)/1000, word.EndMs%1000,
-				word.Word,
-			))
+				word.Word)
 			entryNum++
 		}
 	}

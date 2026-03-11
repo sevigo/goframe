@@ -38,7 +38,9 @@ func (ImportanceStrategy) Order(docs []schema.Document, scores []float64) []sche
 
 	indexed := make([]indexedDoc, len(docs))
 	for i, doc := range docs {
-		indexed[i] = indexedDoc{doc: doc, score: scores[i]}
+		if i < len(scores) {
+			indexed[i] = indexedDoc{doc: doc, score: scores[i]}
+		}
 	}
 
 	sort.Slice(indexed, func(i, j int) bool {

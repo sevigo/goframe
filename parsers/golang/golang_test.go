@@ -81,7 +81,7 @@ func TestGoPlugin_Chunking_WithGrouping(t *testing.T) {
 
 		// Create content large enough to force multiple chunks (targetChunkSize is 3000)
 		for i := range 15 {
-			largeContent.WriteString(fmt.Sprintf(`
+			fmt.Fprintf(&largeContent, `
 // Function number %d is a long function.
 func function%d() {
     fmt.Println("This is a function to make the content larger than the threshold.")
@@ -97,7 +97,7 @@ func function%d() {
     fmt.Println("Line 9 of content to simulate real code.")
 }
 
-`, i, i))
+`, i, i)
 		}
 
 		chunks, err := plugin.Chunk(largeContent.String(), "large.go", nil)

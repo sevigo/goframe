@@ -358,12 +358,12 @@ func (p *MarkdownPlugin) buildMarkdownParentContext(section *HeadingSection, doc
 	var context strings.Builder
 
 	if doc.Title != "" {
-		context.WriteString(fmt.Sprintf("// Document: %s\n", doc.Title))
+		fmt.Fprintf(&context, "// Document: %s\n", doc.Title)
 	}
 
 	if section.Heading != nil {
-		context.WriteString(fmt.Sprintf("// Section: %s (Level %d)\n",
-			section.Heading.Identifier, section.Heading.Level))
+		fmt.Fprintf(&context, "// Section: %s (Level %d)\n",
+			section.Heading.Identifier, section.Heading.Level)
 	}
 
 	return context.String()

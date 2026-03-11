@@ -355,7 +355,7 @@ func (g *GitLoader) walkAndReadFiles(ctx context.Context, fileChan chan<- FileDa
 			return nil
 		}
 
-		contentBytes, err := os.ReadFile(path)
+		contentBytes, err := os.ReadFile(path) //nolint:gosec // path comes from WalkDir callback within repo directory
 		if err != nil {
 			g.logger.WarnContext(ctx, "Cannot read file", "path", path, "error", err)
 			return nil
@@ -554,9 +554,9 @@ func (g *GitLoader) processFile(path string, fileInfo fs.FileInfo, textParser sc
 		identifier, _ := chunkMetadata["identifier"].(string)
 		chunkType, _ := chunkMetadata["chunk_type"].(string)
 
-		enrichedContentBuilder.WriteString(fmt.Sprintf("File: %s\n", source))
+		fmt.Fprintf(&enrichedContentBuilder, "File: %s\n", source)
 		if chunkType != "" && identifier != "" {
-			enrichedContentBuilder.WriteString(fmt.Sprintf("Type: %s\nIdentifier: %s\n", chunkType, identifier))
+			fmt.Fprintf(&enrichedContentBuilder, "Type: %s\nIdentifier: %s\n", chunkType, identifier)
 		}
 		enrichedContentBuilder.WriteString("---\n")
 		enrichedContentBuilder.WriteString(chunk.Content)

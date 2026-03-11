@@ -123,11 +123,11 @@ func generateSRT(segments []CaptionedSegment) string {
 			startMs := segOffset + ts.StartMs
 			endMs := segOffset + ts.EndMs
 
-			srt.WriteString(fmt.Sprintf("%d\n", index))
-			srt.WriteString(fmt.Sprintf("%s --> %s\n",
+			fmt.Fprintf(&srt, "%d\n", index)
+			fmt.Fprintf(&srt, "%s --> %s\n",
 				formatSRTTime(startMs),
-				formatSRTTime(endMs)))
-			srt.WriteString(fmt.Sprintf("%s\n\n", ts.Word))
+				formatSRTTime(endMs))
+			fmt.Fprintf(&srt, "%s\n\n", ts.Word)
 
 			index++
 		}
@@ -152,11 +152,11 @@ func generateSRTWithSpeakers(segments []CaptionedSegment) string {
 			startMs := segOffset + ts.StartMs
 			endMs := segOffset + ts.EndMs
 
-			srt.WriteString(fmt.Sprintf("%d\n", index))
-			srt.WriteString(fmt.Sprintf("%s --> %s\n",
+			fmt.Fprintf(&srt, "%d\n", index)
+			fmt.Fprintf(&srt, "%s --> %s\n",
 				formatSRTTime(startMs),
-				formatSRTTime(endMs)))
-			srt.WriteString(fmt.Sprintf("[%s]: %s\n\n", seg.Speaker, ts.Word))
+				formatSRTTime(endMs))
+			fmt.Fprintf(&srt, "[%s]: %s\n\n", seg.Speaker, ts.Word)
 
 			index++
 		}

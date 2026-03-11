@@ -135,9 +135,9 @@ func (p *HTMLParser) listToMarkdown(s *goquery.Selection, listType string, depth
 	s.Find("li").Each(func(i int, li *goquery.Selection) {
 		text := strings.TrimSpace(li.Text())
 		if listType == "ul" {
-			result.WriteString(fmt.Sprintf("%s- %s\n", indent, text))
+			fmt.Fprintf(&result, "%s- %s\n", indent, text)
 		} else {
-			result.WriteString(fmt.Sprintf("%s%d. %s\n", indent, i+1, text))
+			fmt.Fprintf(&result, "%s%d. %s\n", indent, i+1, text)
 		}
 	})
 
@@ -216,7 +216,7 @@ func (p *HTMLParser) blockquoteToMarkdown(s *goquery.Selection, depth int) strin
 
 	for _, line := range lines {
 		if line != "" {
-			result.WriteString(fmt.Sprintf("> %s\n", line))
+			fmt.Fprintf(&result, "> %s\n", line)
 		}
 	}
 
@@ -246,7 +246,7 @@ func (p *HTMLParser) tableToMarkdown(s *goquery.Selection) string {
 	s.Find("thead tr th").Each(func(i int, th *goquery.Selection) {
 		text := strings.TrimSpace(th.Text())
 		text = strings.ReplaceAll(text, "|", "\\|")
-		result.WriteString(fmt.Sprintf("| %s ", text))
+		fmt.Fprintf(&result, "| %s ", text)
 	})
 	result.WriteString("|\n")
 
@@ -261,7 +261,7 @@ func (p *HTMLParser) tableToMarkdown(s *goquery.Selection) string {
 		tr.Find("td").Each(func(j int, td *goquery.Selection) {
 			text := strings.TrimSpace(td.Text())
 			text = strings.ReplaceAll(text, "|", "\\|")
-			result.WriteString(fmt.Sprintf("| %s ", text))
+			fmt.Fprintf(&result, "| %s ", text)
 		})
 		result.WriteString("|\n")
 	})

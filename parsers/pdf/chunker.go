@@ -31,7 +31,7 @@ func (p *PDFPlugin) Chunk(_ string, filePath string, opts *internal_model.CodeCh
 	// Combine all page texts with page markers
 	var fullTextBuilder strings.Builder
 	for _, ptr := range pageTextResults {
-		fullTextBuilder.WriteString(fmt.Sprintf(pageMarkerTemplate, ptr.PageNum))
+		fmt.Fprintf(&fullTextBuilder, pageMarkerTemplate, ptr.PageNum)
 		fullTextBuilder.WriteString(ptr.Text)
 		fullTextBuilder.WriteString(lineSeparator)
 	}

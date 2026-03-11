@@ -354,7 +354,7 @@ func (p *CSVPlugin) formatCSVRow(row []string, delimiter rune) string {
 
 		// Quote cell if it contains delimiter, quotes, or newlines
 		if p.needsQuoting(cell, delimiter) {
-			result.WriteString(fmt.Sprintf("\"%s\"", strings.ReplaceAll(cell, "\"", "\"\"")))
+			fmt.Fprintf(&result, "\"%s\"", strings.ReplaceAll(cell, "\"", "\"\""))
 		} else {
 			result.WriteString(cell)
 		}
