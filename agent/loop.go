@@ -92,6 +92,10 @@ type AgentLoop struct {
 	// GenerateTraceID generates a unique trace ID for the loop.
 	// If nil, a default UUID-based ID is generated.
 	GenerateTraceID func() string
+	// MaxImagesInContext limits the number of images kept in conversation history.
+	// Set to 0 (default) to keep all images, or a positive integer to limit.
+	// This helps prevent context overflow when many screenshots are taken.
+	maxImagesInContext int
 }
 
 // NewAgentLoop creates a new agent loop with the given configuration.
@@ -163,6 +167,16 @@ func WithLoopLogger(logger *slog.Logger) NativeLoopOption {
 func WithLoopTraceID(gen func() string) NativeLoopOption {
 	return func(l *AgentLoop) {
 		l.GenerateTraceID = gen
+	}
+}
+
+// WithLoopMaxImagesInContext limits the number of images kept in conversation history.
+// Set to 0 (default) to keep all images, or a positive integer to limit.
+// This helps prevent context overflow when many screenshots are taken.
+// Recommended value: 2-4 for most use cases.
+func WithLoopMaxImagesInContext(n int) NativeLoopOption {
+	return func(l *AgentLoop) {
+		l.maxImagesInContext = n
 	}
 }
 
@@ -238,12 +252,64 @@ func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.Message
 
 		// Add observations to history
 		messages = append(messages, observations...)
+
+		// Limit images in context if configured (helps prevent context overflow)
+		if l.maxImagesInContext > 0 {
+			messages = trimImageMessages(messages, l.maxImagesInContext)
+		}
+
 		result.ToolCalls = append(result.ToolCalls, toolRecords...)
 		result.Iterations = i + 1
 	}
 
 	result.State = StateError
 	return result, fmt.Errorf("%w (max: %d)", ErrMaxIterations, l.maxIterations)
+}
+
+// trimImageMessages keeps only the most recent N images in the message history.
+// This prevents context overflow when many screenshots are taken during execution.
+// Images in the most recent messages are preserved, older ones are removed.
+func trimImageMessages(messages []schema.MessageContent, maxImages int) []schema.MessageContent {
+	imageCount := 0
+	trimmed := make([]schema.MessageContent, 0, len(messages))
+
+	// Iterate in reverse to find most recent images
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		hasImage := false
+
+		// Check if this message contains images
+		for _, part := range msg.Parts {
+			if _, ok := part.(schema.ImageContent); ok {
+				hasImage = true
+				break
+			}
+		}
+
+		if hasImage {
+			imageCount++
+			if imageCount > maxImages {
+				// Remove image parts from this message
+				newParts := make([]schema.ContentPart, 0)
+				for _, part := range msg.Parts {
+					if _, isImage := part.(schema.ImageContent); !isImage {
+						newParts = append(newParts, part)
+					}
+				}
+				msg.Parts = newParts
+				// Add text note that image was trimmed
+				if len(msg.Parts) == 0 {
+					msg.Parts = []schema.ContentPart{
+						schema.TextContent{Text: "[Image trimmed to save context space]"},
+					}
+				}
+			}
+		}
+
+		trimmed = append([]schema.MessageContent{msg}, trimmed...)
+	}
+
+	return trimmed
 }
 
 // think calls the LLM with the current context and available tools.
