@@ -190,6 +190,13 @@ func (l *AgentLoopWithMiddleware) Run(ctx context.Context, task Task, history []
 	return result, fmt.Errorf("%w (max: %d)", ErrMaxIterations, l.maxIterations)
 }
 
+// SetGovernance attaches a governance manager to the agent loop.
+// This allows the agent to perform integrity checks, risk assessments,
+// and validation before executing any tools.
+func (l *AgentLoop) SetGovernance(g *Governance) {
+	l.governance = g
+}
+
 // actAndObserveWithMiddleware executes tools with risk assessment, approval, and verification.
 func (l *AgentLoopWithMiddleware) actAndObserveWithMiddleware(ctx context.Context, toolCalls []llms.ToolCall, selfHealingAttempts *int) ([]schema.MessageContent, []ToolCallRecord, bool) {
 	toolRecords := make([]ToolCallRecord, 0, len(toolCalls))
@@ -209,7 +216,7 @@ func (l *AgentLoopWithMiddleware) actAndObserveWithMiddleware(ctx context.Contex
 			Params: params,
 		}
 
-		// Step 1: Risk Assessment
+		// Risk Assessment
 		if l.middleware.RiskAssessor != nil {
 			riskLevel := l.middleware.RiskAssessor.AssessRisk(ctx, toolName, params)
 			l.logger.Debug("risk assessment",
@@ -217,7 +224,7 @@ func (l *AgentLoopWithMiddleware) actAndObserveWithMiddleware(ctx context.Contex
 				"risk_level", riskLevel,
 			)
 
-			// Step 2: Request Human Approval if High Risk
+			// Request Human Approval if High Risk
 			if riskLevel >= l.middleware.HighRiskThreshold && l.middleware.HumanApprovalHandler != nil {
 				approval, err := l.requestHumanApproval(ctx, toolName, params, riskLevel)
 				if err != nil {
@@ -238,7 +245,7 @@ func (l *AgentLoopWithMiddleware) actAndObserveWithMiddleware(ctx context.Contex
 			}
 		}
 
-		// Step 3: Governance Checks (from base AgentLoop)
+		// Governance Checks (from base AgentLoop)
 		if l.governance != nil {
 			if err := l.governance.Validate(ctx, toolName, params); err != nil {
 				l.logger.Warn("governance blocked tool execution",
@@ -252,7 +259,7 @@ func (l *AgentLoopWithMiddleware) actAndObserveWithMiddleware(ctx context.Contex
 			}
 		}
 
-		// Step 4: Execute Tool
+		// Execute Tool
 		result, err := l.registry.Execute(ctx, toolName, params)
 		record.Result = result
 		record.Error = err
@@ -264,7 +271,7 @@ func (l *AgentLoopWithMiddleware) actAndObserveWithMiddleware(ctx context.Contex
 			continue
 		}
 
-		// Step 5: Action Verification
+		// Action Verification
 		if l.middleware.VerificationEnabled && l.middleware.ActionVerifier != nil {
 			verified, healAttempted := l.verifyAndSelfHeal(ctx, toolName, params, result, selfHealingAttempts)
 			if !verified && !healAttempted {
