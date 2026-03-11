@@ -2,6 +2,7 @@ package ollama
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
@@ -146,7 +147,13 @@ func buildChatMessages(messages []schema.MessageContent) []api.Message {
 		if len(images) > 0 {
 			msg.Images = make([]api.ImageData, 0, len(images))
 			for _, img := range images {
-				msg.Images = append(msg.Images, api.ImageData(img.Data))
+				// Ollama API expects raw bytes, but schema.ImageContent.Data is base64-encoded
+				imageBytes, err := base64.StdEncoding.DecodeString(img.Data)
+				if err != nil {
+					slog.Warn("failed to decode base64 image data", "error", err)
+					continue
+				}
+				msg.Images = append(msg.Images, api.ImageData(imageBytes))
 			}
 		}
 		// Debug: log what GetImages returns

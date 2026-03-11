@@ -1,6 +1,6 @@
 module github.com/sevigo/goframe
 
-go 1.25.6
+go 1.26.1
 
 require (
 	github.com/PuerkitoBio/goquery v1.8.0
@@ -11,7 +11,7 @@ require (
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/mmcdole/gofeed v1.3.0
-	github.com/ollama/ollama v0.17.0
+	github.com/ollama/ollama v0.17.7
 	github.com/qdrant/go-client v1.16.0
 	github.com/sst/opencode-sdk-go v0.19.2
 	github.com/stretchr/testify v1.11.1
