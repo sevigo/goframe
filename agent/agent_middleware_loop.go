@@ -97,15 +97,22 @@ type AgentLoopWithMiddleware struct {
 	middleware *MiddlewareConfig
 }
 
-// NewAgentLoopWithMiddleware creates an agent loop with middleware support.
-func NewAgentLoopWithMiddleware(model llms.Model, registry *Registry, opts ...MiddlewareOption) (*AgentLoopWithMiddleware, error) {
-	loop, err := NewAgentLoop(model, registry)
+// NewAgentLoopWithMiddleware now accepts both types of options.
+func NewAgentLoopWithMiddleware(
+	model llms.Model,
+	registry *Registry,
+	mwOpts []MiddlewareOption,
+	nativeOpts ...NativeLoopOption,
+) (*AgentLoopWithMiddleware, error) {
+	// create the base loop with native options
+	loop, err := NewAgentLoop(model, registry, nativeOpts...)
 	if err != nil {
 		return nil, err
 	}
 
+	// initialize middleware config
 	mwConfig := DefaultMiddlewareConfig()
-	for _, opt := range opts {
+	for _, opt := range mwOpts {
 		opt(&mwConfig)
 	}
 
