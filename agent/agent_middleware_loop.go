@@ -189,6 +189,12 @@ func (l *AgentLoopWithMiddleware) Run(ctx context.Context, task Task, history []
 
 		// Add observations to history
 		messages = append(messages, observations...)
+
+		// Limit images in context if configured (helps prevent context overflow)
+		if l.maxImagesInContext > 0 {
+			messages = trimImageMessages(messages, l.maxImagesInContext)
+		}
+
 		result.ToolCalls = append(result.ToolCalls, toolRecords...)
 		result.Iterations = i + 1
 	}
