@@ -1,4 +1,3 @@
-// parser.go - Goldmark-based Markdown parser
 package markdown
 
 import (

@@ -1,4 +1,3 @@
-// extractor.go - Metadata extraction using goldmark
 package markdown
 
 import (
