@@ -1,7 +1,7 @@
-package contextpacker
-
 // Package contextpacker provides utilities for packing and optimizing context
 // for LLM workflows.
+package contextpacker
+
 import (
 	"context"
 	"fmt"

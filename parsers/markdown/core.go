@@ -1,4 +1,3 @@
-// core.go - Main plugin file with goldmark integration
 package markdown
 
 import (
