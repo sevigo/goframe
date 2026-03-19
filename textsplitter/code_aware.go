@@ -119,6 +119,9 @@ func (c *CodeAwareTextSplitter) splitSingleDocument(ctx context.Context, doc sch
 			}
 			if len(meta.Imports) > 0 {
 				extraMetadata["imports"] = meta.Imports
+				// Also store short package names for dependency graph filtering.
+				// Full import paths like "github.com/foo/bar" → short name "bar".
+				extraMetadata["import_names"] = importShortNames(meta.Imports)
 			}
 		}
 	}
@@ -266,6 +269,28 @@ func (c *CodeAwareTextSplitter) validateContent(content, filePath string) error 
 	}
 
 	return nil
+}
+
+// importShortNames extracts the last path segment from each import path.
+// e.g. "github.com/foo/bar/schema" → "schema".
+// The result is stored as "import_names" metadata so the dependency retriever
+// can match callers by short package name rather than full module path.
+func importShortNames(imports []string) []string {
+	names := make([]string, 0, len(imports))
+	seen := make(map[string]struct{}, len(imports))
+	for _, imp := range imports {
+		parts := strings.Split(imp, "/")
+		name := parts[len(parts)-1]
+		if name == "" {
+			continue
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	return names
 }
 
 // isTestFile checks if the filename follows common testing conventions across supported languages.
