@@ -4,37 +4,23 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/sevigo/goframe)](https://goreportcard.com/report/github.com/sevigo/goframe)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A modular Go framework for building production-ready LLM and RAG applications. GoFrame provides a clean, extensible architecture with a powerful set of tools for document processing, embedding, and vector storage.
+**A Go RAG library built for code understanding.** GoFrame handles the plumbing — document loading, AST-based chunking, embedding, hybrid vector search, and dependency graph traversal — so you can focus on building applications on top of it.
 
-## Overview
+It is the library underlying [Code-Warden](https://github.com/sevigo/code-warden), a self-hosted GitHub App that performs context-aware code reviews using a 6-stage RAG pipeline.
 
-GoFrame is designed to simplify the development of applications that leverage Large Language Models, with a strong focus on Retrieval-Augmented Generation (RAG). It provides a set of decoupled components that can be composed to build sophisticated data pipelines.
+---
 
-The framework is built around a set of core interfaces for LLMs, Embedders, and Vector Stores, allowing you to easily swap implementations (e.g., switch from Ollama to another provider) without changing your core application logic.
+## What Makes It Different
 
-## Core Features
+Most RAG libraries treat code as plain text. GoFrame understands it:
 
--   **Scalable Agentic Infrastructure**: Built for high-performance agentic workflows.
-    -   **Streaming Ingestion**: Process massive repositories with flat memory usage.
-    -   **Binary Quantization**: 30x memory reduction for vector storage.
--   **Graph-Like Retrieval**: Go beyond simple similarity search.
-    -   **Impact Analysis**: Find downstream dependents ("who uses this code?").
-    -   **Dependency Verification**: Trace upstream dependencies ("what does this use?").
-    -   **Multi-Language Support**: Automatic metadata extraction for **Go** and **TypeScript/TSX**.
--   **Agent Framework**: Programmatic control of AI agents through OpenCode SDK.
-    -   **MCP Server Management**: Configure local (stdio) and remote (HTTP/SSE) MCP servers.
-    -   **Session Management**: Create, manage, and interact with agent sessions.
-    -   **Permission System**: Fine-grained control over agent capabilities.
-    -   **Event Streaming**: Real-time response handling.
--   **Pluggable Architecture**:
-    -   **LLMs**: Clean interfaces for Ollama (local) and cloud providers.
-    -   **Vector Stores**: Robust Qdrant implementation with metadata filtering.
-    -   **Embeddings**: Decoupled embedding generation.
--   **Advanced Document Processing**:
-    -   **GitLoader**: Smart loading with automatic metadata extraction (imports, packages).
-    -   **RSSLoader**: Ingest RSS/Atom/JSON feeds with HTML sanitization and content normalization.
-    -   **Code-Aware Splitter**: Semantically chunks code while preserving context.
-    -   **Parsers**: Plugins for Go, TypeScript, Markdown, JSON, YAML, PDF, and RSS.
+- **AST-aware chunking** — splits at function and type boundaries, not arbitrary character counts; file-level metadata (package name, imports) propagates to every chunk
+- **Multi-language parsing** — Go, TypeScript/TSX, Markdown, JSON, YAML, Python, Terraform, Protobuf, PDF, RSS; each parser extracts language-specific metadata
+- **Dependency graph traversal** — `DependencyRetriever` answers "who imports this package?" and "what does this file depend on?" using metadata stored at index time
+- **Code-aware sparse tokenization** — splits camelCase (`processPayment` → `process`, `payment`) and acronyms (`XMLParser` → `xml`, `parser`) before hashing into a sparse vector; hybrid search combines this with dense embeddings for better identifier recall
+- **Test linkage** — indexes test files with `tested_symbols` metadata so tests can be retrieved by the symbols they exercise, not just by text similarity
+
+---
 
 ## Quick Start
 
@@ -44,7 +30,6 @@ package main
 import (
     "context"
     "fmt"
-    "log"
 
     "github.com/sevigo/goframe/chains"
     "github.com/sevigo/goframe/embeddings"
@@ -57,54 +42,31 @@ import (
 func main() {
     ctx := context.Background()
 
-    // 1. Create LLM client
-    llm, _ := ollama.New(ollama.WithModel("llama3.2"))
-
-    // 2. Create embedder
+    llm, _ := ollama.New(ollama.WithModel("qwen2.5-coder:7b"))
     embedder, _ := embeddings.NewEmbedder(llm)
-
-    // 3. Create vector store
     store, _ := qdrant.New(
-        qdrant.WithCollectionName("my-docs"),
+        qdrant.WithCollectionName("my-repo"),
         qdrant.WithEmbedder(embedder),
     )
 
-    // 4. Add documents
     docs := []schema.Document{
-        schema.NewDocument("Go is a programming language created at Google.", nil),
-        schema.NewDocument("Rust focuses on memory safety without garbage collection.", nil),
+        schema.NewDocument("func getUserByID(id string) (*User, error) { ... }", map[string]any{
+            "source":       "internal/users/service.go",
+            "chunk_type":   "definition",
+            "identifier":   "getUserByID",
+            "package_name": "users",
+        }),
     }
     store.AddDocuments(ctx, docs)
 
-    // 5. Create RAG chain
-    retriever := vectorstores.ToRetriever(store, 3)
-    ragChain, _ := chains.NewRetrievalQA(retriever, llm)
-
-    // 6. Query
-    answer, _ := ragChain.Call(ctx, "What is Go?")
+    retriever := vectorstores.ToRetriever(store, 5)
+    chain, _ := chains.NewRetrievalQA(retriever, llm)
+    answer, _ := chain.Call(ctx, "How does user lookup work?")
     fmt.Println(answer)
 }
 ```
 
-## Architecture
-
-GoFrame follows a modular pipeline:
-
-```
-[Source Code] -> [GitLoader] -> [Parser Plugin] -> [CodeAwareSplitter] -> [Embedder] -> [VectorStore]
-(Go, TS, etc.)   (Extracts Metadata)  (AST Analysis)    (Propagates Metadata)    (Ollama)      (Qdrant)
-```
-
-1.  **Load & Analyze**: `GitLoader` reads files and uses language parsers to extract *file-level metadata* (imports, package name).
-2.  **Split & Propagate**: `CodeAwareTextSplitter` chunks the code, propagating the file-level metadata to every chunk.
-3.  **Embed & Index**: content is embedded and stored in Qdrant with enriched metadata.
-4.  **Graph Retrieval**: The `DependencyRetriever` uses this metadata to traverse the dependency graph.
-
-## Prerequisites
-
--   Go 1.21 or later
--   [Ollama](https://ollama.com/) (for embeddings & local LLMs)
--   [Docker](https://www.docker.com/) (for Qdrant)
+---
 
 ## Installation
 
@@ -112,237 +74,210 @@ GoFrame follows a modular pipeline:
 go get github.com/sevigo/goframe@latest
 ```
 
-## API Reference
+Requires Go 1.21+, [Ollama](https://ollama.com/) for local LLMs and embeddings, and [Qdrant](https://qdrant.tech/) for vector storage.
 
-Full API documentation is available at [pkg.go.dev](https://pkg.go.dev/github.com/sevigo/goframe).
+---
 
-## Usage Examples
+## Core Pipeline
 
-### 1. Basic RAG
-
-```go
-// Initialize components...
-store, _ := qdrant.New(qdrant.WithCollectionName("my-docs"))
-
-// Add documents
-docs := []schema.Document{
-    schema.NewDocument("Paris is the capital of France.", map[string]any{"continent": "Europe"}),
-}
-store.AddDocuments(ctx, docs)
-
-// Search
-results, _ := store.SimilaritySearch(ctx, "Europe capital", 1)
+```
+[GitLoader] → [ParserRegistry] → [CodeAwareSplitter] → [Embedder + SparseProvider] → [Qdrant]
+   (load)      (AST metadata)       (chunk at          (dense + code sparse          (store with
+               (imports, pkg)        boundaries)        vectors per chunk)             metadata)
 ```
 
-### 3. RSS Feed Ingestion
+At query time:
+```
+[Query] → [SparseProvider] → [SimilaritySearch with sparse+dense] → [Reranker] → [LLM Chain]
+```
 
-Ingest RSS/Atom/JSON feeds into your RAG pipeline:
+---
+
+## Key Packages
+
+| Package | What it does |
+|---|---|
+| `schema/` | Core types: `Document`, `SparseVector`, `Retriever`, `Reranker` |
+| `llms/ollama` | Ollama LLM client — chat, completion, streaming |
+| `embeddings/` | `Embedder` interface + batch embedding with retry |
+| `embeddings/sparse/` | Sparse vector generation — default BoW provider, pluggable |
+| `embeddings/sparse/code` | Code-aware sparse tokenizer (camelCase/snake_case splitting + FNV32a) |
+| `vectorstores/qdrant` | Qdrant store — hybrid search, metadata filtering, binary quantization |
+| `vectorstores/` | `DependencyRetriever`, `DefinitionRetriever`, `ToRetriever` helpers |
+| `parsers/` | Language parser plugins — Go, TypeScript, Markdown, JSON, YAML, Python, etc. |
+| `textsplitter/` | `CodeAwareTextSplitter` — AST-boundary splitting with metadata propagation |
+| `documentloaders/` | `GitLoader` — streaming file ingestion from git repos with metadata |
+| `chains/` | `LLMChain[T]`, `RetrievalQA`, `MapReduceChain` |
+| `agent/` | OpenCode agent SDK — session management, MCP server config, streaming |
+
+---
+
+## Examples
+
+### Hybrid Search (Dense + Sparse)
+
+```go
+import (
+    "github.com/sevigo/goframe/embeddings/sparse"
+    sparsecode "github.com/sevigo/goframe/embeddings/sparse/code"
+    "github.com/sevigo/goframe/vectorstores/qdrant"
+    "github.com/sevigo/goframe/vectorstores"
+)
+
+// Register code-aware sparse tokenizer (once at startup)
+sparse.RegisterProvider(sparsecode.NewCodeSparseProvider())
+
+// Create store with sparse vector support
+store, _ := qdrant.New(
+    qdrant.WithCollectionName("code"),
+    qdrant.WithEmbedder(embedder),
+    qdrant.WithSparseVector("code_sparse"),
+)
+
+// Index with sparse vectors
+doc := schema.NewDocument("func getUserByID(id string) (*User, error)", nil)
+doc.Sparse, _ = sparse.GenerateSparseVector(ctx, doc.PageContent)
+store.AddDocuments(ctx, []schema.Document{doc})
+
+// Hybrid search
+sparseQuery, _ := sparse.GenerateSparseVector(ctx, "getUserByID")
+results, _ := store.SimilaritySearch(ctx, "getUserByID", 5,
+    vectorstores.WithSparseQuery(sparseQuery),
+)
+```
+
+### Dependency Graph Traversal
+
+```go
+retriever, _ := vectorstores.NewDependencyRetriever(store)
+
+// Who imports this package? (impact analysis)
+network, _ := retriever.GetContextNetwork(ctx, "github.com/my/project/pkg/users", nil)
+for _, dependent := range network.Dependents {
+    fmt.Println("Affected file:", dependent.Metadata["source"])
+}
+
+// What does this file depend on?
+network, _ = retriever.GetContextNetwork(ctx, "github.com/my/project/pkg/users",
+    []string{"context", "database/sql"})
+for _, dep := range network.Dependencies {
+    fmt.Println("Dependency:", dep.Metadata["source"])
+}
+```
+
+### Git Repository Ingestion
 
 ```go
 import (
     "github.com/sevigo/goframe/documentloaders"
     "github.com/sevigo/goframe/parsers"
+    "github.com/sevigo/goframe/textsplitter"
 )
 
-// Initialize parser registry
 registry := parsers.NewRegistry(logger)
-registry.RegisterParser(parsers.NewRSSParser())
-
-// Create RSS loader with normalization
-loader, _ := documentloaders.NewRSS(
-    []string{
-        "https://news.ycombinator.com/rss",
-        "https://feeds.bbci.co.uk/news/technology/rss.xml",
-    },
-    registry,
-    documentloaders.WithRSSNormalization(documentloaders.NormalizationConfig{
-        StripHTML:        true,    // Strip HTML tags vs sanitize
-        RemoveTracking:   true,    // Remove UTM/fbclid parameters
-        MaxContentLength: 10000,   // Truncate long content
-        MinContentLength: 100,     // Skip short items
-        NormalizeURLs:    true,    // Remove fragments
-        MinTitleLength:   5,       // Minimum title length
-        FallbackToURL:    true,    // Use URL as title if missing
-        NormalizeAuthors: true,    // Clean author names
-    }),
-    documentloaders.WithRSSMaxItems(100),           // Max items per feed
-    documentloaders.WithRSSSkipDuplicates(true),     // Skip duplicate items
-    documentloaders.WithRSSBatchSize(50),            // Batch size
+splitter := textsplitter.NewCodeAwareTextSplitter(registry,
+    textsplitter.WithChunkSize(800),
+    textsplitter.WithChunkOverlap(100),
 )
 
-// Load documents
-docs, _ := loader.Load(ctx)
+loader, _ := documentloaders.NewGit(repoPath, registry,
+    documentloaders.WithSplitter(splitter),
+    documentloaders.WithBatchSize(50),
+)
 
-// Or stream to vector store
+// Stream directly into vector store
 loader.LoadAndProcessStream(ctx, func(ctx context.Context, batch []schema.Document) error {
-    vectorStore.AddDocuments(ctx, batch)
-    return nil
+    for i := range batch {
+        batch[i].Sparse, _ = sparse.GenerateSparseVector(ctx, batch[i].PageContent)
+    }
+    _, err := store.AddDocuments(ctx, batch)
+    return err
 })
 ```
 
-**Features:**
-- HTML sanitization with OWASP-compliant XSS protection
-- URL normalization (remove tracking parameters)
-- Date parsing (RFC1123, RFC3339, ISO8601)
-- Content deduplication by GUID/link
-- Parallel feed fetching with worker pools
-- Batch processing with backpressure
-- Retry logic with exponential backoff
-
-### 4. Graph / Dependency Analysis
-
-Perform sophisticated code navigation using the `DependencyRetriever`.
+### Multi-Model Consensus (MapReduceChain)
 
 ```go
-import "github.com/sevigo/goframe/vectorstores"
+import "github.com/sevigo/goframe/chains"
 
-// Initialize retriever
-retriever, err := vectorstores.NewDependencyRetriever(store)
-if err != nil {
-    log.Fatal(err)
-}
-
-// 1. Impact Analysis: Who imports "my/package"?
-network, _ := retriever.GetContextNetwork(ctx, "github.com/my/project/pkg", nil)
-for _, dependent := range network.Dependents {
-    fmt.Printf("File identifying impact: %s\n", dependent.Metadata["source"])
-}
-
-// 2. Upstream Verification: What does "my/package" depend on?
-// (Pass known imports to verify their existence in the graph)
-network, _ = retriever.GetContextNetwork(ctx, "github.com/my/project/pkg", []string{"fmt", "os"})
-for _, dep := range network.Dependencies {
-    fmt.Printf("Verified dependency: %s\n", dep.Metadata["source"])
-}
+models := []llms.Model{model1, model2, model3}
+chain, _ := chains.NewMapReduceChain(models, reducerModel, prompt,
+    chains.WithMaxParallel(3),
+    chains.WithQuorum(0.66), // Proceed when 66% of models finish
+)
+result, _ := chain.Call(ctx, map[string]any{"context": ctx, "diff": diff})
 ```
-### 3. Hybrid Search (Dense + Sparse)
-Combine semantic understanding with exact keyword matching using sparse vectors.
+
+### Exact Definition Lookup
 
 ```go
-import (
-    "github.com/sevigo/goframe/embeddings/sparse"
-    "github.com/sevigo/goframe/vectorstores/qdrant"
-    "github.com/sevigo/goframe/vectorstores"
+defRetriever, _ := vectorstores.NewDefinitionRetriever(store)
+
+// Fast path: exact filter on identifier + chunk_type
+exactDocs, err := store.SimilaritySearch(ctx, symbol, 1,
+    vectorstores.WithFilters(map[string]any{
+        "chunk_type": "definition",
+        "identifier": symbol,
+    }),
 )
 
-// 1. Configure Store with Named Sparse Vector
-store, _ := qdrant.New(
-    qdrant.WithCollectionName("hybrid-docs"),
-    qdrant.WithSparseVector("bow_sparse"), // Enable sparse vector support
-)
-
-// 2. Add Document with Sparse Vector
-docContent := "func CalculateTax(income float64) float64 { ... }"
-sparseVec, _ := sparse.GenerateSparseVector(ctx, docContent)
-doc := schema.NewDocument(docContent, nil)
-doc.Sparse = sparseVec
-store.AddDocuments(ctx, []schema.Document{doc})
-
-// 3. Perform Hybrid Search
-query := "CalculateTax"
-sparseQuery, _ := sparse.GenerateSparseVector(ctx, query)
-
-results, _ := store.SimilaritySearch(ctx, query, 5,
-    vectorstores.WithSparseQuery(sparseQuery), // Pass sparse query for hybrid retrieval
-)
-```
-
-### 4. Agent Framework with MCP Servers
-
-Create AI agents with MCP (Model Context Protocol) server configuration for tool access.
-
-```go
-import "github.com/sevigo/goframe/agent"
-
-// Configure MCP servers
-mcpRegistry := agent.NewMCPRegistry(
-    // Local MCP server (stdio transport)
-    agent.LocalMCPServer("filesystem",
-        []string{"mcp-filesystem", "/path/to/repo"},
-        agent.WithEnv(map[string]string{"LOG_LEVEL": "debug"}),
-        agent.WithEnabled(true),
-    ),
-    // Remote MCP server (HTTP/SSE transport)
-    agent.RemoteMCPServer("brave-search",
-        "https://mcp.brave.com/search",
-        agent.WithHeaders(map[string]string{"Authorization": "Bearer token"}),
-        agent.WithEnabled(true),
-    ),
-)
-
-// Configure permissions
-permissions := agent.NewPermissions().
-    AllowBash("go test", "go build").
-    AllowEdit().
-    DenyWebfetch().
-    Build()
-
-// Create agent
-ag, _ := agent.New(
-    agent.WithModel("anthropic/claude-3-5-sonnet"),
-    agent.WithMCPRegistry(mcpRegistry),
-    agent.WithPermissions(permissions),
-)
-
-// Create session and interact
-session, _ := ag.NewSession(ctx, agent.WithTitle("Code Review"))
-response, _ := session.Prompt(ctx, "Explain this code")
-
-// Stream responses
-events, _ := ag.Stream(ctx, "Write a haiku")
-for event := range events {
-    if event.Type == agent.EventTypeComplete {
-        fmt.Println(event.Data.(agent.Response).Content)
-    }
+// Semantic fallback
+if err != nil || len(exactDocs) == 0 {
+    exactDocs, _ = defRetriever.GetDefinition(ctx, symbol)
 }
-```
-
-## Running the Ultimate RAG Demo
-
-The `examples/qdrant-ultimate-rag` is a production-grade demonstration featuring:
-*   Full repository ingestion (Go & TypeScript).
-*   Streaming processing pipeline.
-*   Graph Retrieval verification.
-
-```bash
-# Set up environment
-export OLLAMA_API_KEY=your_key_if_using_cloud
-
-# Run the full integration test
-go run ./examples/qdrant-ultimate-rag/main.go
 ```
 
 ---
 
-## Core Components
+## Running the Example
 
-- **`/schema`**: Defines the core data structures used throughout the framework, such as `Document`, `ChatMessage`, and `ParserPlugin`.
-- **`/llms`**: Contains interfaces and implementations for LLM clients. The `ollama` package provides a full-featured client.
-- **`/embeddings`**: Provides the `Embedder` interface and a default implementation that wraps an LLM client to perform embedding tasks.
-- **`/vectorstores`**: Contains interfaces and implementations for vector stores. The `qdrant` package provides a robust client.
-- **`/agent`**: Provides the Agent framework for programmatic control of AI agents through OpenCode SDK. Features MCP server management, session handling, permissions, and event streaming.
-- **`/voice`**: Provides Text-to-Speech synthesis with OpenAI-compatible API support. Supports both buffered and streaming audio generation, compatible with OpenAI cloud and local servers like Kokoro-FastAPI.
-- **`/parsers`**: Home to the language parser plugin system. Each sub-directory (`/golang`, `/markdown`, etc.) contains a plugin for a specific file type. See `Plugins.md` for more details.
-- **`/textsplitter`**: Provides the `CodeAwareTextSplitter`, which uses the parser plugins to perform intelligent, semantic chunking of documents.
+```bash
+go run ./examples/qdrant-ultimate-rag/main.go
+```
+
+The example demonstrates full repository ingestion (Go + TypeScript), hybrid search, and dependency graph verification against a real Qdrant instance.
+
+---
+
+## Sparse Vector Provider
+
+The default sparse provider uses a pretrained BoW tokenizer. For source code, register the code-aware provider instead:
+
+```go
+import (
+    "github.com/sevigo/goframe/embeddings/sparse"
+    sparsecode "github.com/sevigo/goframe/embeddings/sparse/code"
+)
+
+// Call once at application startup
+sparse.RegisterProvider(sparsecode.NewCodeSparseProvider())
+```
+
+The code provider:
+- Splits camelCase: `processPayment` → `["process", "payment"]`
+- Splits acronyms: `XMLParser` → `["xml", "parser"]`, `HTTPClient` → `["http", "client"]`
+- Handles mixed: `get_HTTPClient` → `["get", "http", "client"]`
+- Filters Go/JS/Python/Rust language keywords
+- Hashes via FNV32a into 50,000-dimension sparse space with L2 normalization
+
+---
 
 ## How to Contribute
 
-Contributions are welcome! Whether it's a bug fix, a new feature, or documentation improvements, we appreciate your help.
+```bash
+make lint      # Run linters
+make test      # Run all tests
+make pre-push  # lint + test combined
+```
 
-1.  **Fork the repository.**
-2.  **Create a new branch** for your feature (`git checkout -b feature/my-new-feature`).
-3.  **Make your changes** and add/update tests.
-4.  **Run tests** to ensure everything is working (`go test ./...`).
-5.  **Submit a pull request** with a clear description of your changes.
+For a single package:
+```bash
+go test ./vectorstores/qdrant/... -v
+go test -run TestStoreSimilaritySearch ./vectorstores/qdrant/...
+```
 
-### Areas for Contribution
-
--   **New LLM Clients**: Add support for providers like OpenAI, Anthropic, or Hugging Face.
--   **New Vector Stores**: Implement the `VectorStore` interface for ChromaDB, Pinecone, Weaviate, etc.
--   **New Parser Plugins**: Add support for more languages like Python, Java, C++, or Rust.
--   **Enhance Agent Framework**: Add new MCP server types, improve permission handling, or add more event types.
--   **Enhance RAG Components**: Implement advanced retrieval strategies like re-rankers or query transformers.
+See [TODO.md](TODO.md) for what's next.
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).
