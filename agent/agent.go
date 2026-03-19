@@ -1,5 +1,9 @@
 package agent
 
+// Package agent provides an abstraction layer for AI agent loops.
+//
+// The agent package enables programmatic control of AI agents with support
+// for tool execution, risk assessment, and governance policies.
 import (
 	"context"
 	"fmt"

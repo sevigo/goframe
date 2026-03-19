@@ -1,5 +1,9 @@
 package sparse
 
+// Package sparse provides utilities for generating sparse vectors for hybrid search.
+//
+// Sparse vectors enable exact term matching combined with semantic similarity,
+// improving retrieval accuracy for queries that require precise term matching.
 import (
 	"archive/tar"
 	"bytes"
