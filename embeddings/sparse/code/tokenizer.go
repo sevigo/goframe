@@ -4,118 +4,111 @@ import (
 	"hash/fnv"
 	"regexp"
 	"strings"
-	"unicode"
 )
 
 const (
+	// vocabularySize is the FNV32a hash space for sparse vector indices.
+	// With ~100 unique tokens per chunk the collision probability is ~0.1%.
 	vocabularySize = 50000
 )
 
 var (
-	camelCaseRegex  = regexp.MustCompile(`([a-z])([A-Z])|([A-Z])([A-Z][a-z])`)
-	operatorRegex   = regexp.MustCompile(`[+\-*/%=<>!&|^~@#:.\[\](){};,\\]+`)
+	// camelCaseLower splits a lowercase-to-uppercase boundary: processPayment → process Payment
+	camelCaseLower = regexp.MustCompile(`([a-z])([A-Z])`)
+	// camelCaseUpper splits an acronym-to-word boundary: XMLParser → XML Parser, HTTPClient → HTTP Client
+	camelCaseUpper = regexp.MustCompile(`([A-Z]+)([A-Z][a-z])`)
+	// operatorRegex splits on punctuation, operators, and underscores.
+	// Including _ here means snake_case is handled before camelCase splitting.
+	operatorRegex   = regexp.MustCompile(`[+\-*/%=<>!&|^~@#:.\[\](){};,\\_]+`)
 	whitespaceRegex = regexp.MustCompile(`\s+`)
 )
 
+// Tokenizer is a code-aware sparse vector provider.
+// It splits camelCase and snake_case identifiers into constituent terms,
+// filters language keywords, and produces normalized sparse vectors via FNV hashing.
+// Register it with sparse.RegisterProvider to replace the default BGE BoW provider
+// for source code inputs.
 type Tokenizer struct{}
 
 func NewTokenizer() *Tokenizer {
 	return &Tokenizer{}
 }
 
+// Tokenize splits text into lowercase code terms.
+// Pipeline: normalize whitespace → split on operators/punctuation/underscores
+// → split camelCase → lowercase → filter short tokens and stop words.
 func (t *Tokenizer) Tokenize(text string) []string {
-	var tokens []string
-
 	text = whitespaceRegex.ReplaceAllString(text, " ")
 
 	parts := operatorRegex.Split(text, -1)
+
+	var tokens []string
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-
-		subTokens := t.splitCamelCaseAndSnake(part)
-		tokens = append(tokens, subTokens...)
+		tokens = append(tokens, splitCamelCase(part)...)
 	}
 
-	filtered := make([]string, 0, len(tokens))
+	filtered := tokens[:0]
 	for _, tok := range tokens {
-		tok = strings.TrimSpace(tok)
-		tok = strings.ToLower(tok)
 		if len(tok) > 1 && !isStopWord(tok) {
 			filtered = append(filtered, tok)
 		}
 	}
-
 	return filtered
 }
 
-func (t *Tokenizer) splitCamelCaseAndSnake(text string) []string {
-	if text == "" {
-		return nil
-	}
+// splitCamelCase splits a single identifier on camelCase boundaries and returns lowercase terms.
+//
+//	processPayment  → [process payment]
+//	XMLParser       → [xml parser]
+//	HTTPClient      → [http client]
+//	simpleWord      → [simpleword]
+func splitCamelCase(s string) []string {
+	s = camelCaseLower.ReplaceAllString(s, "${1} ${2}")
+	s = camelCaseUpper.ReplaceAllString(s, "${1} ${2}")
+	return strings.Fields(strings.ToLower(s))
+}
 
-	var result []string
-	var current strings.Builder
-
-	for i := 0; i < len(text); i++ {
-		r := rune(text[i])
-
-		if r == '_' {
-			if current.Len() > 0 {
-				result = append(result, current.String())
-				current.Reset()
-			}
-			continue
-		}
-
-		if unicode.IsUpper(r) {
-			if current.Len() > 0 {
-				last := current.String()
-				if len(last) > 1 && !unicode.IsUpper(rune(last[len(last)-1])) {
-					result = append(result, last)
-					current.Reset()
-				}
-			}
-		}
-
-		current.WriteRune(r)
-	}
-
-	if current.Len() > 0 {
-		result = append(result, current.String())
-	}
-
-	return result
+// hashToken maps a token to a sparse vector index via FNV32a.
+// Tokens are expected to already be lowercase.
+func hashToken(token string) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(token))
+	return h.Sum32() % vocabularySize
 }
 
 var stopWords = map[string]bool{
+	// Control flow
 	"if": true, "else": true, "for": true, "while": true, "do": true,
 	"switch": true, "case": true, "default": true, "break": true, "continue": true,
 	"return": true, "goto": true,
+	// Exception handling
 	"try": true, "catch": true, "throw": true, "finally": true,
+	"except": true, "raise": true,
+	// Type / OOP keywords
 	"class": true, "struct": true, "enum": true, "interface": true, "trait": true,
 	"public": true, "private": true, "protected": true, "static": true,
 	"readonly": true, "abstract": true, "final": true, "volatile": true,
 	"synchronized": true, "transient": true, "native": true,
+	// Module system
 	"import": true, "export": true, "from": true, "require": true, "module": true,
+	// Declaration keywords
 	"const": true, "let": true, "var": true, "func": true, "fn": true, "def": true,
 	"type": true, "typedef": true, "typeof": true,
+	// Common literals / builtins
 	"new": true, "delete": true, "this": true, "super": true, "self": true,
 	"true": true, "false": true, "nil": true, "null": true, "none": true,
+	// Concurrency / generators
 	"async": true, "await": true, "yield": true,
-	"except": true, "raise": true,
+	// Operators as words
 	"in": true, "of": true, "as": true, "is": true,
 	"and": true, "or": true, "not": true, "xor": true,
 }
 
+// isStopWord reports whether a lowercase token is a language keyword with no retrieval value.
 func isStopWord(tok string) bool {
-	return stopWords[strings.ToLower(tok)]
-}
-
-func (t *Tokenizer) hashToken(token string) uint32 {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(strings.ToLower(token)))
-	return h.Sum32() % vocabularySize
+	return stopWords[tok] // tok is already lowercase from splitCamelCase
 }

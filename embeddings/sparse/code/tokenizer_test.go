@@ -42,6 +42,40 @@ func TestTokenizer_Tokenize(t *testing.T) {
 				assert.Contains(t, tokens, "xyz")
 			},
 		},
+		{
+			name:  "acronym prefix (XMLParser)",
+			input: "XMLParser",
+			check: func(tokens []string) {
+				assert.Contains(t, tokens, "xml")
+				assert.Contains(t, tokens, "parser")
+				assert.NotContains(t, tokens, "xmlparser", "should be split, not kept whole")
+			},
+		},
+		{
+			name:  "acronym standalone (HTTPClient)",
+			input: "HTTPClient",
+			check: func(tokens []string) {
+				assert.Contains(t, tokens, "http")
+				assert.Contains(t, tokens, "client")
+			},
+		},
+		{
+			name:  "mixed camel and snake (get_HTTPClient)",
+			input: "get_HTTPClient",
+			check: func(tokens []string) {
+				assert.Contains(t, tokens, "get")
+				assert.Contains(t, tokens, "http")
+				assert.Contains(t, tokens, "client")
+			},
+		},
+		{
+			name:  "case-insensitive: processPayment and ProcessPayment same tokens",
+			input: "ProcessPayment",
+			check: func(tokens []string) {
+				assert.Contains(t, tokens, "process")
+				assert.Contains(t, tokens, "payment")
+			},
+		},
 	}
 
 	for _, tt := range tests {

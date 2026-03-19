@@ -668,6 +668,7 @@ Files affected:
 
 Pre-allocate slices in hot paths.
 
+
 ```
 Files affected:
 - schema/message.go:53-65 - MessageContent.String()

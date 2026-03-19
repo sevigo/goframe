@@ -30,7 +30,7 @@ func (p *CodeSparseProvider) GenerateSparseVector(ctx context.Context, text stri
 
 	tokenCounts := make(map[uint32]float32)
 	for _, token := range tokens {
-		idx := p.tokenizer.hashToken(token)
+		idx := hashToken(token)
 		tokenCounts[idx] += 1.0
 	}
 
