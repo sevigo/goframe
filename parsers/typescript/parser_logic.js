@@ -1,6 +1,9 @@
 // This script runs inside the Goja runtime.
 // It has access to the 'ts' object from typescript.js
 
+const DEFAULT_CHARS_PER_TOKEN = 4;
+const DEFAULT_TARGET_CHUNK_SIZE = 3000; // ~750 tokens
+
 function getVisibility(node, parentNode = null) {
     // For constructors, default to public unless specified otherwise.
     if (node.kind === ts.SyntaxKind.Constructor) {
@@ -49,12 +52,12 @@ function getSignature(node, sourceFile) {
     return node.getText(sourceFile);
 }
 
-function processNode(node, sourceFile, parentIdentifier = '', parentNode = null) {
+function processNode(node, sourceFile, parentIdentifier = '', parentNode = null, targetChunkSize = DEFAULT_TARGET_CHUNK_SIZE) {
     const chunks = [], definitions = [], symbols = [];
 
     if (node.kind === ts.SyntaxKind.SourceFile || node.kind === ts.SyntaxKind.EndOfFileToken) {
         ts.forEachChild(node, (child) => {
-            const result = processNode(child, sourceFile, parentIdentifier, node);
+            const result = processNode(child, sourceFile, parentIdentifier, node, targetChunkSize);
             chunks.push(...result.chunks); definitions.push(...result.definitions); symbols.push(...result.symbols);
         });
         return { chunks, definitions, symbols };
@@ -98,7 +101,7 @@ function processNode(node, sourceFile, parentIdentifier = '', parentNode = null)
         case ts.SyntaxKind.VariableStatement:
             for (const decl of node.declarationList.declarations) {
                 // Pass the parent VariableStatement down to correctly determine visibility.
-                const result = processNode(decl, sourceFile, parentIdentifier, node);
+                const result = processNode(decl, sourceFile, parentIdentifier, node, targetChunkSize);
                 chunks.push(...result.chunks); definitions.push(...result.definitions); symbols.push(...result.symbols);
             }
             return { chunks, definitions, symbols };
@@ -154,7 +157,7 @@ function processNode(node, sourceFile, parentIdentifier = '', parentNode = null)
     if (ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node)) {
         const newParentIdentifier = node.name.getText(sourceFile);
         (node.members || []).forEach(child => {
-            const result = processNode(child, sourceFile, newParentIdentifier, node);
+            const result = processNode(child, sourceFile, newParentIdentifier, node, targetChunkSize);
             chunks.push(...result.chunks); definitions.push(...result.definitions);
         });
     }
@@ -193,7 +196,7 @@ function extractUsedSymbols(sourceCode, sourcePath) {
     }
 }
 
-function createParser(funcName, sourceCode, sourcePath) {
+function createParser(funcName, sourceCode, sourcePath, opts) {
     try {
         if (!sourceCode || sourceCode.trim() === '') {
             if (funcName === 'extractChunks') return JSON.stringify([]);
@@ -206,8 +209,14 @@ function createParser(funcName, sourceCode, sourcePath) {
             throw new Error(message);
         }
 
+        // Calculate target size from options
+        let targetChunkSize = DEFAULT_TARGET_CHUNK_SIZE;
+        if (opts && opts.ChunkSize && opts.ChunkSize > 0) {
+            targetChunkSize = opts.ChunkSize * DEFAULT_CHARS_PER_TOKEN;
+        }
+
         if (funcName === 'extractChunks') {
-            const { chunks } = processNode(sourceFile, sourceFile);
+            const { chunks } = processNode(sourceFile, sourceFile, '', null, targetChunkSize);
             return JSON.stringify(chunks, null, 2);
         }
 
@@ -224,7 +233,7 @@ function createParser(funcName, sourceCode, sourcePath) {
             }
             nodeWalker(sourceFile);
 
-            const { definitions, symbols } = processNode(sourceFile, sourceFile);
+            const { definitions, symbols } = processNode(sourceFile, sourceFile, '', null, DEFAULT_TARGET_CHUNK_SIZE);
             return JSON.stringify({
                 language: "typescript", imports, definitions, symbols,
                 properties: {
@@ -239,5 +248,5 @@ function createParser(funcName, sourceCode, sourcePath) {
     }
 }
 
-function extractChunks(sourceCode, sourcePath) { return createParser('extractChunks', sourceCode, sourcePath); }
-function extractMetadata(sourceCode, sourcePath) { return createParser('extractMetadata', sourceCode, sourcePath); }
+function extractChunks(sourceCode, sourcePath) { return createParser('extractChunks', sourceCode, sourcePath, null); }
+function extractMetadata(sourceCode, sourcePath) { return createParser('extractMetadata', sourceCode, sourcePath, null); }
