@@ -55,8 +55,7 @@ func (p *XMLParser[T]) Parse(ctx context.Context, text string) (T, error) {
 		text = stripMarkdownFence(text)
 	}
 
-	// LLM-specific XML sanitization
-	// fix unescaped characters like "if a < b" -> "if a &lt; b"
+	// Fix unescaped characters like "if a < b" -> "if a &lt; b"
 	text = sanitizeLLMXML(text)
 
 	// truncation recovery
