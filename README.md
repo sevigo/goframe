@@ -15,7 +15,7 @@ It is the library underlying [Code-Warden](https://github.com/sevigo/code-warden
 Most RAG libraries treat code as plain text. GoFrame understands it:
 
 - **AST-aware chunking** — splits at function and type boundaries, not arbitrary character counts; file-level metadata (package name, imports) propagates to every chunk
-- **Multi-language parsing** — Go, TypeScript/TSX, Markdown, JSON, YAML, Python, Terraform, Protobuf, PDF, RSS; each parser extracts language-specific metadata
+- **Multi-language parsing** — Go, TypeScript/TSX, Markdown, JSON, YAML, Terraform, Protobuf, PDF, CSV, HTML, RSS; each parser extracts language-specific metadata
 - **Dependency graph traversal** — `DependencyRetriever` answers "who imports this package?" and "what does this file depend on?" using metadata stored at index time
 - **Code-aware sparse tokenization** — splits camelCase (`processPayment` → `process`, `payment`) and acronyms (`XMLParser` → `xml`, `parser`) before hashing into a sparse vector; hybrid search combines this with dense embeddings for better identifier recall
 - **Test linkage** — indexes test files with `tested_symbols` metadata so tests can be retrieved by the symbols they exercise, not just by text similarity
@@ -104,7 +104,7 @@ At query time:
 | `embeddings/sparse/code` | Code-aware sparse tokenizer (camelCase/snake_case splitting + FNV32a) |
 | `vectorstores/qdrant` | Qdrant store — hybrid search, metadata filtering, binary quantization |
 | `vectorstores/` | `DependencyRetriever`, `DefinitionRetriever`, `ToRetriever` helpers |
-| `parsers/` | Language parser plugins — Go, TypeScript, Markdown, JSON, YAML, Python, etc. |
+| `parsers/` | Language parser plugins — Go, TypeScript, Markdown, JSON, YAML, Terraform, Protobuf, PDF, CSV, HTML, RSS |
 | `textsplitter/` | `CodeAwareTextSplitter` — AST-boundary splitting with metadata propagation |
 | `documentloaders/` | `GitLoader` — streaming file ingestion from git repos with metadata |
 | `chains/` | `LLMChain[T]`, `RetrievalQA`, `MapReduceChain` |

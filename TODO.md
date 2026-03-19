@@ -101,9 +101,9 @@ func NewCachedEmbedder(embedder Embedder, cache Cache) *CachedEmbedder
 
 ### More Language Parsers
 
-Current parser coverage: Go, TypeScript/TSX, Markdown, JSON, YAML, Python (partial), Terraform, Protobuf, PDF, RSS.
+Current parser coverage: Go, TypeScript/TSX, Markdown, JSON, YAML, Terraform, Protobuf, PDF, CSV, HTML, RSS.
 
-- [ ] Python: improve definition extraction (classes, methods, decorators)
+- [ ] Python: full parser (classes, methods, decorators, imports)
 - [ ] Rust: struct, impl, trait extraction
 - [ ] Java/Kotlin: class and method extraction
 - [ ] Ruby: class and method extraction
@@ -210,11 +210,11 @@ func (s *Store) Recommend(ctx context.Context, positiveIDs []string, negativeIDs
 Complete package-level documentation for all public packages so pkg.go.dev renders usefully.
 
 Priority order (least documented first):
-- `embeddings/sparse/code`
-- `vectorstores/` (retrievers, options)
-- `parsers/golang`, `parsers/typescript`
-- `textsplitter/`
-- `documentloaders/`
+- `embeddings/sparse/code` — needs package doc
+- `gitutil` — needs package doc
+- `parsers/testing` — needs package doc
+
+Most other packages now have package-level documentation.
 
 ---
 
