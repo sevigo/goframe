@@ -62,14 +62,6 @@ $(GOLANGCI_LINT):
 	@mkdir -p $(BIN_DIR)
 	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b $(BIN_DIR) $(GOLANGCI_LINT_VERSION)
 
-build-examples:
-	@echo "Building all examples..."
-	@for example in $$(find ./examples -mindepth 1 -maxdepth 1 -type d); do \
-		echo "--> Building $$example"; \
-		(cd $$example && go mod tidy && go build -o /dev/null) || exit 1; \
-	done
-	@echo "All examples built successfully"
-
 tidy:
 	@echo "Tidying go.mod files..."
 	@go mod tidy
