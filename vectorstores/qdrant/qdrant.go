@@ -80,6 +80,7 @@ type Store struct {
 	options        options
 	batchConfig    BatchConfig
 	mu             sync.RWMutex
+	collectionMu   sync.Mutex
 }
 
 var _ vectorstores.VectorStore = (*Store)(nil)
@@ -1269,6 +1270,18 @@ func (s *Store) ensureCollection(ctx context.Context, collectionName string) err
 		return nil
 	}
 
+	s.collectionMu.Lock()
+	defer s.collectionMu.Unlock()
+
+	exists, err = s.collectionExists(ctx, collectionName)
+	if err != nil {
+		return fmt.Errorf("failed to check collection existence: %w", err)
+	}
+	if exists {
+		s.logger.DebugContext(ctx, "EnsureCollection: Collection already exists (checked after lock).", "collection", collectionName)
+		return nil
+	}
+
 	s.logger.InfoContext(ctx, "EnsureCollection: Collection does not exist, attempting to create it.", "collection", collectionName)
 	if s.embedder == nil {
 		s.logger.ErrorContext(ctx, "EnsureCollection: Cannot create collection without an embedder.")
@@ -1311,23 +1324,11 @@ func (s *Store) ensureCollection(ctx context.Context, collectionName string) err
 
 	_, err = s.client.GetCollectionsClient().Create(ctx, req)
 	if err != nil {
-		// Check if error is "AlreadyExists" (race condition during concurrent ops)
-		if stat, ok := status.FromError(err); ok && stat.Code() == codes.AlreadyExists {
-			s.logger.DebugContext(ctx, "EnsureCollection: Collection created by another process concurrently", "collection", collectionName)
-			return nil
-		}
 		s.logger.ErrorContext(ctx, "EnsureCollection: gRPC call to create collection failed", "error", err)
 		return fmt.Errorf("failed to create qdrant collection: %w", err)
 	}
 
-	// Apply Payload Indexes if configured
 	s.applyPayloadIndexes(ctx, collectionName)
-
-	select {
-	case <-time.After(500 * time.Millisecond):
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 
 	s.logger.InfoContext(ctx, "EnsureCollection: Collection created successfully", "collection", collectionName)
 	return nil

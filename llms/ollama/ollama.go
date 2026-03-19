@@ -53,11 +53,12 @@ func maskAPIKey(key string) string {
 }
 
 type LLM struct {
-	client       *api.Client
-	options      options
-	logger       *slog.Logger
-	details      *schema.ModelDetails
-	detailsMutex sync.RWMutex
+	client      *api.Client
+	options     options
+	logger      *slog.Logger
+	details     *schema.ModelDetails
+	detailsOnce sync.Once
+	detailsErr  error
 }
 
 var (
@@ -592,15 +593,13 @@ func (o *LLM) EmbedQueryWithOpts(ctx context.Context, text string, opts embeddin
 }
 
 func (o *LLM) GetModelDetails(ctx context.Context) (*schema.ModelDetails, error) {
-	o.detailsMutex.RLock()
-	if o.details != nil {
-		return o.details, nil
-	}
-	o.detailsMutex.RUnlock()
+	o.detailsOnce.Do(func() {
+		o.details, o.detailsErr = o.fetchModelDetails(ctx)
+	})
+	return o.details, o.detailsErr
+}
 
-	o.detailsMutex.Lock()
-	defer o.detailsMutex.Unlock()
-
+func (o *LLM) fetchModelDetails(ctx context.Context) (*schema.ModelDetails, error) {
 	showResp, err := o.client.Show(ctx, &api.ShowRequest{Name: o.options.model})
 	if err != nil {
 		return nil, fmt.Errorf("fetching model details: %w", err)
@@ -612,14 +611,12 @@ func (o *LLM) GetModelDetails(ctx context.Context) (*schema.ModelDetails, error)
 		dim = int64(len(testEmb))
 	}
 
-	o.details = &schema.ModelDetails{
+	return &schema.ModelDetails{
 		Family:        showResp.Details.Family,
 		ParameterSize: showResp.Details.ParameterSize,
 		Quantization:  showResp.Details.QuantizationLevel,
 		Dimension:     dim,
-	}
-
-	return o.details, nil
+	}, nil
 }
 
 func (o *LLM) CountTokens(ctx context.Context, text string) (int, error) {
