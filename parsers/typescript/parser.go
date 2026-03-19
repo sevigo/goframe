@@ -99,12 +99,9 @@ func (p *Parser) CanHandle(path string, info fs.FileInfo) bool {
 }
 
 // Chunk parses TypeScript code and divides it into logical code chunks.
-// The 'opts' parameter is included to satisfy the ParserPlugin interface.
 func (p *Parser) Chunk(content string, path string, opts *schema.CodeChunkingOptions) ([]schema.CodeChunk, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
-	// opts is currently unused but available for future functionality.
 
 	callable, ok := goja.AssertFunction(p.vm.Get("extractChunks"))
 	if !ok {

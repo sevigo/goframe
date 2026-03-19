@@ -121,6 +121,12 @@ func New(opts ...Option) (vectorstores.VectorStore, error) {
 	}
 	store.SetBatchConfig(batchConfig)
 
+	if len(storeOptions.sparseVectors) > 1 {
+		logger.Warn("Multiple sparse vectors configured, but only the first one will be used for hybrid search",
+			"configured_sparse_vectors", storeOptions.sparseVectors,
+			"using_sparse_vector", storeOptions.sparseVectors[0])
+	}
+
 	logger.Info("Qdrant store initialized successfully",
 		"config", storeOptions.String(),
 		"batch_config", store.batchConfig,
@@ -467,62 +473,71 @@ func (s *Store) AddDocumentsBatch(
 	batchSize := s.batchConfig.BatchSize
 	numBatches := int(math.Ceil(float64(totalDocs) / float64(batchSize)))
 
-	s.logger.InfoContext(ctx, "Starting streaming document addition pipeline",
-		"total_documents", totalDocs, "num_batches", numBatches)
+	s.logger.InfoContext(ctx, "Starting document addition pipeline",
+		"total_documents", totalDocs, "num_batches", numBatches,
+		"max_concurrency", s.batchConfig.MaxConcurrency)
 
 	start := time.Now()
 	allIDs := make([]string, totalDocs)
 	var finalErrors []error
 	var mu sync.Mutex
-	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, s.batchConfig.MaxConcurrency)
 
-	processedCount := 0
+	type batchJob struct {
+		idx  int
+		docs []schema.Document
+	}
+
+	jobCh := make(chan batchJob, numBatches)
+	var wg sync.WaitGroup
+
+	for range s.batchConfig.MaxConcurrency {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobCh {
+				select {
+				case <-ctx.Done():
+					mu.Lock()
+					finalErrors = append(finalErrors, ctx.Err())
+					mu.Unlock()
+					return
+				default:
+				}
+
+				ids, err := s.processBatch(ctx, collectionName, job.docs)
+				mu.Lock()
+				if err != nil {
+					finalErrors = append(finalErrors, err)
+				} else {
+					for j, id := range ids {
+						allIDs[job.idx+j] = id
+					}
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+
 	for i := 0; i < totalDocs; i += batchSize {
 		end := i + batchSize
 		if end > totalDocs {
 			end = totalDocs
 		}
+		jobCh <- batchJob{idx: i, docs: docs[i:end]}
+	}
+	close(jobCh)
+	wg.Wait()
 
-		batchIdx := i
-		batchDocs := docs[i:end]
-
-		wg.Add(1)
-		go func(idx int, bDocs []schema.Document) {
-			defer wg.Done()
-
-			select {
-			case semaphore <- struct{}{}:
-				defer func() { <-semaphore }()
-			case <-ctx.Done():
-				mu.Lock()
-				finalErrors = append(finalErrors, ctx.Err())
-				mu.Unlock()
-				return
-			}
-
-			ids, err := s.processBatch(ctx, collectionName, bDocs)
-			mu.Lock()
-			if err != nil {
-				finalErrors = append(finalErrors, err)
-			} else {
-				for j, id := range ids {
-					allIDs[idx+j] = id
-				}
-			}
-			processedCount += len(bDocs)
-			currentCount := processedCount
-			mu.Unlock()
-
-			// Call progress callback outside the lock to prevent potential deadlock
-			// if the callback panics or blocks
-			if progressCallback != nil {
-				progressCallback(currentCount, totalDocs, time.Since(start))
-			}
-		}(batchIdx, batchDocs)
+	var processedCount int
+	for _, id := range allIDs {
+		if id != "" {
+			processedCount++
+		}
 	}
 
-	wg.Wait()
+	if progressCallback != nil {
+		progressCallback(processedCount, totalDocs, time.Since(start))
+	}
 
 	if len(finalErrors) > 0 {
 		combinedErr := errors.Join(finalErrors...)

@@ -11,9 +11,11 @@ import (
 )
 
 const (
-	// Target size for a chunk in characters. Adjust as needed.
-	// 2000-4000 characters is a good range for balancing context and size.
-	targetChunkSize = 3000
+	// DefaultTargetChunkSize is the fallback size in characters if no token-based sizing is provided.
+	// A function's average token length in Go code is ~4 chars, so 3000 chars ≈ 750 tokens.
+	DefaultTargetChunkSize = 3000
+	// FallbackCharsPerToken is used when no token estimator is available.
+	FallbackCharsPerToken = 4
 )
 
 // Chunk implements the new grouping strategy for Go files. It iterates through
@@ -30,52 +32,53 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
 		return nil, fmt.Errorf("failed to parse Go file for chunking: %w", err)
 	}
 
+	targetChunkSize := p.calculateTargetSize(opts)
 	lines := strings.Split(content, "\n")
-	var chunks []schema.CodeChunk
 
+	chunks, _, _, _, _ := p.buildChunks(file, lines, fset, path, targetChunkSize)
+	return chunks, nil
+}
+
+func (p *GoPlugin) calculateTargetSize(opts *schema.CodeChunkingOptions) int {
+	if opts != nil && opts.ChunkSize > 0 {
+		return opts.ChunkSize * FallbackCharsPerToken
+	}
+	return DefaultTargetChunkSize
+}
+
+func (p *GoPlugin) buildChunks(
+	file *ast.File,
+	lines []string,
+	fset *token.FileSet,
+	path string,
+	targetChunkSize int,
+) ([]schema.CodeChunk, *strings.Builder, *int, *int, string) {
+	var chunks []schema.CodeChunk
 	var currentChunkContent strings.Builder
 	var currentChunkStartLine = -1
 	var lastDeclEndLine int
 
-	// Track definition info for the current chunk
 	var chunkIsDefinition bool
 	var chunkSymbolType string
 	var chunkIdentifier string
 
-	// Pre-calculate the package and import block to prepend to every chunk.
 	packageAndImports := p.extractPackageAndImports(file, lines, fset)
-
-	// Determine where to start scanning for declarations (after imports)
-	for _, decl := range file.Decls {
-		genDecl, ok := decl.(*ast.GenDecl)
-		if ok && genDecl.Tok == token.IMPORT {
-			lastDeclEndLine = fset.Position(decl.End()).Line
-		}
-	}
-	// If no imports, start after package declaration
-	if lastDeclEndLine == 0 && file.Name != nil {
-		lastDeclEndLine = fset.Position(file.Name.End()).Line
-	}
+	lastDeclEndLine = p.findDeclarationStart(file, fset)
 
 	for _, decl := range file.Decls {
 		startPos := fset.Position(decl.Pos())
 		endPos := fset.Position(decl.End())
 
-		// Skip import declarations
 		if genDecl, ok := decl.(*ast.GenDecl); ok && genDecl.Tok == token.IMPORT {
 			continue
 		}
 
 		isDef, symType, id := p.findDefinitionInfo(decl)
-
-		// Capture any gap content
 		gapContent := p.extractGapContent(lines, lastDeclEndLine, startPos.Line)
-
 		declContent := p.extractDeclarationContent(lines, startPos.Line, endPos.Line)
 		fullNewContent := gapContent + declContent
 		totalAddSize := len(fullNewContent)
 
-		// If this is a definition and we have one already, flush it first
 		if isDef && chunkIdentifier != "" && currentChunkContent.Len() > 0 {
 			chunks = p.flushChunk(chunks, path, packageAndImports, &currentChunkContent, &currentChunkStartLine, &chunkIsDefinition, &chunkSymbolType, &chunkIdentifier, lastDeclEndLine)
 		}
@@ -86,14 +89,12 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
 			chunkIdentifier = id
 		}
 
-		// 1. Check if the new declaration ITSELF is too large
 		if totalAddSize > targetChunkSize {
 			chunks = p.handleLargeDeclaration(chunks, path, decl, fullNewContent, packageAndImports, &currentChunkContent, &currentChunkStartLine, &chunkIsDefinition, &chunkSymbolType, &chunkIdentifier, lastDeclEndLine, targetChunkSize)
 			lastDeclEndLine = endPos.Line
 			continue
 		}
 
-		// 2. Normal flow: Check if adding to current chunk exceeds limit
 		if currentChunkContent.Len() > 0 && (currentChunkContent.Len()+totalAddSize > targetChunkSize) {
 			chunks = p.flushChunk(chunks, path, packageAndImports, &currentChunkContent, &currentChunkStartLine, &chunkIsDefinition, &chunkSymbolType, &chunkIdentifier, lastDeclEndLine)
 
@@ -120,8 +121,20 @@ func (p *GoPlugin) Chunk(content string, path string, opts *schema.CodeChunkingO
 		chunks = p.flushChunk(chunks, path, packageAndImports, &currentChunkContent, &currentChunkStartLine, &chunkIsDefinition, &chunkSymbolType, &chunkIdentifier, lastDeclEndLine)
 	}
 
-	p.logger.Debug("Created grouped chunks for Go file", "count", len(chunks), "path", path)
-	return chunks, nil
+	return chunks, &currentChunkContent, &currentChunkStartLine, &lastDeclEndLine, packageAndImports
+}
+
+func (p *GoPlugin) findDeclarationStart(file *ast.File, fset *token.FileSet) int {
+	var lastDeclEndLine int
+	for _, decl := range file.Decls {
+		if genDecl, ok := decl.(*ast.GenDecl); ok && genDecl.Tok == token.IMPORT {
+			lastDeclEndLine = fset.Position(decl.End()).Line
+		}
+	}
+	if lastDeclEndLine == 0 && file.Name != nil {
+		lastDeclEndLine = fset.Position(file.Name.End()).Line
+	}
+	return lastDeclEndLine
 }
 
 // extractPackageAndImports gets the package and import declarations as a formatted string.
