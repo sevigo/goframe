@@ -1362,9 +1362,22 @@ func (s *Store) createPayloadIndex(ctx context.Context, collectionName, key stri
 
 func (s *Store) applyPayloadIndexes(ctx context.Context, collectionName string) {
 	s.logger.InfoContext(ctx, "Creating mandatory symbol mapping indexes", "collection", collectionName)
-	for _, key := range []string{"identifier", "is_definition"} {
+
+	indexes := []string{
+		"chunk_type",
+		"source",
+		"identifier",
+		"is_definition",
+		"language",
+		"package_name",
+	}
+
+	for _, key := range indexes {
 		if err := s.createPayloadIndex(ctx, collectionName, key); err != nil {
-			s.logger.WarnContext(ctx, "Failed to create mandatory payload index", "key", key, "collection", collectionName, "error", err)
+			s.logger.WarnContext(ctx, "Failed to create mandatory payload index",
+				"key", key,
+				"collection", collectionName,
+				"error", err)
 		}
 	}
 
