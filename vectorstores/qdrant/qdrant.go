@@ -1360,19 +1360,37 @@ func (s *Store) createPayloadIndex(ctx context.Context, collectionName, key stri
 func (s *Store) applyPayloadIndexes(ctx context.Context, collectionName string) {
 	s.logger.InfoContext(ctx, "Creating mandatory symbol mapping indexes", "collection", collectionName)
 
+	// :     isReadme,
+	// :       isRoot,
+	// :        getDocsWeight(isRoot, isReadme),
+	// : i,
+	// : section.title,
+	// :     filepath.Dir(file),
+
 	indexes := []string{
 		"chunk_type",
+		"generated_at",
+		"file_count",
+		"content_hash",
 		"source",
 		"line",
 		"end_line",
 		"identifier",
 		"is_definition",
 		"kind",
+		"is_readme",
+		"weight",
+		"section_index",
+		"section_title",
+		"is_root",
 		"language",
+		"directory",
 		"is_exported",
 		"package_name",
 		"signature",
 		"documentation",
+		"is_test",
+		"symbol_count",
 	}
 
 	for _, key := range indexes {
