@@ -431,13 +431,12 @@ func (s *Store) createQdrantPoints(batchDocs []schema.Document, vectors [][]floa
 
 		// Configure vectors (dense + optional sparse)
 		if doc.Sparse != nil && len(s.options.sparseVectors) > 0 {
-			// Sparse vector configuration (Hybrid)
 			sparseName := s.options.sparseVectors[0]
 			point.Vectors = &qdrant.Vectors{
 				VectorsOptions: &qdrant.Vectors_Vectors{
 					Vectors: &qdrant.NamedVectors{
 						Vectors: map[string]*qdrant.Vector{
-							DefaultDenseVectorName: {Data: vectors[j]},
+							"": {Data: vectors[j]},
 							sparseName: {
 								Data: doc.Sparse.Values,
 								Indices: &qdrant.SparseIndices{
@@ -739,12 +738,6 @@ func (s *Store) executeSearch(
 	if len(s.options.sparseVectors) > 0 && opts.SparseQuery != nil {
 		sparseName := s.options.sparseVectors[0]
 
-		var denseNamePtr *string
-		if DefaultDenseVectorName != "" {
-			name := DefaultDenseVectorName
-			denseNamePtr = &name
-		}
-
 		queryPoints := &qdrant.QueryPoints{
 			CollectionName: collectionName,
 			Query: &qdrant.Query{
@@ -759,7 +752,6 @@ func (s *Store) executeSearch(
 							Nearest: qdrant.NewVectorInputDense(queryVector),
 						},
 					},
-					Using:  denseNamePtr,
 					Limit:  &limit,
 					Filter: filter,
 				},
@@ -1161,11 +1153,6 @@ func (s *Store) SimilaritySearchBatch(
 				len(opts.SparseQueries), len(queryVectors))
 		}
 		sparseName := s.options.sparseVectors[0]
-		var denseNamePtr *string
-		if DefaultDenseVectorName != "" {
-			name := DefaultDenseVectorName
-			denseNamePtr = &name
-		}
 
 		queryRequests := make([]*qdrant.QueryPoints, 0, len(queryVectors))
 		for i, vector := range queryVectors {
@@ -1183,7 +1170,6 @@ func (s *Store) SimilaritySearchBatch(
 								Nearest: qdrant.NewVectorInputDense(vector),
 							},
 						},
-						Using: denseNamePtr,
 						Limit: &limit,
 					},
 					{
