@@ -419,6 +419,7 @@ func (s *Store) calculateNextDelayWithMax(delay, maxDelay time.Duration) time.Du
 func (s *Store) createQdrantPoints(batchDocs []schema.Document, vectors [][]float32) ([]*qdrant.PointStruct, []string) {
 	batchPoints := make([]*qdrant.PointStruct, len(batchDocs))
 	batchIDs := make([]string, len(batchDocs))
+	sparseCount := 0
 
 	for j, doc := range batchDocs {
 		docID := s.generateDocumentID(doc)
@@ -431,6 +432,7 @@ func (s *Store) createQdrantPoints(batchDocs []schema.Document, vectors [][]floa
 
 		// Configure vectors (dense + optional sparse)
 		if doc.Sparse != nil && len(s.options.sparseVectors) > 0 {
+			sparseCount++
 			sparseName := s.options.sparseVectors[0]
 			point.Vectors = &qdrant.Vectors{
 				VectorsOptions: &qdrant.Vectors_Vectors{
@@ -457,6 +459,10 @@ func (s *Store) createQdrantPoints(batchDocs []schema.Document, vectors [][]floa
 		}
 
 		batchPoints[j] = point
+	}
+
+	if sparseCount > 0 && len(s.options.sparseVectors) > 0 {
+		s.logger.Debug("Sparse vectors included in batch", "total", len(batchDocs), "with_sparse", sparseCount, "sparse_name", s.options.sparseVectors[0])
 	}
 
 	return batchPoints, batchIDs
@@ -737,6 +743,10 @@ func (s *Store) executeSearch(
 
 	if len(s.options.sparseVectors) > 0 && opts.SparseQuery != nil {
 		sparseName := s.options.sparseVectors[0]
+		s.logger.DebugContext(ctx, "Executing hybrid search",
+			"sparse_vector_name", sparseName,
+			"sparse_indices", len(opts.SparseQuery.Indices),
+			"sparse_values", len(opts.SparseQuery.Values))
 
 		queryPoints := &qdrant.QueryPoints{
 			CollectionName: collectionName,
@@ -789,6 +799,13 @@ func (s *Store) executeSearch(
 			"fusion", "RRF", "results", len(results),
 			"duration", time.Since(searchStart))
 	} else {
+		reason := "dense_only"
+		if len(s.options.sparseVectors) == 0 {
+			reason = "sparse_vectors_not_configured"
+		} else if opts.SparseQuery == nil {
+			reason = "sparse_query_not_provided"
+		}
+		s.logger.DebugContext(ctx, "Executing dense search", "reason", reason, "collection", collectionName)
 		err = s.doWithRetry(ctx, "similarity_search", func() error {
 			searchResult, retryErr := s.client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
 				CollectionName: collectionName,
