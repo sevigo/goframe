@@ -38,40 +38,66 @@ var (
 	ErrPartialBatchFailure   = errors.New("qdrant: some batches failed to process")
 	ErrEmbeddingTotalFailure = errors.New("qdrant: all embedding batches failed")
 	ErrMissingSparseName     = errors.New("qdrant: sparse vector name required for hybrid search configuration")
+	ErrEmptyFilter           = errors.New("qdrant: cannot delete with an empty filter")
 )
 
 const (
-	DefaultBatchSize      = 100
-	MaxBatchSize          = 1000
+	// DefaultBatchSize is the default number of documents to process per batch.
+	DefaultBatchSize = 100
+	// MaxBatchSize is the maximum allowed batch size for document operations.
+	MaxBatchSize = 1000
+	// DefaultMaxConcurrency is the default number of concurrent batch operations.
 	DefaultMaxConcurrency = 8
-	DefaultRetryAttempts  = 3
-	DefaultRetryDelay     = 2 * time.Second
-	DefaultMaxRetryDelay  = 30 * time.Second
-	DefaultRetryJitter    = 1 * time.Second
+	// DefaultRetryAttempts is the default number of retry attempts for failed operations.
+	DefaultRetryAttempts = 3
+	// DefaultRetryDelay is the initial delay between retry attempts.
+	DefaultRetryDelay = 2 * time.Second
+	// DefaultMaxRetryDelay is the maximum delay between retry attempts.
+	DefaultMaxRetryDelay = 30 * time.Second
+	// DefaultRetryJitter is the maximum random jitter added to retry delays.
+	DefaultRetryJitter = 1 * time.Second
 
 	// DefaultDenseVectorName is the implicit name for the default dense vector in Qdrant.
 	DefaultDenseVectorName = ""
 )
 
+// BatchResult represents the result of a batch document operation.
 type BatchResult struct {
-	TotalProcessed int           `json:"total_processed"`
-	TotalFailed    int           `json:"total_failed"`
-	Duration       time.Duration `json:"duration"`
-	Errors         []error       `json:"errors,omitempty"`
-	ProcessedIDs   []string      `json:"processed_ids,omitempty"`
+	// TotalProcessed is the number of documents successfully processed.
+	TotalProcessed int `json:"total_processed"`
+	// TotalFailed is the number of documents that failed to process.
+	TotalFailed int `json:"total_failed"`
+	// Duration is the total time taken for the batch operation.
+	Duration time.Duration `json:"duration"`
+	// Errors contains any errors encountered during processing.
+	Errors []error `json:"errors,omitempty"`
+	// ProcessedIDs contains the IDs of successfully processed documents.
+	ProcessedIDs []string `json:"processed_ids,omitempty"`
 }
 
+// BatchConfig configures batch processing parameters for document operations.
 type BatchConfig struct {
-	BatchSize               int           `json:"batch_size"`
-	MaxConcurrency          int           `json:"max_concurrency"`
-	RetryAttempts           int           `json:"retry_attempts"`
-	RetryDelay              time.Duration `json:"retry_delay"`
-	MaxRetryDelay           time.Duration `json:"max_retry_delay"`
-	EmbeddingBatchSize      int           `json:"embedding_batch_size,omitempty"`
-	RetryJitter             time.Duration `json:"retry_jitter"`
-	EmbeddingMaxConcurrency int           `json:"embedding_max_concurrency,omitempty"`
+	// BatchSize is the number of documents to process per batch.
+	BatchSize int `json:"batch_size"`
+	// MaxConcurrency is the maximum number of concurrent batch operations.
+	MaxConcurrency int `json:"max_concurrency"`
+	// RetryAttempts is the number of retry attempts for failed operations.
+	RetryAttempts int `json:"retry_attempts"`
+	// RetryDelay is the initial delay between retry attempts.
+	RetryDelay time.Duration `json:"retry_delay"`
+	// MaxRetryDelay is the maximum delay between retry attempts.
+	MaxRetryDelay time.Duration `json:"max_retry_delay"`
+	// EmbeddingBatchSize is the batch size for embedding operations (0 uses default).
+	EmbeddingBatchSize int `json:"embedding_batch_size,omitempty"`
+	// RetryJitter is the random jitter added to retry delays.
+	RetryJitter time.Duration `json:"retry_jitter"`
+	// EmbeddingMaxConcurrency is the maximum concurrent embedding operations (0 uses default).
+	EmbeddingMaxConcurrency int `json:"embedding_max_concurrency,omitempty"`
 }
 
+// Store implements the vectorstores.VectorStore interface for Qdrant.
+// It provides methods for storing, retrieving, and searching vector embeddings
+// with support for both dense and sparse vectors for hybrid search.
 type Store struct {
 	client         *qdrant.Client
 	embedder       embeddings.Embedder
@@ -85,6 +111,8 @@ type Store struct {
 
 var _ vectorstores.VectorStore = (*Store)(nil)
 
+// New creates a new Qdrant vector store with the provided options.
+// It initializes the gRPC client connection and validates all configuration.
 func New(opts ...Option) (vectorstores.VectorStore, error) {
 	storeOptions, err := parseOptions(opts...)
 	if err != nil {
@@ -134,6 +162,8 @@ func New(opts ...Option) (vectorstores.VectorStore, error) {
 	return store, nil
 }
 
+// SetBatchConfig updates the batch processing configuration for the store.
+// It validates and normalizes the provided configuration before applying it.
 func (s *Store) SetBatchConfig(config BatchConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -433,6 +463,7 @@ func (s *Store) createQdrantPoints(batchDocs []schema.Document, vectors [][]floa
 	return batchPoints, batchIDs
 }
 
+// GetBatchConfig returns a copy of the current batch processing configuration.
 func (s *Store) GetBatchConfig() BatchConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -583,7 +614,7 @@ func (s *Store) upsertWithRetry(ctx context.Context, collectionName string, poin
 			case <-ctx.Done():
 				return ctx.Err()
 			}
-			delay = time.Duration(float64(delay) * 1.5)
+			delay *= 2
 			if delay > s.batchConfig.MaxRetryDelay {
 				delay = s.batchConfig.MaxRetryDelay
 			}
@@ -874,7 +905,11 @@ func (s *Store) SimilaritySearchWithScores(
 
 	docsWithScore := make([]vectorstores.DocumentWithScore, len(results))
 
-	var minScore, maxScore float32 = 1.0, 0.0
+	var minScore, maxScore float32
+	if len(results) > 0 {
+		minScore = results[0].GetScore()
+		maxScore = results[0].GetScore()
+	}
 	for i, point := range results {
 		score := point.GetScore()
 		if score < minScore {
@@ -1062,10 +1097,9 @@ func (s *Store) DeleteDocumentsByFilter(ctx context.Context, filters map[string]
 	opts := vectorstores.ParseOptions(options...)
 	collectionName := s.getCollectionName(opts)
 
-	// buildQdrantFilter is a helper you already have for searching
 	qdrantFilter := buildQdrantFilter(filters)
 	if qdrantFilter == nil {
-		return errors.New("cannot delete with an empty filter")
+		return ErrEmptyFilter
 	}
 
 	wait := true
@@ -1359,13 +1393,6 @@ func (s *Store) createPayloadIndex(ctx context.Context, collectionName, key stri
 
 func (s *Store) applyPayloadIndexes(ctx context.Context, collectionName string) {
 	s.logger.InfoContext(ctx, "Creating mandatory symbol mapping indexes", "collection", collectionName)
-
-	// :     isReadme,
-	// :       isRoot,
-	// :        getDocsWeight(isRoot, isReadme),
-	// : i,
-	// : section.title,
-	// :     filepath.Dir(file),
 
 	indexes := []string{
 		"chunk_type",
