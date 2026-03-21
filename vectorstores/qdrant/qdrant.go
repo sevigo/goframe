@@ -554,7 +554,6 @@ func (s *Store) AddDocumentsBatch(
 }
 
 func (s *Store) processBatch(ctx context.Context, collectionName string, batchDocs []schema.Document) ([]string, error) {
-	// 1. Embed the batch
 	validDocs, vectors, err := s.embedBatchWithRetry(ctx, batchDocs)
 	if err != nil {
 		return nil, err
@@ -564,10 +563,8 @@ func (s *Store) processBatch(ctx context.Context, collectionName string, batchDo
 		return []string{}, nil
 	}
 
-	// 2. Create Qdrant points
 	points, ids := s.createQdrantPoints(validDocs, vectors)
 
-	// 3. Upsert immediately
 	if err := s.upsertWithRetry(ctx, collectionName, points); err != nil {
 		return nil, err
 	}
@@ -1366,10 +1363,16 @@ func (s *Store) applyPayloadIndexes(ctx context.Context, collectionName string) 
 	indexes := []string{
 		"chunk_type",
 		"source",
+		"line",
+		"end_line",
 		"identifier",
 		"is_definition",
+		"kind",
 		"language",
+		"is_exported",
 		"package_name",
+		"signature",
+		"documentation",
 	}
 
 	for _, key := range indexes {
