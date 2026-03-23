@@ -1425,6 +1425,9 @@ func (s *Store) applyPayloadIndexes(ctx context.Context, collectionName string) 
 		"file_summary",
 		"tested_symbols",
 		"source_file",
+		"keywords",
+		"export_count",
+		"relation_count",
 	}
 
 	for _, key := range indexes {
