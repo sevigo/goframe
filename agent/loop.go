@@ -56,6 +56,8 @@ type LoopResult struct {
 	State LoopState
 	// TraceID is a unique identifier for tracing loop execution.
 	TraceID string
+	// Compactions is the number of times the conversation history was compacted.
+	Compactions int
 }
 
 // ToolCallRecord records a single tool execution.
@@ -96,6 +98,11 @@ type AgentLoop struct {
 	// Set to 0 (default) to keep all images, or a positive integer to limit.
 	// This helps prevent context overflow when many screenshots are taken.
 	maxImagesInContext int
+	// compactionHook is called after each iteration with the current messages and
+	// cumulative token usage. If it returns a non-nil slice, that slice replaces
+	// the conversation history (minus the system prompt, which is preserved).
+	// Use this to implement context summarization when approaching token limits.
+	compactionHook func(ctx context.Context, msgs []schema.MessageContent, tokens TokenUsage) []schema.MessageContent
 }
 
 // NewAgentLoop creates a new agent loop with the given configuration.
@@ -180,6 +187,22 @@ func WithLoopMaxImagesInContext(n int) NativeLoopOption {
 	}
 }
 
+// WithLoopCompactionHook sets a callback invoked after every think-act-observe
+// iteration. The hook receives the full conversation history (including the system
+// prompt) and the cumulative token usage so far. If it returns a non-nil slice,
+// that slice replaces the conversation history for subsequent iterations.
+//
+// Typical use: summarize and compact the history when token usage approaches
+// the model's context limit, preserving the system prompt and recent tool results.
+//
+// The hook must be safe to call concurrently with the loop (it runs in-loop,
+// not in a goroutine, so no extra synchronization is needed).
+func WithLoopCompactionHook(fn func(ctx context.Context, msgs []schema.MessageContent, tokens TokenUsage) []schema.MessageContent) NativeLoopOption {
+	return func(l *AgentLoop) {
+		l.compactionHook = fn
+	}
+}
+
 // generateTraceID creates a default trace ID if none is provided.
 func generateDefaultTraceID() string {
 	// Simple UUID-like ID without external dependencies
@@ -260,6 +283,21 @@ func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.Message
 
 		result.ToolCalls = append(result.ToolCalls, toolRecords...)
 		result.Iterations = i + 1
+
+		// COMPACT: invoke the compaction hook if set. If it returns a non-nil
+		// slice the conversation history is replaced, which keeps token usage
+		// in check for long-running loops.
+		if l.compactionHook != nil {
+			if compacted := l.compactionHook(ctx, messages, result.Tokens); compacted != nil {
+				logger.Info("context compacted",
+					"iteration", i+1,
+					"before", len(messages),
+					"after", len(compacted),
+				)
+				messages = compacted
+				result.Compactions++
+			}
+		}
 	}
 
 	result.State = StateError

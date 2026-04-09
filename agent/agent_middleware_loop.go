@@ -197,6 +197,19 @@ func (l *AgentLoopWithMiddleware) Run(ctx context.Context, task Task, history []
 
 		result.ToolCalls = append(result.ToolCalls, toolRecords...)
 		result.Iterations = i + 1
+
+		// COMPACT: invoke the compaction hook (shared with base AgentLoop).
+		if l.compactionHook != nil {
+			if compacted := l.compactionHook(ctx, messages, result.Tokens); compacted != nil {
+				l.logger.Info("context compacted (middleware loop)",
+					"iteration", i+1,
+					"before", len(messages),
+					"after", len(compacted),
+				)
+				messages = compacted
+				result.Compactions++
+			}
+		}
 	}
 
 	result.State = StateError

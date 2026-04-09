@@ -421,3 +421,110 @@ func TestAgentLoop_Stream(t *testing.T) {
 		t.Errorf("expected StateComplete, got: %s", lastResult.State)
 	}
 }
+
+func TestAgentLoop_CompactionHook(t *testing.T) {
+	registry := NewRegistry()
+
+	// Tool that forces multiple iterations before finishing.
+	callCount := 0
+	tool := &mockTool{
+		name:        "step",
+		description: "advance one step",
+		execFunc: func(ctx context.Context, params map[string]any) (any, error) {
+			callCount++
+			return map[string]any{"step": callCount}, nil
+		},
+	}
+	_ = registry.Register(tool)
+
+	// LLM: call tool twice, then produce final answer.
+	model := &mockLLM{
+		responses: []string{"thinking", "thinking", "Done."},
+		toolCalls: [][]llms.ToolCall{
+			{{Function: llms.FunctionCall{Name: "step", Arguments: map[string]any{}}}},
+			{{Function: llms.FunctionCall{Name: "step", Arguments: map[string]any{}}}},
+		},
+	}
+
+	compactionCount := 0
+	hook := func(ctx context.Context, msgs []schema.MessageContent, tokens TokenUsage) []schema.MessageContent {
+		// Compact after first tool observation (history length > 3: system + task + ai + tool-result).
+		if len(msgs) > 3 {
+			compactionCount++
+			// Return a compacted history: keep system prompt + summary.
+			return []schema.MessageContent{
+				msgs[0], // system prompt
+				schema.NewHumanMessage("[compacted] previous steps summarized"),
+			}
+		}
+		return nil // no compaction needed yet
+	}
+
+	loop, err := NewAgentLoop(model, registry,
+		WithLoopMaxIterations(10),
+		WithLoopCompactionHook(hook),
+	)
+	if err != nil {
+		t.Fatalf("failed to create loop: %v", err)
+	}
+
+	result, err := loop.Run(context.Background(), Task{Description: "test compaction"}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.State != StateComplete {
+		t.Errorf("expected StateComplete, got %s", result.State)
+	}
+	if compactionCount == 0 {
+		t.Error("expected at least one compaction")
+	}
+	if result.Compactions != compactionCount {
+		t.Errorf("Compactions field: want %d, got %d", compactionCount, result.Compactions)
+	}
+}
+
+func TestAgentLoop_CompactionHookNilReturn(t *testing.T) {
+	registry := NewRegistry()
+
+	tool := &mockTool{
+		name:        "noop",
+		description: "does nothing",
+		execFunc: func(ctx context.Context, params map[string]any) (any, error) {
+			return map[string]any{"ok": true}, nil
+		},
+	}
+	_ = registry.Register(tool)
+
+	// LLM: one tool call, then final answer — hook returns nil (no compaction).
+	model := &mockLLM{
+		responses: []string{"thinking", "Done."},
+		toolCalls: [][]llms.ToolCall{
+			{{Function: llms.FunctionCall{Name: "noop", Arguments: map[string]any{}}}},
+		},
+	}
+
+	hookCalled := false
+	hook := func(ctx context.Context, msgs []schema.MessageContent, tokens TokenUsage) []schema.MessageContent {
+		hookCalled = true
+		return nil // signal: no compaction needed
+	}
+
+	loop, err := NewAgentLoop(model, registry,
+		WithLoopCompactionHook(hook),
+	)
+	if err != nil {
+		t.Fatalf("failed to create loop: %v", err)
+	}
+
+	result, err := loop.Run(context.Background(), Task{Description: "no compaction"}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !hookCalled {
+		t.Error("expected compaction hook to be called after tool iteration")
+	}
+	if result.Compactions != 0 {
+		t.Errorf("expected 0 compactions (hook returned nil), got %d", result.Compactions)
+	}
+}
