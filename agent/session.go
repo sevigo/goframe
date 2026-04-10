@@ -23,6 +23,10 @@ type Session struct {
 
 var _ io.Closer = (*Session)(nil)
 
+// Close implements io.Closer by aborting any in-progress work on the session.
+// WARNING: This sends an abort signal to the backend. If you only want to
+// release local resources without interrupting the session, simply discard
+// the Session value instead.
 func (s *Session) Close() error {
 	return s.Abort(context.Background())
 }

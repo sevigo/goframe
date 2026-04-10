@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 )
 
-// MockModel implements Model for testing.
+// MockModel implements SimpleModel for testing.
 type MockModel struct {
 	responses []string
 	index     int
@@ -164,34 +165,21 @@ func TestLLMAssistedVerifier_BuildVerificationPrompt(t *testing.T) {
 	prompt := verifier.buildVerificationPrompt("click", map[string]any{"selector": "#submit-btn"}, "success")
 
 	// Check prompt contains key elements
-	if !contains(prompt, "click") {
+	if !strings.Contains(prompt, "click") {
 		t.Error("prompt should contain tool name")
 	}
-	if !contains(prompt, "#submit-btn") {
+	if !strings.Contains(prompt, "#submit-btn") {
 		t.Error("prompt should contain params")
 	}
-	if !contains(prompt, "success") {
+	if !strings.Contains(prompt, "success") {
 		t.Error("prompt should contain result")
 	}
-	if !contains(prompt, "ACTION_VERIFIED") {
+	if !strings.Contains(prompt, "ACTION_VERIFIED") {
 		t.Error("prompt should request ACTION_VERIFIED marker")
 	}
-	if !contains(prompt, "VERIFICATION_STATUS") {
+	if !strings.Contains(prompt, "VERIFICATION_STATUS") {
 		t.Error("prompt should request VERIFICATION_STATUS")
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 func TestMockApprovalHandler(t *testing.T) {

@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 )
 
 var (
+	// ErrGovernanceDenied is returned when a governance check blocks a tool execution.
 	ErrGovernanceDenied = errors.New("agent: governance check denied tool execution")
 )
 
@@ -181,6 +183,8 @@ func (p *ParameterCheck) Validate(ctx context.Context, toolName string, params m
 }
 
 // RateLimitCheck enforces rate limits on tool execution.
+// Use RecordCall after a successful tool execution to track usage.
+// Validate only checks if the limit has been reached without mutating state.
 type RateLimitCheck struct {
 	limits map[string]*rateLimiter
 	mu     sync.RWMutex
@@ -191,12 +195,14 @@ type rateLimiter struct {
 	max   int
 }
 
+// NewRateLimitCheck creates a new rate-limit checker.
 func NewRateLimitCheck() *RateLimitCheck {
 	return &RateLimitCheck{
 		limits: make(map[string]*rateLimiter),
 	}
 }
 
+// SetLimit configures the max calls allowed for a tool.
 func (r *RateLimitCheck) SetLimit(tool string, maxPerSession int) *RateLimitCheck {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -204,23 +210,35 @@ func (r *RateLimitCheck) SetLimit(tool string, maxPerSession int) *RateLimitChec
 	return r
 }
 
+// Validate checks if a tool execution would exceed the rate limit.
+// It does NOT increment the counter — call RecordCall after a successful execution.
 func (r *RateLimitCheck) Validate(ctx context.Context, toolName string, params map[string]any) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 
 	limiter, ok := r.limits[toolName]
 	if !ok {
 		return nil
 	}
 
-	limiter.count++
-	if limiter.count > limiter.max {
+	if limiter.count >= limiter.max {
 		return fmt.Errorf("tool %q exceeded rate limit of %d calls", toolName, limiter.max)
 	}
 
 	return nil
 }
 
+// RecordCall increments the call counter for a tool.
+// Call this after a tool has been successfully executed.
+func (r *RateLimitCheck) RecordCall(toolName string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if limiter, ok := r.limits[toolName]; ok {
+		limiter.count++
+	}
+}
+
+// Reset resets the call counter for a tool.
 func (r *RateLimitCheck) Reset(tool string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -260,27 +278,13 @@ func (c *ContentSafetyCheck) Validate(ctx context.Context, toolName string, para
 		}
 
 		for _, pattern := range patterns {
-			if containsBlockedPattern(strVal, pattern) {
+			if pattern != "" && strings.Contains(strVal, pattern) {
 				return fmt.Errorf("tool %q contains blocked content in parameter %q", toolName, key)
 			}
 		}
 	}
 
 	return nil
-}
-
-func containsBlockedPattern(content, pattern string) bool {
-	return len(pattern) > 0 && len(content) >= len(pattern) &&
-		(content == pattern || containsSubstring(content, pattern))
-}
-
-func containsSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 // CompositeCheck combines multiple checks into one.

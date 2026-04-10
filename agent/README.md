@@ -519,8 +519,13 @@ handler.OnComplete(func(ctx context.Context, resp agent.Response) error {
 // Attach to agent
 ag, _ := agent.New(
     agent.WithModel("ollama/llama3"),
-    agent.WithEventHandlers(handler.Handle),
 )
+
+// Register event handlers
+ag.GetEventHandler().OnTextPart(func(ctx context.Context, text string) error {
+    fmt.Print(text)
+    return nil
+})
 ```
 
 ### Configuration Files

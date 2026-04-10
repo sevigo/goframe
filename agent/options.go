@@ -11,8 +11,10 @@ import (
 	"github.com/sst/opencode-sdk-go/option"
 )
 
+// Option configures an Agent during construction.
 type Option func(*Agent) error
 
+// WithClient sets a pre-configured OpenCode client.
 func WithClient(client *opencode.Client) Option {
 	return func(a *Agent) error {
 		if client == nil {
@@ -23,6 +25,7 @@ func WithClient(client *opencode.Client) Option {
 	}
 }
 
+// WithBaseURL creates a new OpenCode client configured for the given base URL.
 func WithBaseURL(baseURL string) Option {
 	return func(a *Agent) error {
 		client := opencode.NewClient(option.WithBaseURL(baseURL))
@@ -31,6 +34,7 @@ func WithBaseURL(baseURL string) Option {
 	}
 }
 
+// WithModel sets the primary model identifier (e.g. "ollama/llama3").
 func WithModel(model string) Option {
 	return func(a *Agent) error {
 		a.config.Model = model
@@ -38,6 +42,7 @@ func WithModel(model string) Option {
 	}
 }
 
+// WithSmallModel sets the secondary / lighter model identifier.
 func WithSmallModel(model string) Option {
 	return func(a *Agent) error {
 		a.config.SmallModel = model
@@ -45,6 +50,7 @@ func WithSmallModel(model string) Option {
 	}
 }
 
+// WithAgentType sets the agent type (build, plan, general).
 func WithAgentType(agentType AgentType) Option {
 	return func(a *Agent) error {
 		a.config.AgentType = agentType
@@ -52,6 +58,7 @@ func WithAgentType(agentType AgentType) Option {
 	}
 }
 
+// WithWorkingDir sets the default working directory for new sessions.
 func WithWorkingDir(dir string) Option {
 	return func(a *Agent) error {
 		a.config.WorkingDir = dir
@@ -78,6 +85,7 @@ func WithPathMapping(mapping map[string]string) Option {
 	}
 }
 
+// WithMCPServers registers one or more MCP servers with the agent.
 func WithMCPServers(servers ...*MCPServer) Option {
 	return func(a *Agent) error {
 		if a.mcp == nil {
@@ -92,6 +100,7 @@ func WithMCPServers(servers ...*MCPServer) Option {
 	}
 }
 
+// WithMCPRegistry replaces the agent's MCP registry.
 func WithMCPRegistry(registry *MCPRegistry) Option {
 	return func(a *Agent) error {
 		a.mcp = registry
@@ -99,6 +108,7 @@ func WithMCPRegistry(registry *MCPRegistry) Option {
 	}
 }
 
+// WithPermissions sets the agent's permission configuration.
 func WithPermissions(perm *PermissionConfig) Option {
 	return func(a *Agent) error {
 		a.config.Permissions = perm
@@ -106,6 +116,7 @@ func WithPermissions(perm *PermissionConfig) Option {
 	}
 }
 
+// WithLogger sets the agent's structured logger.
 func WithLogger(logger *slog.Logger) Option {
 	return func(a *Agent) error {
 		if logger == nil {
@@ -116,6 +127,7 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
+// WithPermissionHandler sets a custom handler for interactive permission requests.
 func WithPermissionHandler(handler PermissionHandler) Option {
 	return func(a *Agent) error {
 		a.permissionHandler = handler
@@ -123,8 +135,10 @@ func WithPermissionHandler(handler PermissionHandler) Option {
 	}
 }
 
+// SessionOption configures a new Session.
 type SessionOption func(*SessionConfig)
 
+// SessionConfig holds session-creation parameters.
 type SessionConfig struct {
 	Title     string
 	ParentID  string
@@ -132,24 +146,30 @@ type SessionConfig struct {
 	ProjectID string
 }
 
+// WithTitle sets the session title.
 func WithTitle(title string) SessionOption {
 	return func(c *SessionConfig) {
 		c.Title = title
 	}
 }
 
+// WithParentID sets the parent session ID for branching.
 func WithParentID(parentID string) SessionOption {
 	return func(c *SessionConfig) {
 		c.ParentID = parentID
 	}
 }
 
+// WithDirectory sets the working directory for the session.
 func WithDirectory(dir string) SessionOption {
 	return func(c *SessionConfig) {
 		c.Directory = dir
 	}
 }
 
+// WithProjectID sets the project ID.
+// NOTE: This field is stored locally but is not currently sent to the
+// OpenCode API. It is reserved for future use.
 func WithProjectID(projectID string) SessionOption {
 	return func(c *SessionConfig) {
 		c.ProjectID = projectID

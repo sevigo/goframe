@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -77,7 +78,7 @@ type ActionVerifier interface {
 
 // LLMAssistedVerifier uses an LLM to verify action results.
 type LLMAssistedVerifier struct {
-	model      Model
+	model      SimpleModel
 	logger     *slog.Logger
 	maxRetries int
 }
@@ -86,7 +87,7 @@ type LLMAssistedVerifier struct {
 type LLMAssistedVerifierOption func(*LLMAssistedVerifier)
 
 // NewLLMAssistedVerifier creates a verifier that uses an LLM for verification.
-func NewLLMAssistedVerifier(model Model, opts ...LLMAssistedVerifierOption) *LLMAssistedVerifier {
+func NewLLMAssistedVerifier(model SimpleModel, opts ...LLMAssistedVerifierOption) *LLMAssistedVerifier {
 	v := &LLMAssistedVerifier{
 		model:      model,
 		logger:     slog.Default(),
@@ -197,15 +198,18 @@ func (v *LLMAssistedVerifier) parseVerificationResult(response string) VerifierR
 	return result
 }
 
-// Model is a minimal LLM interface for verification.
-type Model interface {
+// SimpleModel is a minimal LLM interface for verification.
+// It provides a simpler API than llms.Model, suitable for single-prompt use cases.
+type SimpleModel interface {
 	Call(ctx context.Context, prompt string) (string, error)
 }
 
 // DefaultRiskAssessor provides basic risk assessment.
+// It is safe for concurrent use once fully configured.
 type DefaultRiskAssessor struct {
 	highRiskTools     map[string]bool
 	criticalRiskTools map[string]bool
+	mu                sync.RWMutex
 }
 
 // NewDefaultRiskAssessor creates a risk assessor with sensible defaults.
@@ -236,6 +240,9 @@ func NewDefaultRiskAssessor() *DefaultRiskAssessor {
 
 // AssessRisk evaluates the risk level of a tool execution.
 func (r *DefaultRiskAssessor) AssessRisk(ctx context.Context, toolName string, params map[string]any) RiskLevel {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	// Check critical tools
 	if r.criticalRiskTools[toolName] {
 		return RiskCritical
@@ -312,11 +319,15 @@ func (r *DefaultRiskAssessor) isWriteOperation(toolName string) bool {
 
 // AddHighRiskTool marks a tool as high-risk.
 func (r *DefaultRiskAssessor) AddHighRiskTool(toolName string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.highRiskTools[toolName] = true
 }
 
 // AddCriticalRiskTool marks a tool as critical-risk.
 func (r *DefaultRiskAssessor) AddCriticalRiskTool(toolName string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.criticalRiskTools[toolName] = true
 }
 

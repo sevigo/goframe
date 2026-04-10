@@ -166,14 +166,16 @@ func TestRateLimitCheck(t *testing.T) {
 	if err != nil {
 		t.Errorf("first call failed: %v", err)
 	}
+	check.RecordCall("test")
 
 	// Second call should succeed
 	err = check.Validate(context.Background(), "test", nil)
 	if err != nil {
 		t.Errorf("second call failed: %v", err)
 	}
+	check.RecordCall("test")
 
-	// Third call should fail
+	// Third call should fail (limit is 2)
 	err = check.Validate(context.Background(), "test", nil)
 	if err == nil {
 		t.Error("expected error on third call")

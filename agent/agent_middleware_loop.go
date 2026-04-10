@@ -158,11 +158,18 @@ func (l *AgentLoopWithMiddleware) Run(ctx context.Context, task Task, history []
 		)
 
 		// THINK: Call LLM
-		response, toolCalls, err := l.think(ctx, messages)
+		response, toolCalls, tokens, err := l.think(ctx, messages)
 		if err != nil {
 			result.State = StateError
 			return result, fmt.Errorf("think phase failed: %w", err)
 		}
+
+		// Accumulate token usage.
+		result.Tokens.Input += tokens.Input
+		result.Tokens.Output += tokens.Output
+		result.Tokens.Reasoning += tokens.Reasoning
+		result.Tokens.CacheRead += tokens.CacheRead
+		result.Tokens.CacheWrite += tokens.CacheWrite
 
 		// Add AI response to history
 		messages = append(messages, schema.NewAIMessage(response))

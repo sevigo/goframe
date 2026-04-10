@@ -2,17 +2,8 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
-)
-
-var (
-	ErrReviewRejected  = errors.New("review rejected")
-	ErrMaxRetries      = errors.New("max retries exceeded")
-	ErrToolNotFound    = errors.New("tool not found")
-	ErrReviewFailed    = errors.New("review failed")
-	ErrExecutionFailed = errors.New("execution failed")
 )
 
 type ReviewResult struct {
@@ -222,7 +213,7 @@ func (fl *FeedbackLoop) runPRTool(ctx context.Context, implementation string, re
 	return err
 }
 
-func (fl *FeedbackLoop) defaultReview(implementation string) *ReviewResult {
+func (fl *FeedbackLoop) defaultReview(_ string) *ReviewResult {
 	return &ReviewResult{
 		Approved: true,
 		Feedback: "Auto-approved (no review handler configured)",

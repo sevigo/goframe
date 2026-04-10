@@ -1,9 +1,5 @@
 package agent
 
-// Package agent provides an abstraction layer for AI agent loops.
-//
-// The agent package enables programmatic control of AI agents with support
-// for tool execution, risk assessment, and governance policies.
 import (
 	"context"
 	"fmt"
@@ -24,25 +20,12 @@ const (
 	AgentTypeGeneral AgentType = "general"
 )
 
-type HookConfig struct {
-	OnSessionComplete []HookFunc
-	OnFileEdited      []HookFunc
-}
-
-type HookFunc func(ctx context.Context, event HookEvent) error
-
-type HookEvent struct {
-	Type      string
-	SessionID string
-	Data      map[string]interface{}
-}
-
+// Config holds the full agent configuration.
 type Config struct {
 	Model       string
 	SmallModel  string
 	AgentType   AgentType
 	Permissions *PermissionConfig
-	Hooks       *HookConfig
 	WorkingDir  string
 	// PathMapping maps host paths to container paths for Docker-based agents
 	PathMapping map[string]string
@@ -270,6 +253,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string, opts ...PromptOption) (*
 }
 
 // Stream sends a one-off prompt and returns a channel for streaming responses.
+// The session is automatically closed after the returned channel is drained.
 // Note: This creates a new session for each call. For multiple prompts,
 // use NewSession and session.PromptStream instead to reuse the session.
 func (a *Agent) Stream(ctx context.Context, prompt string, opts ...PromptOption) (<-chan Event, error) {
@@ -278,11 +262,25 @@ func (a *Agent) Stream(ctx context.Context, prompt string, opts ...PromptOption)
 		return nil, err
 	}
 
-	// Note: Session is NOT closed here because the goroutine in PromptStream
-	// may still be using it. The caller is responsible for cleanup if needed.
-	// For one-off streaming, consider the session auto-cleaned after completion.
+	inner, err := session.PromptStream(ctx, prompt, opts...)
+	if err != nil {
+		if closeErr := session.Close(); closeErr != nil {
+			a.logger.Warn("failed to close session after stream error", "error", closeErr)
+		}
+		return nil, err
+	}
 
-	return session.PromptStream(ctx, prompt, opts...)
+	// Wrap the inner channel so we can close the session after it's drained.
+	outer := make(chan Event, cap(inner))
+	go func() {
+		defer close(outer)
+		defer session.Close()
+		for event := range inner {
+			outer <- event
+		}
+	}()
+
+	return outer, nil
 }
 
 func (a *Agent) GetClient() *opencode.Client {

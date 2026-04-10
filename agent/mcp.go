@@ -284,23 +284,26 @@ func (r *MCPRegistry) Clear() {
 	r.servers = make(map[string]*MCPServer)
 }
 
-// Merge combines another registry into this one
+// Merge combines another registry into this one.
+// Both registries are locked during the operation to prevent data races.
 func (r *MCPRegistry) Merge(other *MCPRegistry) error {
 	if other == nil {
 		return nil
 	}
 
+	// Lock r first (write), then other (read) — deterministic order prevents deadlock.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	other.mu.RLock()
 	defer other.mu.RUnlock()
 
+	// Check for conflicts while both locks are held.
 	for name := range other.servers {
 		if _, exists := r.servers[name]; exists {
 			return newMCPError(name, ErrMCPServerExists)
 		}
 	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	for name, server := range other.servers {
 		r.servers[name] = server
