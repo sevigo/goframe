@@ -430,3 +430,75 @@ func (h *MockApprovalHandler) RequestApproval(ctx context.Context, req HumanAppr
 	// Default: require human approval
 	return false, errors.New("mock handler: human approval required but not configured")
 }
+
+// RiskAssessmentMiddleware returns an ActionMiddleware that evaluates tool risks
+// and requests human approval for tools exceeding the risk threshold.
+func RiskAssessmentMiddleware(assessor RiskAssessor, handler HumanApprovalHandler, threshold RiskLevel, timeout time.Duration) ActionMiddleware {
+	return func(next ActionHandler) ActionHandler {
+		return func(ctx context.Context, toolName string, params map[string]any) (any, error) {
+			if assessor != nil {
+				riskLevel := assessor.AssessRisk(ctx, toolName, params)
+				slog.Debug("risk assessment", "tool", toolName, "risk_level", riskLevel)
+
+				if riskLevel >= threshold && handler != nil {
+					req := HumanApprovalRequest{
+						ToolName:  toolName,
+						Params:    params,
+						RiskLevel: riskLevel,
+						Reason:    fmt.Sprintf("Tool '%s' is classified as high-risk operation", toolName),
+						Impact:    "May cause irreversible changes or access external resources",
+						Timeout:   timeout,
+					}
+
+					slog.Info("requesting human approval", "tool", toolName, "risk", riskLevel)
+
+					approval, err := handler.RequestApproval(ctx, req)
+					if err != nil {
+						slog.Error("human approval failed", "tool", toolName, "error", err)
+						return nil, fmt.Errorf("HUMAN_APPROVAL_ERROR: %w", err)
+					}
+					if !approval {
+						slog.Warn("action rejected by human", "tool", toolName)
+						return nil, ErrHumanInterventionRequired
+					}
+				}
+			}
+			return next(ctx, toolName, params)
+		}
+	}
+}
+
+// ActionVerificationMiddleware returns an ActionMiddleware that verifies action results.
+// It will error with ErrActionFailedVerification if validation fails. The error includes
+// the reason and correction so the LLM gets this in the observation message to self-heal.
+func ActionVerificationMiddleware(verifier ActionVerifier) ActionMiddleware {
+	return func(next ActionHandler) ActionHandler {
+		return func(ctx context.Context, toolName string, params map[string]any) (any, error) {
+			// First execute the actual tool
+			result, err := next(ctx, toolName, params)
+			if err != nil {
+				return result, err // if it failed naturally, let LLM handle it
+			}
+
+			if verifier != nil {
+				vr, verr := verifier.VerifyAction(ctx, toolName, params, result)
+				if verr != nil {
+					slog.Error("verification execution failed", "tool", toolName, "error", verr)
+					return result, nil // verification system logic failed, fallback to returning original result safely
+				}
+
+				if !vr.Verified {
+					slog.Warn("action verification failed",
+						"tool", toolName,
+						"reason", vr.Reason,
+						"correction", vr.Correction,
+					)
+					// Return an error so the LLM gets this in the observation message to self heal
+					return nil, fmt.Errorf("%w: %s. Suggested correction: %s", ErrActionFailedVerification, vr.Reason, vr.Correction)
+				}
+				slog.Info("action verified successfully", "tool", toolName)
+			}
+			return result, nil
+		}
+	}
+}
