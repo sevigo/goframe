@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -203,10 +205,14 @@ func WithLoopCompactionHook(fn func(ctx context.Context, msgs []schema.MessageCo
 	}
 }
 
-// generateTraceID creates a default trace ID if none is provided.
+// generateDefaultTraceID creates a random trace ID without external dependencies.
 func generateDefaultTraceID() string {
-	// Simple UUID-like ID without external dependencies
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp if crypto/rand fails (extremely unlikely).
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }
 
 // Run executes the autonomous loop for a given task and session.
@@ -249,11 +255,18 @@ func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.Message
 		)
 
 		// THINK: Call LLM with available tools
-		response, toolCalls, err := l.think(ctx, messages)
+		response, toolCalls, tokens, err := l.think(ctx, messages)
 		if err != nil {
 			result.State = StateError
 			return result, fmt.Errorf("think phase failed: %w", err)
 		}
+
+		// Accumulate token usage.
+		result.Tokens.Input += tokens.Input
+		result.Tokens.Output += tokens.Output
+		result.Tokens.Reasoning += tokens.Reasoning
+		result.Tokens.CacheRead += tokens.CacheRead
+		result.Tokens.CacheWrite += tokens.CacheWrite
 
 		// Add AI response to history
 		messages = append(messages, schema.NewAIMessage(response))
@@ -307,6 +320,7 @@ func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.Message
 // trimImageMessages keeps only the most recent N images in the message history.
 // This prevents context overflow when many screenshots are taken during execution.
 // Images in the most recent messages are preserved, older ones are removed.
+// The returned slice is a new allocation; original messages are never mutated.
 func trimImageMessages(messages []schema.MessageContent, maxImages int) []schema.MessageContent {
 	imageCount := 0
 	trimmed := make([]schema.MessageContent, 0, len(messages))
@@ -327,19 +341,22 @@ func trimImageMessages(messages []schema.MessageContent, maxImages int) []schema
 		if hasImage {
 			imageCount++
 			if imageCount > maxImages {
-				// Remove image parts from this message
-				newParts := make([]schema.ContentPart, 0)
+				// Build a copy with image parts removed — never mutate the original.
+				newParts := make([]schema.ContentPart, 0, len(msg.Parts))
 				for _, part := range msg.Parts {
 					if _, isImage := part.(schema.ImageContent); !isImage {
 						newParts = append(newParts, part)
 					}
 				}
-				msg.Parts = newParts
-				// Add text note that image was trimmed
-				if len(msg.Parts) == 0 {
-					msg.Parts = []schema.ContentPart{
+				if len(newParts) == 0 {
+					newParts = []schema.ContentPart{
 						schema.TextContent{Text: "[Image trimmed to save context space]"},
 					}
+				}
+				// Create a new MessageContent; do NOT assign back to msg.Parts.
+				msg = schema.MessageContent{
+					Role:  msg.Role,
+					Parts: newParts,
 				}
 			}
 		}
@@ -351,7 +368,10 @@ func trimImageMessages(messages []schema.MessageContent, maxImages int) []schema
 }
 
 // think calls the LLM with the current context and available tools.
-func (l *AgentLoop) think(ctx context.Context, messages []schema.MessageContent) (string, []llms.ToolCall, error) {
+// It returns the text response, any tool calls, the token usage for this call, and an error.
+func (l *AgentLoop) think(ctx context.Context, messages []schema.MessageContent) (string, []llms.ToolCall, TokenUsage, error) {
+	var tokens TokenUsage
+
 	// Build tool definitions from registry
 	toolDefs := l.registry.Definitions()
 	tools := make([]llms.ToolDefinition, len(toolDefs))
@@ -380,14 +400,24 @@ func (l *AgentLoop) think(ctx context.Context, messages []schema.MessageContent)
 
 	response, err := l.model.GenerateContent(ctx, messages, opts...)
 	if err != nil {
-		return "", nil, fmt.Errorf("LLM call failed: %w", err)
+		return "", nil, tokens, fmt.Errorf("LLM call failed: %w", err)
 	}
 
 	if len(response.Choices) == 0 {
-		return "", nil, errors.New("empty response from LLM")
+		return "", nil, tokens, errors.New("empty response from LLM")
 	}
 
 	choice := response.Choices[0]
+
+	// Extract token usage from generation info if available.
+	if genInfo := choice.GenerationInfo; genInfo != nil {
+		if v, ok := genInfo["InputTokens"].(float64); ok {
+			tokens.Input = v
+		}
+		if v, ok := genInfo["OutputTokens"].(float64); ok {
+			tokens.Output = v
+		}
+	}
 
 	// Check for tool calls in generation info
 	var toolCalls []llms.ToolCall
@@ -400,7 +430,7 @@ func (l *AgentLoop) think(ctx context.Context, messages []schema.MessageContent)
 		}
 	}
 
-	return choice.Content, toolCalls, nil
+	return choice.Content, toolCalls, tokens, nil
 }
 
 // actAndObserve executes tools and returns observations for the LLM.

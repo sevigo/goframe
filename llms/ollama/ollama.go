@@ -5,14 +5,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
-
-	"log/slog"
 
 	"github.com/ollama/ollama/api"
 
@@ -72,7 +71,7 @@ func New(opts ...Option) (*LLM, error) {
 	o := applyOptions(opts...)
 
 	if o.model == "" {
-		o.model = "llama3" // Default model if none specified
+		o.model = "gemma4" // Default model if none specified
 	}
 
 	defaultURL := "http://127.0.0.1:11434"
@@ -138,7 +137,7 @@ func (o *LLM) Call(ctx context.Context, prompt string, options ...llms.CallOptio
 // buildChatMessages converts schema messages to API messages.
 func buildChatMessages(messages []schema.MessageContent) []api.Message {
 	chatMsgs := make([]api.Message, 0, len(messages))
-	for i, mc := range messages {
+	for _, mc := range messages {
 		msg := api.Message{
 			Role:    typeToRole(mc.Role),
 			Content: mc.String(),
