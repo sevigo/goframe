@@ -13,7 +13,6 @@ require (
 	github.com/mmcdole/gofeed v1.3.0
 	github.com/ollama/ollama v0.20.5
 	github.com/qdrant/go-client v1.17.1
-	github.com/sst/opencode-sdk-go v0.19.2
 	github.com/stretchr/testify v1.11.1
 	github.com/sugarme/tokenizer v0.3.0
 	github.com/yoheimuta/go-protoparser/v4 v4.14.2

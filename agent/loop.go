@@ -62,6 +62,15 @@ type LoopResult struct {
 	Compactions int
 }
 
+// TokenUsage tracks the token consumption of the LLM.
+type TokenUsage struct {
+	Input      float64
+	Output     float64
+	Reasoning  float64
+	CacheRead  float64
+	CacheWrite float64
+}
+
 // ToolCallRecord records a single tool execution.
 type ToolCallRecord struct {
 	// Name is the tool that was called.
@@ -72,6 +81,21 @@ type ToolCallRecord struct {
 	Result any
 	// Error is any error that occurred during execution.
 	Error error
+}
+
+// ActionHandler executes a tool with the given parameters and context.
+type ActionHandler func(ctx context.Context, toolName string, params map[string]any) (any, error)
+
+// ActionMiddleware intercepts tool execution in the AgentLoop.
+type ActionMiddleware func(next ActionHandler) ActionHandler
+
+// AgentObserver allows tracking the lifecycle of an AgentLoop execution for telemetry.
+type AgentObserver interface {
+	OnIterationStart(ctx context.Context, iteration int)
+	OnThinkComplete(ctx context.Context, response string, toolCalls []llms.ToolCall, tokens TokenUsage, err error)
+	OnToolCall(ctx context.Context, toolName string, params map[string]any)
+	OnToolResult(ctx context.Context, toolName string, params map[string]any, result any, duration time.Duration, err error)
+	OnLoopComplete(ctx context.Context, result *LoopResult, err error)
 }
 
 // NativeLoopOption configures the agent loop.
@@ -96,7 +120,7 @@ type AgentLoop struct {
 	// GenerateTraceID generates a unique trace ID for the loop.
 	// If nil, a default UUID-based ID is generated.
 	GenerateTraceID func() string
-	// MaxImagesInContext limits the number of images kept in conversation history.
+	// maxImagesInContext limits the number of images kept in conversation history.
 	// Set to 0 (default) to keep all images, or a positive integer to limit.
 	// This helps prevent context overflow when many screenshots are taken.
 	maxImagesInContext int
@@ -105,6 +129,11 @@ type AgentLoop struct {
 	// the conversation history (minus the system prompt, which is preserved).
 	// Use this to implement context summarization when approaching token limits.
 	compactionHook func(ctx context.Context, msgs []schema.MessageContent, tokens TokenUsage) []schema.MessageContent
+
+	// middlewares wrap the core tool execution registry
+	middlewares []ActionMiddleware
+	// observer records metrics and telemetry
+	observer AgentObserver
 }
 
 // NewAgentLoop creates a new agent loop with the given configuration.
@@ -205,6 +234,20 @@ func WithLoopCompactionHook(fn func(ctx context.Context, msgs []schema.MessageCo
 	}
 }
 
+// WithLoopMiddleware adds a tool execution middleware to the loop.
+func WithLoopMiddleware(mw ActionMiddleware) NativeLoopOption {
+	return func(l *AgentLoop) {
+		l.middlewares = append(l.middlewares, mw)
+	}
+}
+
+// WithLoopObserver sets an observer for loop telemetry.
+func WithLoopObserver(obs AgentObserver) NativeLoopOption {
+	return func(l *AgentLoop) {
+		l.observer = obs
+	}
+}
+
 // generateDefaultTraceID creates a random trace ID without external dependencies.
 func generateDefaultTraceID() string {
 	b := make([]byte, 16)
@@ -245,8 +288,16 @@ func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.Message
 		select {
 		case <-ctx.Done():
 			result.State = StateError
-			return result, ErrLoopCancelled
+			err := ErrLoopCancelled
+			if l.observer != nil {
+				l.observer.OnLoopComplete(ctx, result, err)
+			}
+			return result, err
 		default:
+		}
+
+		if l.observer != nil {
+			l.observer.OnIterationStart(ctx, i+1)
 		}
 
 		logger.Debug("starting iteration",
@@ -256,9 +307,18 @@ func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.Message
 
 		// THINK: Call LLM with available tools
 		response, toolCalls, tokens, err := l.think(ctx, messages)
+
+		if l.observer != nil {
+			l.observer.OnThinkComplete(ctx, response, toolCalls, tokens, err)
+		}
+
 		if err != nil {
 			result.State = StateError
-			return result, fmt.Errorf("think phase failed: %w", err)
+			err = fmt.Errorf("think phase failed: %w", err)
+			if l.observer != nil {
+				l.observer.OnLoopComplete(ctx, result, err)
+			}
+			return result, err
 		}
 
 		// Accumulate token usage.
@@ -280,6 +340,9 @@ func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.Message
 				"iterations", result.Iterations,
 				"response_length", len(response),
 			)
+			if l.observer != nil {
+				l.observer.OnLoopComplete(ctx, result, nil)
+			}
 			return result, nil
 		}
 
@@ -314,7 +377,11 @@ func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.Message
 	}
 
 	result.State = StateError
-	return result, fmt.Errorf("%w (max: %d)", ErrMaxIterations, l.maxIterations)
+	err := fmt.Errorf("%w (max: %d)", ErrMaxIterations, l.maxIterations)
+	if l.observer != nil {
+		l.observer.OnLoopComplete(ctx, result, err)
+	}
+	return result, err
 }
 
 // trimImageMessages keeps only the most recent N images in the message history.
@@ -438,6 +505,14 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 	toolRecords := make([]ToolCallRecord, 0, len(toolCalls))
 	observations := make([]schema.MessageContent, 0, len(toolCalls))
 
+	// Pre-build middleware chain
+	handler := func(ctx context.Context, toolName string, params map[string]any) (any, error) {
+		return l.registry.Execute(ctx, toolName, params)
+	}
+	for i := len(l.middlewares) - 1; i >= 0; i-- {
+		handler = l.middlewares[i](handler)
+	}
+
 	for _, tc := range toolCalls {
 		toolName := tc.Function.Name
 		params := tc.Function.Arguments
@@ -447,6 +522,10 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 			if propsMap, ok := props.(map[string]any); ok {
 				params = propsMap
 			}
+		}
+
+		if l.observer != nil {
+			l.observer.OnToolCall(ctx, toolName, params)
 		}
 
 		l.logger.DebugContext(ctx, "executing tool",
@@ -477,10 +556,14 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 			}
 		}
 
-		// Execute the tool
+		// Execute the tool through middleware chain
 		startTime := time.Now()
-		result, err := l.registry.Execute(ctx, toolName, params)
+		result, err := handler(ctx, toolName, params)
 		duration := time.Since(startTime)
+
+		if l.observer != nil {
+			l.observer.OnToolResult(ctx, toolName, params, result, duration, err)
+		}
 
 		record.Result = result
 		record.Error = err
