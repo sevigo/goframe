@@ -412,7 +412,7 @@ type loggingTool struct {
 }
 
 func (t *loggingTool) Execute(ctx context.Context, params map[string]any) (any, error) {
-	t.logger.Debug("executing tool",
+	t.logger.DebugContext(ctx, "executing tool",
 		"name", t.Name(),
 		"params", params,
 	)

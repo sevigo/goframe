@@ -157,8 +157,6 @@ func buildChatMessages(messages []schema.MessageContent) []api.Message {
 				msg.Images = append(msg.Images, api.ImageData(imageBytes))
 			}
 		}
-		// Debug: log what GetImages returns
-		slog.Info("buildChatMessages", "index", i, "role", typeToRole(mc.Role), "parts_count", len(mc.Parts), "images_found", len(images), "images_in_msg", len(msg.Images))
 		chatMsgs = append(chatMsgs, msg)
 	}
 	return chatMsgs
@@ -266,7 +264,7 @@ func (o *LLM) GenerateContent(
 	for i, m := range req.Messages {
 		msgRoles[i] = fmt.Sprintf("%s(images=%d)", m.Role, len(m.Images))
 	}
-	o.logger.InfoContext(ctx, "Sending chat request",
+	o.logger.DebugContext(ctx, "Sending chat request",
 		"model", model,
 		"msg_count", msgCount,
 		"msg_roles", msgRoles,
@@ -316,7 +314,7 @@ func (o *LLM) GenerateContent(
 		},
 	}
 
-	o.logger.InfoContext(ctx, "Content generation completed", "duration", duration)
+	o.logger.DebugContext(ctx, "Content generation completed", "duration", duration)
 	return response, nil
 }
 
