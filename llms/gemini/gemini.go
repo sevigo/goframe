@@ -95,7 +95,7 @@ func (g *LLM) GenerateContent(
 
 	// Create the generation configuration for this specific call.
 	genConfig := &genai.GenerateContentConfig{}
-	if callOpts.Temperature > 0 {
+	if callOpts.TemperatureSet() {
 		genConfig.Temperature = genai.Ptr(float32(callOpts.Temperature))
 	}
 

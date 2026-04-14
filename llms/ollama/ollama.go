@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -52,12 +53,12 @@ func maskAPIKey(key string) string {
 }
 
 type LLM struct {
-	client      *api.Client
-	options     options
-	logger      *slog.Logger
-	details     *schema.ModelDetails
-	detailsOnce sync.Once
-	detailsErr  error
+	client     *api.Client
+	options    options
+	logger     *slog.Logger
+	details    *schema.ModelDetails
+	detailsMu  sync.RWMutex
+	detailsErr error
 }
 
 var (
@@ -71,7 +72,7 @@ func New(opts ...Option) (*LLM, error) {
 	o := applyOptions(opts...)
 
 	if o.model == "" {
-		o.model = "gemma4" // Default model if none specified
+		o.model = "gemma4"
 	}
 
 	defaultURL := "http://127.0.0.1:11434"
@@ -86,7 +87,7 @@ func New(opts ...Option) (*LLM, error) {
 
 	httpClient := o.httpClient
 	if httpClient == nil {
-		httpClient = defaultHTTPClient
+		httpClient = cloneDefaultHTTPClient()
 	}
 
 	if o.apiKey != "" {
@@ -94,28 +95,16 @@ func New(opts ...Option) (*LLM, error) {
 			base:   httpClient.Transport,
 			apiKey: o.apiKey,
 		}
+		if at.base == nil {
+			at.base = newOptimizedTransport()
+		}
 		httpClient = &http.Client{
 			Transport: at,
 			Timeout:   httpClient.Timeout,
 		}
-		if at.base == nil {
-			// Create a specialized transport for high concurrency
-			if t, ok := http.DefaultTransport.(*http.Transport); ok {
-				newTransport := t.Clone()
-				newTransport.MaxIdleConns = 100
-				newTransport.MaxIdleConnsPerHost = 20 // Optimize for concurrent ingestion (4-8 workers)
-				at.base = newTransport
-			}
-		}
-		slog.Debug("Ollama client initialized with API key", "prefix", maskAPIKey(o.apiKey))
+		o.logger.Debug("Ollama client initialized with API key", "prefix", maskAPIKey(o.apiKey))
 	} else if httpClient.Transport == nil {
-		// Optimize default transport if no API key but default client
-		if t, ok := http.DefaultTransport.(*http.Transport); ok {
-			newTransport := t.Clone()
-			newTransport.MaxIdleConns = 100
-			newTransport.MaxIdleConnsPerHost = 20
-			httpClient.Transport = newTransport
-		}
+		httpClient.Transport = newOptimizedTransport()
 	}
 
 	client := api.NewClient(serverURL, httpClient)
@@ -128,6 +117,34 @@ func New(opts ...Option) (*LLM, error) {
 
 	llm.logger.Info("Ollama LLM initialized successfully")
 	return llm, nil
+}
+
+// cloneDefaultHTTPClient returns a copy of the default HTTP client
+// so the package-level default is never mutated.
+func cloneDefaultHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout:   defaultHTTPClient.Timeout,
+		Transport: defaultHTTPClient.Transport,
+	}
+}
+
+// newOptimizedTransport creates an http.Transport tuned for concurrent Ollama requests.
+func newOptimizedTransport() *http.Transport {
+	t, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return &http.Transport{
+			MaxIdleConns:        DefaultMaxIdleConns,
+			MaxIdleConnsPerHost: DefaultMaxIdleConnsHost,
+			IdleConnTimeout:     DefaultIdleConnTimeout,
+			TLSHandshakeTimeout: DefaultTLSHandshakeTimeout,
+		}
+	}
+	cloned := t.Clone()
+	cloned.MaxIdleConns = DefaultMaxIdleConns
+	cloned.MaxIdleConnsPerHost = DefaultMaxIdleConnsHost
+	cloned.IdleConnTimeout = DefaultIdleConnTimeout
+	cloned.TLSHandshakeTimeout = DefaultTLSHandshakeTimeout
+	return cloned
 }
 
 func (o *LLM) Call(ctx context.Context, prompt string, options ...llms.CallOption) (string, error) {
@@ -162,31 +179,39 @@ func buildChatMessages(messages []schema.MessageContent) []api.Message {
 }
 
 // buildOllamaOptions converts CallOptions to Ollama options map.
+// Returns nil when no options are set, avoiding unnecessary allocations.
 func buildOllamaOptions(opts llms.CallOptions) map[string]any {
-	ollamaOpts := map[string]any{}
-	if opts.Temperature > 0 {
-		ollamaOpts["temperature"] = float32(opts.Temperature)
+	var ollamaOpts map[string]any
+	set := func(key string, val any) {
+		if ollamaOpts == nil {
+			ollamaOpts = map[string]any{}
+		}
+		ollamaOpts[key] = val
+	}
+
+	if opts.TemperatureSet() {
+		set("temperature", float32(opts.Temperature))
 	}
 	if opts.MaxTokens > 0 {
-		ollamaOpts["num_predict"] = opts.MaxTokens
+		set("num_predict", opts.MaxTokens)
 	}
 	if len(opts.StopWords) > 0 {
-		ollamaOpts["stop"] = opts.StopWords
+		set("stop", opts.StopWords)
 	}
-	if opts.TopP > 0 {
-		ollamaOpts["top_p"] = float32(opts.TopP)
+	if opts.TopPSet() {
+		set("top_p", float32(opts.TopP))
 	}
-	if opts.TopK > 0 {
-		ollamaOpts["top_k"] = opts.TopK
+	if opts.TopKSet() {
+		set("top_k", opts.TopK)
 	}
-	if opts.MinP > 0 {
-		ollamaOpts["min_p"] = float32(opts.MinP)
+	if opts.MinPSet() {
+		set("min_p", float32(opts.MinP))
 	}
-	if opts.Seed > 0 {
-		ollamaOpts["seed"] = opts.Seed
+	if opts.SeedSet() {
+		set("seed", opts.Seed)
 	}
 	if opts.ContextLength > 0 {
-		ollamaOpts["num_ctx"] = opts.ContextLength
+		set("num_ctx", opts.ContextLength)
 	}
 	return ollamaOpts
 }
@@ -274,12 +299,20 @@ func (o *LLM) GenerateContent(
 	}
 
 	handler := &chatResponseHandler{streamingFn: opts.StreamingFunc}
-	err := o.doWithRetry(ctx, func() error {
+	isStreaming := opts.StreamingFunc != nil
+	fn := func() error {
 		handler.reset()
 		return o.client.Chat(ctx, req, func(response api.ChatResponse) error {
 			return handler.handle(ctx, response)
 		})
-	})
+	}
+
+	var err error
+	if isStreaming {
+		err = fn()
+	} else {
+		err = o.doWithRetry(ctx, fn)
+	}
 
 	duration := time.Since(start)
 	if err != nil {
@@ -290,7 +323,12 @@ func (o *LLM) GenerateContent(
 	genInfo := o.buildGenerationInfo(handler, finalResp(handler), model, duration)
 	response := &schema.ContentResponse{
 		Choices: []*schema.ContentChoice{
-			{Content: handler.fullResponse.String(), GenerationInfo: genInfo},
+			{
+				Content:          handler.fullResponse.String(),
+				StopReason:       finalResp(handler).DoneReason,
+				GenerationInfo:   genInfo,
+				ReasoningContent: handler.thinking.String(),
+			},
 		},
 	}
 
@@ -307,8 +345,11 @@ func (o *LLM) buildChatRequest(model string, messages []schema.MessageContent, o
 	req := &api.ChatRequest{
 		Model:    model,
 		Messages: buildChatMessages(messages),
-		Options:  buildOllamaOptions(opts),
 		Stream:   new(bool),
+	}
+	ollamaOpts := buildOllamaOptions(opts)
+	if len(ollamaOpts) > 0 {
+		req.Options = ollamaOpts
 	}
 	*req.Stream = opts.StreamingFunc != nil
 
@@ -364,9 +405,6 @@ func (o *LLM) buildGenerationInfo(handler *chatResponseHandler, finalResp api.Ch
 		"TotalTokens":      finalResp.EvalCount + finalResp.PromptEvalCount,
 		"Duration":         duration,
 		"Model":            model,
-	}
-	if handler.thinking.Len() > 0 {
-		genInfo["Thinking"] = handler.thinking.String()
 	}
 	if len(handler.toolCalls) > 0 {
 		genInfo["ToolCalls"] = handler.toolCalls
@@ -559,7 +597,7 @@ func (o *LLM) EmbedQueryWithOpts(ctx context.Context, text string, opts embeddin
 		return err
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ollama embed failing: %w", err)
 	}
 
 	if len(resp.Embeddings) == 0 {
@@ -570,10 +608,38 @@ func (o *LLM) EmbedQueryWithOpts(ctx context.Context, text string, opts embeddin
 }
 
 func (o *LLM) GetModelDetails(ctx context.Context) (*schema.ModelDetails, error) {
-	o.detailsOnce.Do(func() {
-		o.details, o.detailsErr = o.fetchModelDetails(ctx)
-	})
-	return o.details, o.detailsErr
+	o.detailsMu.RLock()
+	if o.details != nil && o.detailsErr == nil {
+		d := o.details
+		o.detailsMu.RUnlock()
+		return d, nil
+	}
+	o.detailsMu.RUnlock()
+
+	o.detailsMu.Lock()
+	defer o.detailsMu.Unlock()
+
+	if o.details != nil && o.detailsErr == nil {
+		return o.details, nil
+	}
+
+	details, err := o.fetchModelDetails(ctx)
+	if err != nil {
+		o.detailsErr = err
+		return nil, err
+	}
+	o.details = details
+	o.detailsErr = nil
+	return details, nil
+}
+
+// InvalidateModelDetailsCache clears the cached model details so the next
+// call to GetModelDetails will fetch fresh data from the server.
+func (o *LLM) InvalidateModelDetailsCache() {
+	o.detailsMu.Lock()
+	defer o.detailsMu.Unlock()
+	o.details = nil
+	o.detailsErr = nil
 }
 
 func (o *LLM) fetchModelDetails(ctx context.Context) (*schema.ModelDetails, error) {
@@ -583,9 +649,11 @@ func (o *LLM) fetchModelDetails(ctx context.Context) (*schema.ModelDetails, erro
 	}
 
 	var dim int64
-	testEmb, err := o.EmbedQuery(ctx, "test")
-	if err == nil {
-		dim = int64(len(testEmb))
+	if dim = extractEmbeddingLength(showResp.ModelInfo); dim == 0 {
+		testEmb, embErr := o.EmbedQuery(ctx, "test")
+		if embErr == nil {
+			dim = int64(len(testEmb))
+		}
 	}
 
 	return &schema.ModelDetails{
@@ -594,6 +662,41 @@ func (o *LLM) fetchModelDetails(ctx context.Context) (*schema.ModelDetails, erro
 		Quantization:  showResp.Details.QuantizationLevel,
 		Dimension:     dim,
 	}, nil
+}
+
+// extractEmbeddingLength extracts the embedding dimension from Ollama model_info.
+// The key follows the pattern "<family>.embedding_length" (e.g., "gemma3.embedding_length": 2560).
+func extractEmbeddingLength(modelInfo map[string]any) int64 {
+	if modelInfo == nil {
+		return 0
+	}
+	for key, val := range modelInfo {
+		if strings.HasSuffix(key, ".embedding_length") {
+			if n, ok := toInt64(val); ok {
+				return n
+			}
+		}
+	}
+	return 0
+}
+
+// toInt64 converts numeric values (int, float64, json.Number) to int64.
+func toInt64(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int:
+		return int64(n), true
+	case int64:
+		return n, true
+	case float64:
+		return int64(n), true
+	case json.Number:
+		i, err := n.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return i, true
+	}
+	return 0, false
 }
 
 func (o *LLM) CountTokens(ctx context.Context, text string) (int, error) {
@@ -758,8 +861,6 @@ func (o *LLM) GetVersion(ctx context.Context) (*VersionInfo, error) {
 
 // retryableErrorPatterns contains error patterns that indicate a transient failure.
 var retryableErrorPatterns = []string{
-	"context deadline exceeded",
-	"context canceled",
 	"http2: server sent GOAWAY",
 	"connection reset by peer",
 	"connection refused",
@@ -774,8 +875,14 @@ var retryableErrorPatterns = []string{
 }
 
 // isRetryableError determines if an error is transient and should be retried.
+// Context cancellation and deadline errors from the caller's context are not retryable —
+// retrying would immediately fail again with the same expired context.
 func (o *LLM) isRetryableError(err error) bool {
 	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 

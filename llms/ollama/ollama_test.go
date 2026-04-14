@@ -2,13 +2,19 @@ package ollama
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/sevigo/goframe/llms"
+	"github.com/sevigo/goframe/schema"
 )
 
 func TestDefaultHTTPClientConfiguration(t *testing.T) {
@@ -21,6 +27,25 @@ func TestDefaultHTTPClientConfiguration(t *testing.T) {
 	assert.Equal(t, DefaultMaxIdleConnsHost, transport.MaxIdleConnsPerHost)
 	assert.Equal(t, DefaultIdleConnTimeout, transport.IdleConnTimeout)
 	assert.Equal(t, DefaultTLSHandshakeTimeout, transport.TLSHandshakeTimeout)
+}
+
+func TestNewDoesNotMutateDefaultHTTPClient(t *testing.T) {
+	origTransport := defaultHTTPClient.Transport
+
+	u, _ := url.Parse("http://localhost:1")
+	_, err := New(
+		WithModel("test-model"),
+		WithServerURL(u.String()),
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, origTransport, defaultHTTPClient.Transport, "defaultHTTPClient should not be mutated")
+
+	_, err = New(
+		WithModel("test-model"),
+		WithServerURL(u.String()),
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, origTransport, defaultHTTPClient.Transport, "second New() should not mutate defaultHTTPClient")
 }
 
 func TestApplyOptionsDefaults(t *testing.T) {
@@ -55,7 +80,6 @@ func TestWithRetryDelay(t *testing.T) {
 	opts := applyOptions(WithRetryDelay(5 * time.Second))
 	assert.Equal(t, 5*time.Second, opts.retryDelay)
 
-	// Zero delay should be ignored
 	opts = applyOptions(WithRetryDelay(0))
 	assert.Equal(t, DefaultRetryDelay, opts.retryDelay)
 }
@@ -71,14 +95,13 @@ func TestWithRetryJitter(t *testing.T) {
 }
 
 func TestIsRetryableError(t *testing.T) {
-	llm := &LLM{options: applyOptions()}
+	llm := &LLM{options: applyOptions(), logger: slog.Default()}
 
 	tests := []struct {
 		name     string
 		err      error
 		expected bool
 	}{
-		{"timeout error", errors.New("context deadline exceeded"), true},
 		{"connection refused", errors.New("connection refused"), true},
 		{"connection reset", errors.New("connection reset by peer"), true},
 		{"unexpected EOF", errors.New("unexpected EOF"), true},
@@ -87,6 +110,9 @@ func TestIsRetryableError(t *testing.T) {
 		{"nil error", nil, false},
 		{"non-retryable error", errors.New("invalid model name"), false},
 		{"bad request", errors.New("bad request: invalid parameter"), false},
+		{"context canceled", context.Canceled, false},
+		{"context deadline exceeded", context.DeadlineExceeded, false},
+		{"wrapped context canceled", fmt.Errorf("wrapped: %w", context.Canceled), false},
 	}
 
 	for _, tt := range tests {
@@ -98,7 +124,7 @@ func TestIsRetryableError(t *testing.T) {
 }
 
 func TestCalculateNextDelay(t *testing.T) {
-	llm := &LLM{options: applyOptions()}
+	llm := &LLM{options: applyOptions(), logger: slog.Default()}
 
 	tests := []struct {
 		name     string
@@ -183,7 +209,7 @@ func TestDoWithRetryContextCancellation(t *testing.T) {
 	llm := &LLM{options: opts, logger: opts.logger}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
+	cancel()
 
 	callCount := 0
 	err := llm.doWithRetry(ctx, func() error {
@@ -194,6 +220,20 @@ func TestDoWithRetryContextCancellation(t *testing.T) {
 	assert.Error(t, err)
 	assert.Equal(t, context.Canceled, err)
 	assert.Equal(t, 1, callCount, "should stop after context cancellation")
+}
+
+func TestDoWithRetryContextCanceledNotRetryable(t *testing.T) {
+	opts := applyOptions(WithRetryAttempts(3), WithRetryDelay(10*time.Millisecond))
+	llm := &LLM{options: opts, logger: opts.logger}
+
+	callCount := 0
+	err := llm.doWithRetry(context.Background(), func() error {
+		callCount++
+		return context.Canceled
+	})
+
+	assert.Error(t, err)
+	assert.Equal(t, 1, callCount, "context.Canceled should not be retried")
 }
 
 func TestWithServerURL(t *testing.T) {
@@ -226,7 +266,6 @@ func TestWithHTTPClient(t *testing.T) {
 	opts := applyOptions(WithHTTPClient(customClient))
 	assert.Equal(t, customClient, opts.httpClient)
 
-	// Nil client should be ignored
 	opts = applyOptions(WithHTTPClient(nil))
 	assert.Nil(t, opts.httpClient)
 }
@@ -242,7 +281,6 @@ func TestWithAPIKey(t *testing.T) {
 }
 
 func TestNewUsesDefaultHTTPClient(t *testing.T) {
-	// Create a mock server URL that won't actually connect
 	u, _ := url.Parse("http://localhost:1")
 
 	llm, err := New(
@@ -285,4 +323,131 @@ func TestMaskAPIKey(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestCallOptionsPresenceTracking(t *testing.T) {
+	opts := llms.CallOptions{}
+	assert.False(t, opts.TemperatureSet(), "default should not have Temperature set")
+	assert.False(t, opts.SeedSet(), "default should not have Seed set")
+
+	llms.WithTemperature(0.0)(&opts)
+	assert.True(t, opts.TemperatureSet(), "WithTemperature(0.0) should mark Temperature as set")
+	assert.Equal(t, 0.0, opts.Temperature)
+
+	llms.WithSeed(0)(&opts)
+	assert.True(t, opts.SeedSet(), "WithSeed(0) should mark Seed as set")
+	assert.Equal(t, 0, opts.Seed)
+
+	opts2 := llms.CallOptions{}
+	llms.WithTemperature(0.7)(&opts2)
+	assert.True(t, opts2.TemperatureSet())
+	assert.Equal(t, 0.7, opts2.Temperature)
+}
+
+func TestBuildOllamaOptionsZeroTemperature(t *testing.T) {
+	opts := llms.CallOptions{}
+	llms.WithTemperature(0.0)(&opts)
+
+	result := buildOllamaOptions(opts)
+	assert.NotNil(t, result, "should allocate map when Temperature is explicitly set to 0")
+	assert.Equal(t, float32(0), result["temperature"])
+}
+
+func TestBuildOllamaOptionsZeroSeed(t *testing.T) {
+	opts := llms.CallOptions{}
+	llms.WithSeed(0)(&opts)
+
+	result := buildOllamaOptions(opts)
+	assert.NotNil(t, result, "should allocate map when Seed is explicitly set to 0")
+	assert.Equal(t, 0, result["seed"])
+}
+
+func TestBuildOllamaOptionsEmptyReturnsNil(t *testing.T) {
+	opts := llms.CallOptions{}
+	result := buildOllamaOptions(opts)
+	assert.Nil(t, result, "should return nil when no options are set")
+}
+
+func TestExtractEmbeddingLength(t *testing.T) {
+	tests := []struct {
+		name      string
+		modelInfo map[string]any
+		expected  int64
+	}{
+		{
+			"gemma3 embedding_length",
+			map[string]any{"gemma3.embedding_length": int64(2560), "gemma3.context_length": int64(131072)},
+			2560,
+		},
+		{
+			"llama embedding_length as float64",
+			map[string]any{"llama.embedding_length": float64(4096)},
+			4096,
+		},
+		{
+			"no embedding_length key",
+			map[string]any{"general.architecture": "gemma3"},
+			0,
+		},
+		{
+			"nil model_info",
+			nil,
+			0,
+		},
+		{
+			"embedding_length as json.Number",
+			map[string]any{"gemma3.embedding_length": json.Number("2560")},
+			2560,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractEmbeddingLength(tt.modelInfo)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestToInt64(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    any
+		expected int64
+		ok       bool
+	}{
+		{"int", int(42), 42, true},
+		{"int64", int64(42), 42, true},
+		{"float64", float64(42.0), 42, true},
+		{"json.Number", json.Number("42"), 42, true},
+		{"string", "42", 0, false},
+		{"bool", true, 0, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, ok := toInt64(tt.input)
+			assert.Equal(t, tt.ok, ok)
+			if ok {
+				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestInvalidateModelDetailsCache(t *testing.T) {
+	llm := &LLM{
+		options: applyOptions(),
+		logger:  slog.Default(),
+	}
+
+	llm.details = &schema.ModelDetails{Family: "test"}
+	llm.detailsErr = errors.New("cached error")
+
+	llm.InvalidateModelDetailsCache()
+
+	llm.detailsMu.RLock()
+	assert.Nil(t, llm.details, "details should be nil after invalidation")
+	assert.Nil(t, llm.detailsErr, "detailsErr should be nil after invalidation")
+	llm.detailsMu.RUnlock()
 }

@@ -40,7 +40,39 @@ type CallOptions struct {
 	KeepAlive string `json:"keep_alive,omitempty"`
 	// ContextLength sets the context window size in tokens.
 	ContextLength int `json:"context_length,omitempty"`
+
+	// setFields tracks which numeric fields were explicitly set,
+	// since zero values (Temperature=0, Seed=0) are valid but
+	// the default zero would otherwise be indistinguishable from "not set".
+	setFields callOptionFields
 }
+
+// callOptionFields is a bitmask tracking which CallOptions fields were
+// explicitly set through a With* option function.
+type callOptionFields uint
+
+const (
+	fieldTemperature callOptionFields = 1 << iota
+	fieldSeed
+	fieldTopP
+	fieldTopK
+	fieldMinP
+)
+
+// TemperatureSet reports whether Temperature was explicitly set.
+func (c *CallOptions) TemperatureSet() bool { return c.setFields&fieldTemperature != 0 }
+
+// SeedSet reports whether Seed was explicitly set.
+func (c *CallOptions) SeedSet() bool { return c.setFields&fieldSeed != 0 }
+
+// TopPSet reports whether TopP was explicitly set.
+func (c *CallOptions) TopPSet() bool { return c.setFields&fieldTopP != 0 }
+
+// TopKSet reports whether TopK was explicitly set.
+func (c *CallOptions) TopKSet() bool { return c.setFields&fieldTopK != 0 }
+
+// MinPSet reports whether MinP was explicitly set.
+func (c *CallOptions) MinPSet() bool { return c.setFields&fieldMinP != 0 }
 
 // WithStreamingFunc specifies the streaming function to use.
 // The function is called for each chunk of the streamed response.
@@ -55,6 +87,7 @@ func WithStreamingFunc(streamingFunc func(ctx context.Context, chunk []byte) err
 func WithTemperature(temperature float64) CallOption {
 	return func(o *CallOptions) {
 		o.Temperature = temperature
+		o.setFields |= fieldTemperature
 	}
 }
 
@@ -77,6 +110,7 @@ func WithStopWords(stopWords []string) CallOption {
 func WithTopP(topP float64) CallOption {
 	return func(o *CallOptions) {
 		o.TopP = topP
+		o.setFields |= fieldTopP
 	}
 }
 
@@ -84,6 +118,7 @@ func WithTopP(topP float64) CallOption {
 func WithTopK(topK int) CallOption {
 	return func(o *CallOptions) {
 		o.TopK = topK
+		o.setFields |= fieldTopK
 	}
 }
 
@@ -91,6 +126,7 @@ func WithTopK(topK int) CallOption {
 func WithSeed(seed int) CallOption {
 	return func(o *CallOptions) {
 		o.Seed = seed
+		o.setFields |= fieldSeed
 	}
 }
 
@@ -105,6 +141,7 @@ func WithModel(model string) CallOption {
 func WithMinP(minP float64) CallOption {
 	return func(o *CallOptions) {
 		o.MinP = minP
+		o.setFields |= fieldMinP
 	}
 }
 
