@@ -39,6 +39,7 @@ type authTransport struct {
 
 func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.apiKey != "" {
+		req = req.Clone(req.Context())
 		req.Header.Set("Authorization", "Bearer "+t.apiKey)
 	}
 	return t.base.RoundTrip(req)
@@ -152,7 +153,7 @@ func (o *LLM) Call(ctx context.Context, prompt string, options ...llms.CallOptio
 }
 
 // buildChatMessages converts schema messages to API messages.
-func buildChatMessages(messages []schema.MessageContent) []api.Message {
+func (o *LLM) buildChatMessages(messages []schema.MessageContent) []api.Message {
 	chatMsgs := make([]api.Message, 0, len(messages))
 	for _, mc := range messages {
 		msg := api.Message{
@@ -167,7 +168,7 @@ func buildChatMessages(messages []schema.MessageContent) []api.Message {
 				// Ollama API expects raw bytes, but schema.ImageContent.Data is base64-encoded
 				imageBytes, err := base64.StdEncoding.DecodeString(img.Data)
 				if err != nil {
-					slog.Warn("failed to decode base64 image data", "error", err)
+					o.logger.Warn("failed to decode base64 image data, image will be skipped", "error", err)
 					continue
 				}
 				msg.Images = append(msg.Images, api.ImageData(imageBytes))
@@ -320,12 +321,13 @@ func (o *LLM) GenerateContent(
 		return nil, err
 	}
 
-	genInfo := o.buildGenerationInfo(handler, finalResp(handler), model, duration)
+	last := finalResp(handler)
+	genInfo := o.buildGenerationInfo(handler, last, model, duration)
 	response := &schema.ContentResponse{
 		Choices: []*schema.ContentChoice{
 			{
 				Content:          handler.fullResponse.String(),
-				StopReason:       finalResp(handler).DoneReason,
+				StopReason:       last.DoneReason,
 				GenerationInfo:   genInfo,
 				ReasoningContent: handler.thinking.String(),
 			},
@@ -344,7 +346,7 @@ func finalResp(h *chatResponseHandler) api.ChatResponse {
 func (o *LLM) buildChatRequest(model string, messages []schema.MessageContent, opts llms.CallOptions) *api.ChatRequest {
 	req := &api.ChatRequest{
 		Model:    model,
-		Messages: buildChatMessages(messages),
+		Messages: o.buildChatMessages(messages),
 		Stream:   new(bool),
 	}
 	ollamaOpts := buildOllamaOptions(opts)
@@ -391,7 +393,9 @@ func (o *LLM) applyFormatOption(req *api.ChatRequest, opts llms.CallOptions) {
 		req.Format = json.RawMessage(`"json"`)
 	} else if opts.JSONSchema != nil {
 		schemaBytes, err := json.Marshal(opts.JSONSchema)
-		if err == nil {
+		if err != nil {
+			o.logger.Warn("failed to marshal JSONSchema, structured output will not be applied", "error", err)
+		} else {
 			req.Format = schemaBytes
 		}
 	}
@@ -576,6 +580,10 @@ func (o *LLM) EmbedDocumentsWithOpts(ctx context.Context, texts []string, opts e
 		return nil, fmt.Errorf("ollama embed failing: %w", err)
 	}
 
+	if len(resp.Embeddings) != len(texts) {
+		return nil, fmt.Errorf("ollama: embedding count mismatch: sent %d texts, got %d embeddings", len(texts), len(resp.Embeddings))
+	}
+
 	return resp.Embeddings, nil
 }
 
@@ -712,6 +720,9 @@ func (o *LLM) CountTokens(ctx context.Context, text string) (int, error) {
 			"num_predict": 1, // Generate 1 token to get prompt eval count (Ollama rejects 0)
 		},
 	}
+	if o.options.keepAlive > 0 {
+		req.KeepAlive = &api.Duration{Duration: o.options.keepAlive}
+	}
 
 	var tokenCount int
 	fn := func(resp api.GenerateResponse) error {
@@ -749,11 +760,13 @@ func (o *LLM) determineModel(opts llms.CallOptions) string {
 
 func (o *LLM) PullModel(ctx context.Context, name string) error {
 	o.logger.Info("Pulling model", "model", name)
+	lastLogged := -1
 	return o.client.Pull(ctx, &api.PullRequest{Name: name}, func(resp api.ProgressResponse) error {
 		if resp.Total > 0 {
-			percent := float64(resp.Completed) / float64(resp.Total) * 100
-			if int(percent)%25 == 0 { // Log every 25%
-				o.logger.Debug("Pull progress", "model", name, "percent", fmt.Sprintf("%.2f%%", percent))
+			milestone := int(float64(resp.Completed)/float64(resp.Total)*100) / 25 * 25
+			if milestone != lastLogged {
+				lastLogged = milestone
+				o.logger.Debug("Pull progress", "model", name, "percent", fmt.Sprintf("%d%%", milestone))
 			}
 		}
 		return nil
@@ -765,8 +778,14 @@ func (o *LLM) HasModel(ctx context.Context, name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	// Normalize: Ollama lists models as "name:tag". If the caller omits the tag,
+	// append ":latest" so that HasModel("llama3") matches "llama3:latest".
+	normalized := name
+	if !strings.Contains(name, ":") {
+		normalized = name + ":latest"
+	}
 	for _, m := range list.Models {
-		if m.Name == name {
+		if m.Name == name || m.Name == normalized {
 			return true, nil
 		}
 	}
