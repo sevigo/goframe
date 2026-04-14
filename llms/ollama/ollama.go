@@ -250,7 +250,6 @@ func (o *LLM) GenerateContent(
 
 	req := o.buildChatRequest(model, messages, opts)
 
-	// Log request details at INFO level for debugging
 	msgCount := len(req.Messages)
 	hasImages := false
 	for _, m := range req.Messages {
@@ -259,35 +258,17 @@ func (o *LLM) GenerateContent(
 			break
 		}
 	}
-	msgRoles := make([]string, len(req.Messages))
-	for i, m := range req.Messages {
-		msgRoles[i] = fmt.Sprintf("%s(images=%d)", m.Role, len(m.Images))
-	}
+
 	o.logger.DebugContext(ctx, "Sending chat request",
 		"model", model,
 		"msg_count", msgCount,
-		"msg_roles", msgRoles,
 		"has_images", hasImages,
 		"tool_count", len(req.Tools))
 
-	// Debug: log full request JSON (without base64 images for readability)
-	debugReq := *req
-	debugReq.Messages = make([]api.Message, len(req.Messages))
-	for i, m := range req.Messages {
-		debugReq.Messages[i] = m
-		if len(m.Images) > 0 {
-			debugReq.Messages[i].Images = nil // Skip huge base64 data
-		}
-	}
-	if debugJSON, err := json.Marshal(debugReq); err == nil {
-		o.logger.Debug("Request (without images)", "json", string(debugJSON))
-	}
-
-	// Also log image sizes
 	for i, m := range req.Messages {
 		if len(m.Images) > 0 {
 			for j, img := range m.Images {
-				o.logger.Info("Image in request", "msg_index", i, "img_index", j, "size_bytes", len(img))
+				o.logger.DebugContext(ctx, "Image in request", "msg_index", i, "img_index", j, "size_bytes", len(img))
 			}
 		}
 	}
@@ -334,7 +315,6 @@ func (o *LLM) buildChatRequest(model string, messages []schema.MessageContent, o
 	// Handle thinking/reasoning mode
 	o.applyThinkOption(req, opts)
 
-	// Handle keep_alive - prefer call option, fall back to initialization option
 	if opts.KeepAlive != "" {
 		req.KeepAlive = &api.Duration{Duration: parseKeepAlive(opts.KeepAlive)}
 	} else if o.options.keepAlive > 0 {
