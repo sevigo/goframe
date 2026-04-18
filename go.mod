@@ -5,7 +5,7 @@ go 1.26.1
 require (
 	github.com/PuerkitoBio/goquery v1.8.0
 	github.com/dop251/goja v0.0.0-20250630131328-58d95d85e994
-	github.com/go-git/go-git/v5 v5.17.2
+	github.com/go-git/go-git/v5 v5.18.0
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/hcl/v2 v2.23.0
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
