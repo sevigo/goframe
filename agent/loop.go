@@ -585,6 +585,8 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 			if resultMap, ok := result.(map[string]any); ok {
 				if img, ok := resultMap["imageBase64"].(string); ok && img != "" && len(img) > 100 {
 					imageData = img
+				} else if img, ok := resultMap["image_base64"].(string); ok && img != "" && len(img) > 100 {
+					imageData = img
 				} else if img, ok := resultMap["image"].(string); ok && img != "" && len(img) > 100 {
 					imageData = img
 				}
@@ -597,7 +599,7 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 				if resultMap, ok := result.(map[string]any); ok {
 					resultForJSON = make(map[string]any)
 					for k, v := range resultMap {
-						if k != "imageBase64" && k != "image" {
+						if k != "imageBase64" && k != "image_base64" && k != "image" {
 							if m, ok := resultForJSON.(map[string]any); ok {
 								m[k] = v
 							}
