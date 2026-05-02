@@ -151,6 +151,8 @@ func (o *LLM) generateNonStreamingContent(
 		"CompletionTokens": resp.Usage.CompletionTokens,
 		"PromptTokens":     resp.Usage.PromptTokens,
 		"TotalTokens":      resp.Usage.TotalTokens,
+		"ReasoningTokens":  resp.Usage.CompletionTokensDetails.ReasoningTokens,
+		"CacheRead":        resp.Usage.PromptTokensDetails.CachedTokens,
 		"Duration":         duration,
 		"Model":            model,
 		"FinishReason":     choice.FinishReason,

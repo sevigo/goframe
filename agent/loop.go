@@ -488,34 +488,23 @@ func (l *AgentLoop) think(ctx context.Context, messages []schema.MessageContent)
 
 	choice := response.Choices[0]
 
-	// Extract token usage from generation info if available.
-	// Providers use different key names; check all variants.
-	if genInfo := choice.GenerationInfo; genInfo != nil {
-		if v, ok := genInfo["PromptTokens"].(float64); ok {
-			tokens.Input = v
-		} else if v, ok := genInfo["InputTokens"].(float64); ok {
-			tokens.Input = v
-		}
-		if v, ok := genInfo["CompletionTokens"].(float64); ok {
-			tokens.Output = v
-		} else if v, ok := genInfo["OutputTokens"].(float64); ok {
-			tokens.Output = v
-		}
-		if v, ok := genInfo["TotalTokens"].(float64); ok {
-			tokens.Reasoning = v - tokens.Input - tokens.Output
-		}
-		if v, ok := genInfo["CacheRead"].(float64); ok {
-			tokens.CacheRead = v
-		}
-		if v, ok := genInfo["CacheWrite"].(float64); ok {
-			tokens.CacheWrite = v
-		}
-	}
-
-	// Check for tool calls in generation info
+	// Extract token usage and tool calls from generation info.
+	// Providers use different key names and types; check all variants.
 	var toolCalls []llms.ToolCall
 	if genInfo := choice.GenerationInfo; genInfo != nil {
-		// Try both keys for compatibility
+		tokens.Input = toFloat64(genInfo["PromptTokens"], genInfo["InputTokens"])
+		tokens.Output = toFloat64(genInfo["CompletionTokens"], genInfo["OutputTokens"])
+
+		// Reasoning tokens: prefer explicit key, fallback to Total - Input - Output
+		if v := toFloat64(genInfo["ReasoningTokens"]); v > 0 {
+			tokens.Reasoning = v
+		} else if total := toFloat64(genInfo["TotalTokens"]); total > 0 && tokens.Input > 0 && tokens.Output > 0 {
+			tokens.Reasoning = total - tokens.Input - tokens.Output
+		}
+
+		tokens.CacheRead = toFloat64(genInfo["CacheRead"])
+		tokens.CacheWrite = toFloat64(genInfo["CacheWrite"])
+
 		if tc, ok := genInfo["ToolCalls"].([]llms.ToolCall); ok {
 			toolCalls = tc
 		} else if tc, ok := genInfo["tool_calls"].([]llms.ToolCall); ok {
@@ -723,4 +712,30 @@ func (l *AgentLoop) RunStream(ctx context.Context, task Task, history []schema.M
 	}()
 
 	return results, nil
+}
+
+// toFloat64 extracts a float64 value from a generation info map entry.
+// It accepts float64 (typical json unmarshal), int, and int64. Multiple
+// candidate values can be provided; the first non-zero match is returned.
+func toFloat64(candidates ...any) float64 {
+	for _, c := range candidates {
+		if c == nil {
+			continue
+		}
+		switch v := c.(type) {
+		case float64:
+			if v != 0 {
+				return v
+			}
+		case int:
+			if v != 0 {
+				return float64(v)
+			}
+		case int64:
+			if v != 0 {
+				return float64(v)
+			}
+		}
+	}
+	return 0
 }
