@@ -58,7 +58,7 @@ func New(opts ...Option) (*LLM, error) {
 
 	clientOpts := []option.RequestOption{
 		option.WithAPIKey(o.apiKey),
-		option.WithMaxRetries(o.retryAttempts),
+		option.WithMaxRetries(0),
 	}
 
 	if o.baseURL != "" {
@@ -71,6 +71,10 @@ func New(opts ...Option) (*LLM, error) {
 
 	if o.project != "" {
 		clientOpts = append(clientOpts, option.WithProject(o.project))
+	}
+
+	if o.requestTimeout > 0 {
+		clientOpts = append(clientOpts, option.WithRequestTimeout(o.requestTimeout))
 	}
 
 	client := openai.NewClient(clientOpts...)
@@ -315,8 +319,12 @@ func (o *LLM) buildChatParams(
 		params.Tools = convertTools(opts.Tools)
 	}
 
-	if o.options.reasoningEffort != "" {
-		params.ReasoningEffort = shared.ReasoningEffort(o.options.reasoningEffort)
+	reasoningEffort := o.options.reasoningEffort
+	if o.options.thinking != nil && *o.options.thinking && reasoningEffort == "" {
+		reasoningEffort = "medium"
+	}
+	if reasoningEffort != "" {
+		params.ReasoningEffort = shared.ReasoningEffort(reasoningEffort)
 	}
 
 	return params
@@ -401,8 +409,14 @@ func (o *LLM) convertAIMessage(msg schema.MessageContent) openai.ChatCompletionM
 			OfArrayOfContentParts: contentParts,
 		}
 	} else {
-		assistantMsg.Content = openai.ChatCompletionAssistantMessageParamContentUnion{
-			OfString: openai.String(msg.GetTextContent()),
+		text := msg.GetTextContent()
+		// Only set text content if there's actual text (not just tool call names).
+		// Without this guard, GetTextContent() would return tool function names
+		// via ToolCallContent.String(), which is semantically wrong for the API.
+		if text != "" && !hasOnlyToolParts(msg) {
+			assistantMsg.Content = openai.ChatCompletionAssistantMessageParamContentUnion{
+				OfString: openai.String(text),
+			}
 		}
 	}
 
@@ -425,6 +439,17 @@ func (o *LLM) convertToolMessage(msg schema.MessageContent) openai.ChatCompletio
 		}
 	}
 	return openai.ToolMessage(content, toolCallID)
+}
+
+// hasOnlyToolParts returns true when the message contains no TextContent parts,
+// meaning the text content comes solely from non-text parts (e.g. ToolCallContent.String()).
+func hasOnlyToolParts(msg schema.MessageContent) bool {
+	for _, part := range msg.Parts {
+		if _, ok := part.(schema.TextContent); ok {
+			return false
+		}
+	}
+	return true
 }
 
 func convertTools(tools []llms.ToolDefinition) []openai.ChatCompletionToolParam {
@@ -533,6 +558,14 @@ func (o *LLM) EmbedQueryWithOpts(ctx context.Context, text string, opts embeddin
 	return embeddings[0], nil
 }
 
+// GetDimension returns the embedding dimension by making a sample embedding call.
+// The result is cached after the first call. InvalidateDimensionCache can be used
+// to reset the cache (e.g., if the model is changed at runtime).
+//
+// Note: InvalidateDimensionCache may race with a concurrent GetDimension that has
+// already passed the initial dimension check. This is benign — the worst case is
+// a redundant embedding call — but callers should avoid concurrent cache invalidation
+// and reading if they need strict consistency.
 func (o *LLM) GetDimension(ctx context.Context) (int, error) {
 	o.dimMu.Lock()
 	if o.dimension > 0 {

@@ -7,10 +7,6 @@ import (
 
 const (
 	DefaultTimeout             = 120 * time.Second
-	DefaultMaxIdleConns        = 100
-	DefaultMaxIdleConnsHost    = 20
-	DefaultIdleConnTimeout     = 30 * time.Second
-	DefaultTLSHandshakeTimeout = 10 * time.Second
 	DefaultRetryAttempts       = 3
 	DefaultRetryDelay          = 2 * time.Second
 	DefaultMaxRetryDelay       = 30 * time.Second

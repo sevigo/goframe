@@ -512,7 +512,7 @@ func TestBuildChatParamsWithThinking(t *testing.T) {
 	opts := llms.CallOptions{}
 	params := llm.buildChatParams("o3-mini", messages, opts)
 
-	assert.Equal(t, shared.ReasoningEffort(""), params.ReasoningEffort)
+	assert.Equal(t, shared.ReasoningEffort("medium"), params.ReasoningEffort)
 }
 
 func TestBuildChatParamsWithReasoningEffort(t *testing.T) {
