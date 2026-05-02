@@ -81,7 +81,7 @@ func New(opts ...Option) (*LLM, error) {
 		logger:  o.logger.With("component", "openai_llm", "model", o.model),
 	}
 
-	llm.logger.Info("OpenAI LLM initialized successfully")
+	llm.logger.Info("OpenAI LLM initialized successfully", "api_key_prefix", maskAPIKey(o.apiKey))
 	return llm, nil
 }
 
@@ -456,10 +456,9 @@ func (o *LLM) EmbedDocumentsWithOpts(ctx context.Context, texts []string, opts e
 		return [][]float32{}, nil
 	}
 
-	var err error
 	var resp *openai.CreateEmbeddingResponse
 
-	err = o.doWithRetry(ctx, func() error {
+	err := o.doWithRetry(ctx, func() error {
 		params := openai.EmbeddingNewParams{
 			Model: o.options.embeddingModel,
 			Input: openai.EmbeddingNewParamsInputUnion{
@@ -469,8 +468,9 @@ func (o *LLM) EmbedDocumentsWithOpts(ctx context.Context, texts []string, opts e
 		if opts.Dimensions > 0 {
 			params.Dimensions = openai.Int(int64(opts.Dimensions))
 		}
-		resp, err = o.client.Embeddings.New(ctx, params)
-		return err
+		var apiErr error
+		resp, apiErr = o.client.Embeddings.New(ctx, params)
+		return apiErr
 	})
 
 	if err != nil {
