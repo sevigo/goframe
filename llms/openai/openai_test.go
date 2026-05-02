@@ -326,7 +326,7 @@ func TestConvertHumanMessageWithImage(t *testing.T) {
 func TestConvertToolMessage(t *testing.T) {
 	llm := &LLM{options: applyOptions(), logger: slog.Default()}
 
-	msg := schema.NewToolResultMessage("get_weather", `{"temp": 72}`)
+	msg := schema.NewToolResultMessageWithID("call_123", "get_weather", `{"temp": 72}`)
 
 	result := llm.convertToolMessage(msg)
 	assert.NotNil(t, result.OfTool)
