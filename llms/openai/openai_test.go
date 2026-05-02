@@ -528,6 +528,55 @@ func TestBuildChatParamsWithReasoningEffort(t *testing.T) {
 	assert.Equal(t, shared.ReasoningEffort("high"), params.ReasoningEffort)
 }
 
+func TestConvertAIMessageWithToolCalls(t *testing.T) {
+	llm := &LLM{options: applyOptions(), logger: slog.Default()}
+
+	msg := schema.NewAIMessageWithToolCalls("I'll check the weather.", []schema.ToolCallContent{
+		{
+			ID:           "call_abc123",
+			FunctionName: "get_weather",
+			Arguments:    map[string]any{"location": "NYC"},
+		},
+	})
+
+	result := llm.convertAIMessage(msg)
+	assert.NotNil(t, result.OfAssistant)
+	assert.Len(t, result.OfAssistant.ToolCalls, 1)
+	assert.Equal(t, "call_abc123", result.OfAssistant.ToolCalls[0].ID)
+	assert.Equal(t, "get_weather", result.OfAssistant.ToolCalls[0].Function.Name)
+}
+
+func TestConvertToolMessageWithCallID(t *testing.T) {
+	llm := &LLM{options: applyOptions(), logger: slog.Default()}
+
+	msg := schema.NewToolResultMessageWithID("get_weather", "call_abc123", `{"temp": 72}`)
+
+	result := llm.convertToolMessage(msg)
+	assert.NotNil(t, result.OfTool)
+}
+
+func TestConvertMessagesWithToolCalls(t *testing.T) {
+	llm := &LLM{options: applyOptions(), logger: slog.Default()}
+
+	messages := []schema.MessageContent{
+		schema.NewHumanMessage("What's the weather?"),
+		schema.NewAIMessageWithToolCalls("", []schema.ToolCallContent{
+			{
+				ID:           "call_001",
+				FunctionName: "get_weather",
+				Arguments:    map[string]any{"location": "Paris"},
+			},
+		}),
+		schema.NewToolResultMessageWithID("get_weather", "call_001", `{"temp": 18}`),
+	}
+
+	result := llm.convertMessages(messages)
+	assert.Len(t, result, 3)
+	assert.NotNil(t, result[1].OfAssistant)
+	assert.Len(t, result[1].OfAssistant.ToolCalls, 1)
+	assert.NotNil(t, result[2].OfTool)
+}
+
 func TestMaskAPIKey(t *testing.T) {
 	tests := []struct {
 		name     string

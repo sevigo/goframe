@@ -59,10 +59,32 @@ func (ic ImageContent) String() string {
 // isPart marks ImageContent as implementing ContentPart.
 func (ImageContent) isPart() {}
 
+// ToolCallContent represents a tool call request from the AI within a message.
+// This is used to preserve tool call information (including IDs) when
+// replaying conversation history back to LLM providers like OpenAI.
+type ToolCallContent struct {
+	// ID is the unique identifier for the tool call.
+	ID string
+	// FunctionName is the name of the function to call.
+	FunctionName string
+	// Arguments is the function call arguments.
+	Arguments map[string]any
+}
+
+// String returns a description of the tool call.
+func (tcc ToolCallContent) String() string {
+	return tcc.FunctionName
+}
+
+// isPart marks ToolCallContent as implementing ContentPart.
+func (ToolCallContent) isPart() {}
+
 // ToolResultContent represents a tool execution result in a message.
 type ToolResultContent struct {
 	// ToolName is the name of the tool that was executed.
 	ToolName string
+	// ToolCallID is the unique identifier for the tool call (required by some providers like OpenAI).
+	ToolCallID string
 	// Content is the result of the tool execution.
 	Content string
 }
@@ -106,6 +128,21 @@ func NewAIMessage(text string) MessageContent {
 	return NewTextMessage(ChatMessageTypeAI, text)
 }
 
+// NewAIMessageWithToolCalls creates an AI message with text content and tool calls.
+func NewAIMessageWithToolCalls(text string, toolCalls []ToolCallContent) MessageContent {
+	parts := make([]ContentPart, 0, 1+len(toolCalls))
+	if text != "" {
+		parts = append(parts, TextContent{Text: text})
+	}
+	for _, tc := range toolCalls {
+		parts = append(parts, tc)
+	}
+	return MessageContent{
+		Role:  ChatMessageTypeAI,
+		Parts: parts,
+	}
+}
+
 // NewToolResultMessage creates a tool result message with the given tool name and content.
 func NewToolResultMessage(toolName, content string) MessageContent {
 	return MessageContent{
@@ -113,6 +150,18 @@ func NewToolResultMessage(toolName, content string) MessageContent {
 		Parts: []ContentPart{ToolResultContent{
 			ToolName: toolName,
 			Content:  content,
+		}},
+	}
+}
+
+// NewToolResultMessageWithID creates a tool result message with tool name, content, and tool call ID.
+func NewToolResultMessageWithID(toolName, toolCallID, content string) MessageContent {
+	return MessageContent{
+		Role: ChatMessageTypeTool,
+		Parts: []ContentPart{ToolResultContent{
+			ToolName:   toolName,
+			ToolCallID: toolCallID,
+			Content:    content,
 		}},
 	}
 }

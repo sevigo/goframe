@@ -372,25 +372,59 @@ func (o *LLM) convertHumanMessage(msg schema.MessageContent) openai.ChatCompleti
 }
 
 func (o *LLM) convertAIMessage(msg schema.MessageContent) openai.ChatCompletionMessageParamUnion {
+	var contentParts []openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion
+	var toolCalls []openai.ChatCompletionMessageToolCallParam
+	for _, part := range msg.Parts {
+		switch p := part.(type) {
+		case schema.TextContent:
+			if p.Text != "" {
+				contentParts = append(contentParts, openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion{
+					OfText: &openai.ChatCompletionContentPartTextParam{Text: p.Text},
+				})
+			}
+		case schema.ToolCallContent:
+			argsJSON, _ := json.Marshal(p.Arguments)
+			toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallParam{
+				ID: p.ID,
+				Function: openai.ChatCompletionMessageToolCallFunctionParam{
+					Name:      p.FunctionName,
+					Arguments: string(argsJSON),
+				},
+			})
+		}
+	}
+
+	assistantMsg := &openai.ChatCompletionAssistantMessageParam{}
+
+	if len(contentParts) > 0 {
+		assistantMsg.Content = openai.ChatCompletionAssistantMessageParamContentUnion{
+			OfArrayOfContentParts: contentParts,
+		}
+	} else {
+		assistantMsg.Content = openai.ChatCompletionAssistantMessageParamContentUnion{
+			OfString: openai.String(msg.GetTextContent()),
+		}
+	}
+
+	if len(toolCalls) > 0 {
+		assistantMsg.ToolCalls = toolCalls
+	}
+
 	return openai.ChatCompletionMessageParamUnion{
-		OfAssistant: &openai.ChatCompletionAssistantMessageParam{
-			Content: openai.ChatCompletionAssistantMessageParamContentUnion{
-				OfString: openai.String(msg.GetTextContent()),
-			},
-		},
+		OfAssistant: assistantMsg,
 	}
 }
 
 func (o *LLM) convertToolMessage(msg schema.MessageContent) openai.ChatCompletionMessageParamUnion {
 	var content string
-	var toolName string
+	var toolCallID string
 	for _, part := range msg.Parts {
 		if tr, ok := part.(schema.ToolResultContent); ok {
 			content = tr.Content
-			toolName = tr.ToolName
+			toolCallID = tr.ToolCallID
 		}
 	}
-	return openai.ToolMessage(content, toolName)
+	return openai.ToolMessage(content, toolCallID)
 }
 
 func convertTools(tools []llms.ToolDefinition) []openai.ChatCompletionToolParam {

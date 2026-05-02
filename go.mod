@@ -11,7 +11,8 @@ require (
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/mmcdole/gofeed v1.3.0
-	github.com/ollama/ollama v0.20.7
+	github.com/ollama/ollama v0.22.1
+	github.com/openai/openai-go v1.12.0
 	github.com/qdrant/go-client v1.17.1
 	github.com/stretchr/testify v1.11.1
 	github.com/sugarme/tokenizer v0.3.0
@@ -70,7 +71,6 @@ require (
 	github.com/mmcdole/goxpp v1.1.1-0.20240225020742-a0c311522b23 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
-	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pjbgf/sha1cd v0.3.2 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect

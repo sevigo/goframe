@@ -329,7 +329,19 @@ func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.Message
 		result.Tokens.CacheWrite += tokens.CacheWrite
 
 		// Add AI response to history
-		messages = append(messages, schema.NewAIMessage(response))
+		if len(toolCalls) > 0 {
+			tcParts := make([]schema.ToolCallContent, len(toolCalls))
+			for i, tc := range toolCalls {
+				tcParts[i] = schema.ToolCallContent{
+					ID:           tc.ID,
+					FunctionName: tc.Function.Name,
+					Arguments:    tc.Function.Arguments,
+				}
+			}
+			messages = append(messages, schema.NewAIMessageWithToolCalls(response, tcParts))
+		} else {
+			messages = append(messages, schema.NewAIMessage(response))
+		}
 
 		// If no tool calls, we have a final answer
 		if len(toolCalls) == 0 {
@@ -515,6 +527,7 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 
 	for _, tc := range toolCalls {
 		toolName := tc.Function.Name
+		toolCallID := tc.ID
 		params := tc.Function.Arguments
 
 		// Normalize params if wrapped in "properties" key
@@ -551,7 +564,7 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 
 				// Add observation with error message
 				obsContent := fmt.Sprintf("Tool '%s' was blocked: %s", toolName, err.Error())
-				observations = append(observations, schema.NewToolResultMessage(toolName, obsContent))
+				observations = append(observations, schema.NewToolResultMessageWithID(toolName, toolCallID, obsContent))
 				continue
 			}
 		}
@@ -577,7 +590,7 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 				"duration_ms", duration.Milliseconds(),
 			)
 			obsContent := fmt.Sprintf("Tool '%s' failed: %s", toolName, err.Error())
-			observations = append(observations, schema.NewToolResultMessage(toolName, obsContent))
+			observations = append(observations, schema.NewToolResultMessageWithID(toolName, toolCallID, obsContent))
 		} else {
 			// Extract base64 image if present (for vision models)
 			// Store it so we can send as a follow-up user message (Ollama only supports images in user role)
@@ -615,7 +628,7 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 			} else {
 				obsContent = fmt.Sprintf("Tool '%s' returned: %s", toolName, string(jsonBytes))
 			}
-			observations = append(observations, schema.NewToolResultMessage(toolName, obsContent))
+			observations = append(observations, schema.NewToolResultMessageWithID(toolName, toolCallID, obsContent))
 
 			// If image present, add a user message with the image for vision models
 			// Ollama only supports images in user role messages
