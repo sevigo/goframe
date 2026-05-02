@@ -209,6 +209,8 @@ type FunctionDefinition struct {
 
 // ToolCall represents a tool call request from the model.
 type ToolCall struct {
+	// ID is the unique identifier for the tool call (used by some providers like OpenAI).
+	ID string `json:"id,omitempty"`
 	// Function contains the function call details.
 	Function FunctionCall `json:"function"`
 }
