@@ -172,3 +172,11 @@ func WithProject(project string) Option {
 		opts.project = project
 	}
 }
+
+// WithAllowNoAPIKey allows creating a provider without an API key.
+// This is useful for local OpenAI-compatible servers that don't require authentication.
+func WithAllowNoAPIKey(allow bool) Option {
+	return func(opts *options) {
+		opts.allowNoAPIKey = allow
+	}
+}
