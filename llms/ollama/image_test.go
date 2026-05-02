@@ -38,6 +38,57 @@ func TestUnit_Base64Decoding(t *testing.T) {
 	require.NoError(t, err, "Sample image should be valid base64")
 }
 
+func TestUnit_BuildChatMessagesWithToolCalls(t *testing.T) {
+	llm, _ := New(WithModel("test-model"))
+
+	messages := []schema.MessageContent{
+		schema.NewHumanMessage("What's the weather?"),
+		schema.NewAIMessageWithToolCalls("Let me check.", []schema.ToolCallContent{
+			{
+				ID:           "call_001",
+				FunctionName: "get_weather",
+				Arguments:    map[string]any{"location": "Paris"},
+			},
+		}),
+		schema.NewToolResultMessageWithID("get_weather", "call_001", `{"temp": 18}`),
+	}
+
+	result := llm.buildChatMessages(messages)
+	assert.Len(t, result, 3)
+
+	assert.Equal(t, "user", result[0].Role)
+	assert.Equal(t, "What's the weather?", result[0].Content)
+
+	assert.Equal(t, "assistant", result[1].Role)
+	assert.Equal(t, "Let me check.", result[1].Content)
+	assert.Len(t, result[1].ToolCalls, 1)
+	assert.Equal(t, "call_001", result[1].ToolCalls[0].ID)
+	assert.Equal(t, "get_weather", result[1].ToolCalls[0].Function.Name)
+
+	assert.Equal(t, "tool", result[2].Role)
+	assert.Equal(t, `{"temp": 18}`, result[2].Content)
+	assert.Equal(t, "get_weather", result[2].ToolName)
+	assert.Equal(t, "call_001", result[2].ToolCallID)
+}
+
+func TestUnit_BuildChatMessagesPlain(t *testing.T) {
+	llm, _ := New(WithModel("test-model"))
+
+	messages := []schema.MessageContent{
+		schema.NewSystemMessage("You are helpful."),
+		schema.NewHumanMessage("Hello!"),
+		schema.NewAIMessage("Hi there!"),
+	}
+
+	result := llm.buildChatMessages(messages)
+	assert.Len(t, result, 3)
+	assert.Equal(t, "system", result[0].Role)
+	assert.Equal(t, "You are helpful.", result[0].Content)
+	assert.Equal(t, "user", result[1].Role)
+	assert.Equal(t, "Hello!", result[1].Content)
+	assert.Equal(t, "assistant", result[2].Role)
+	assert.Equal(t, "Hi there!", result[2].Content)
+}
 func TestUnit_NewHumanMessageWithImage(t *testing.T) {
 	imageData := "aGVsbG8gd29ybGQ="
 	msg := schema.NewHumanMessageWithImage("Describe this image", imageData, "image/png")

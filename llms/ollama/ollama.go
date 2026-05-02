@@ -157,23 +157,51 @@ func (o *LLM) buildChatMessages(messages []schema.MessageContent) []api.Message 
 	chatMsgs := make([]api.Message, 0, len(messages))
 	for _, mc := range messages {
 		msg := api.Message{
-			Role:    typeToRole(mc.Role),
-			Content: mc.String(),
+			Role: typeToRole(mc.Role),
 		}
-		// Add images if present
-		images := mc.GetImages()
-		if len(images) > 0 {
-			msg.Images = make([]api.ImageData, 0, len(images))
-			for _, img := range images {
-				// Ollama API expects raw bytes, but schema.ImageContent.Data is base64-encoded
-				imageBytes, err := base64.StdEncoding.DecodeString(img.Data)
+
+		var textParts []string
+		var images []api.ImageData
+		var toolCalls []api.ToolCall
+
+		for _, part := range mc.Parts {
+			switch p := part.(type) {
+			case schema.TextContent:
+				textParts = append(textParts, p.Text)
+			case schema.ImageContent:
+				imageBytes, err := base64.StdEncoding.DecodeString(p.Data)
 				if err != nil {
 					o.logger.Warn("failed to decode base64 image data, image will be skipped", "error", err)
 					continue
 				}
-				msg.Images = append(msg.Images, api.ImageData(imageBytes))
+				images = append(images, api.ImageData(imageBytes))
+			case schema.ToolCallContent:
+				args := api.NewToolCallFunctionArguments()
+				for k, v := range p.Arguments {
+					args.Set(k, v)
+				}
+				toolCalls = append(toolCalls, api.ToolCall{
+					ID: p.ID,
+					Function: api.ToolCallFunction{
+						Name:      p.FunctionName,
+						Arguments: args,
+					},
+				})
+			case schema.ToolResultContent:
+				msg.ToolName = p.ToolName
+				msg.ToolCallID = p.ToolCallID
+				textParts = append(textParts, p.Content)
 			}
 		}
+
+		msg.Content = strings.Join(textParts, "\n")
+		if len(images) > 0 {
+			msg.Images = images
+		}
+		if len(toolCalls) > 0 {
+			msg.ToolCalls = toolCalls
+		}
+
 		chatMsgs = append(chatMsgs, msg)
 	}
 	return chatMsgs
@@ -236,6 +264,7 @@ func (h *chatResponseHandler) handle(ctx context.Context, response api.ChatRespo
 		for _, tc := range response.Message.ToolCalls {
 			args := tc.Function.Arguments.ToMap()
 			h.toolCalls = append(h.toolCalls, llms.ToolCall{
+				ID: tc.ID,
 				Function: llms.FunctionCall{
 					Name:      tc.Function.Name,
 					Arguments: args,

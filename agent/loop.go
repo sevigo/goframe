@@ -329,7 +329,19 @@ func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.Message
 		result.Tokens.CacheWrite += tokens.CacheWrite
 
 		// Add AI response to history
-		messages = append(messages, schema.NewAIMessage(response))
+		if len(toolCalls) > 0 {
+			tcParts := make([]schema.ToolCallContent, len(toolCalls))
+			for i, tc := range toolCalls {
+				tcParts[i] = schema.ToolCallContent{
+					ID:           tc.ID,
+					FunctionName: tc.Function.Name,
+					Arguments:    tc.Function.Arguments,
+				}
+			}
+			messages = append(messages, schema.NewAIMessageWithToolCalls(response, tcParts))
+		} else {
+			messages = append(messages, schema.NewAIMessage(response))
+		}
 
 		// If no tool calls, we have a final answer
 		if len(toolCalls) == 0 {
@@ -476,20 +488,23 @@ func (l *AgentLoop) think(ctx context.Context, messages []schema.MessageContent)
 
 	choice := response.Choices[0]
 
-	// Extract token usage from generation info if available.
-	if genInfo := choice.GenerationInfo; genInfo != nil {
-		if v, ok := genInfo["InputTokens"].(float64); ok {
-			tokens.Input = v
-		}
-		if v, ok := genInfo["OutputTokens"].(float64); ok {
-			tokens.Output = v
-		}
-	}
-
-	// Check for tool calls in generation info
+	// Extract token usage and tool calls from generation info.
+	// Providers use different key names and types; check all variants.
 	var toolCalls []llms.ToolCall
 	if genInfo := choice.GenerationInfo; genInfo != nil {
-		// Try both keys for compatibility
+		tokens.Input = toFloat64(genInfo["PromptTokens"], genInfo["InputTokens"])
+		tokens.Output = toFloat64(genInfo["CompletionTokens"], genInfo["OutputTokens"])
+
+		// Reasoning tokens: prefer explicit key, fallback to Total - Input - Output
+		if v := toFloat64(genInfo["ReasoningTokens"]); v > 0 {
+			tokens.Reasoning = v
+		} else if total := toFloat64(genInfo["TotalTokens"]); total > 0 && tokens.Input > 0 && tokens.Output > 0 {
+			tokens.Reasoning = total - tokens.Input - tokens.Output
+		}
+
+		tokens.CacheRead = toFloat64(genInfo["CacheRead"])
+		tokens.CacheWrite = toFloat64(genInfo["CacheWrite"])
+
 		if tc, ok := genInfo["ToolCalls"].([]llms.ToolCall); ok {
 			toolCalls = tc
 		} else if tc, ok := genInfo["tool_calls"].([]llms.ToolCall); ok {
@@ -515,6 +530,7 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 
 	for _, tc := range toolCalls {
 		toolName := tc.Function.Name
+		toolCallID := tc.ID
 		params := tc.Function.Arguments
 
 		// Normalize params if wrapped in "properties" key
@@ -551,7 +567,7 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 
 				// Add observation with error message
 				obsContent := fmt.Sprintf("Tool '%s' was blocked: %s", toolName, err.Error())
-				observations = append(observations, schema.NewToolResultMessage(toolName, obsContent))
+				observations = append(observations, schema.NewToolResultMessageWithID(toolName, toolCallID, obsContent))
 				continue
 			}
 		}
@@ -577,7 +593,7 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 				"duration_ms", duration.Milliseconds(),
 			)
 			obsContent := fmt.Sprintf("Tool '%s' failed: %s", toolName, err.Error())
-			observations = append(observations, schema.NewToolResultMessage(toolName, obsContent))
+			observations = append(observations, schema.NewToolResultMessageWithID(toolName, toolCallID, obsContent))
 		} else {
 			// Extract base64 image if present (for vision models)
 			// Store it so we can send as a follow-up user message (Ollama only supports images in user role)
@@ -615,7 +631,7 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 			} else {
 				obsContent = fmt.Sprintf("Tool '%s' returned: %s", toolName, string(jsonBytes))
 			}
-			observations = append(observations, schema.NewToolResultMessage(toolName, obsContent))
+			observations = append(observations, schema.NewToolResultMessageWithID(toolName, toolCallID, obsContent))
 
 			// If image present, add a user message with the image for vision models
 			// Ollama only supports images in user role messages
@@ -696,4 +712,30 @@ func (l *AgentLoop) RunStream(ctx context.Context, task Task, history []schema.M
 	}()
 
 	return results, nil
+}
+
+// toFloat64 extracts a float64 value from a generation info map entry.
+// It accepts float64 (typical json unmarshal), int, and int64. Multiple
+// candidate values can be provided; the first non-zero match is returned.
+func toFloat64(candidates ...any) float64 {
+	for _, c := range candidates {
+		if c == nil {
+			continue
+		}
+		switch v := c.(type) {
+		case float64:
+			if v != 0 {
+				return v
+			}
+		case int:
+			if v != 0 {
+				return float64(v)
+			}
+		case int64:
+			if v != 0 {
+				return float64(v)
+			}
+		}
+	}
+	return 0
 }
