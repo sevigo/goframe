@@ -20,12 +20,9 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
-var (
-	ErrNoAPIKey   = errors.New("openai: API key is required")
-	ErrNoChoices  = errors.New("openai: no choices in response")
-	ErrEmbeddings = errors.New("openai: failed to generate embeddings")
-)
-
+// LLM implements llms.Model, embeddings.Embedder, and embeddings.EmbedderWithOptions
+// for OpenAI models. It supports chat completions, streaming, function calling,
+// structured output, and embeddings.
 type LLM struct {
 	client    openai.Client
 	options   options
@@ -41,6 +38,8 @@ var (
 	_ embeddings.EmbedderWithOptions = (*LLM)(nil)
 )
 
+// New creates a new OpenAI LLM with the given options.
+// An API key is required; if omitted New returns ErrNoAPIKey.
 func New(opts ...Option) (*LLM, error) {
 	o := applyOptions(opts...)
 
@@ -58,7 +57,7 @@ func New(opts ...Option) (*LLM, error) {
 
 	clientOpts := []option.RequestOption{
 		option.WithAPIKey(o.apiKey),
-		option.WithMaxRetries(0),
+		option.WithMaxRetries(0), // we implement our own retry logic
 	}
 
 	if o.baseURL != "" {
@@ -89,10 +88,13 @@ func New(opts ...Option) (*LLM, error) {
 	return llm, nil
 }
 
+// Call generates a completion for a single prompt string.
 func (o *LLM) Call(ctx context.Context, prompt string, options ...llms.CallOption) (string, error) {
 	return llms.GenerateFromSinglePrompt(ctx, o, prompt, options...)
 }
 
+// GenerateContent generates a chat completion for the provided message history.
+// Supports streaming when a StreamingFunc is provided via call options.
 func (o *LLM) GenerateContent(
 	ctx context.Context,
 	messages []schema.MessageContent,
@@ -123,7 +125,14 @@ func (o *LLM) generateNonStreamingContent(
 	model string,
 	start time.Time,
 ) (*schema.ContentResponse, error) {
-	resp, err := o.client.Chat.Completions.New(ctx, params)
+	var resp *openai.ChatCompletion
+
+	err := o.doWithRetry(ctx, func() error {
+		var apiErr error
+		resp, apiErr = o.client.Chat.Completions.New(ctx, params)
+		return apiErr
+	})
+
 	if err != nil {
 		return nil, fmt.Errorf("openai chat completion failed: %w", err)
 	}
@@ -137,7 +146,7 @@ func (o *LLM) generateNonStreamingContent(
 	choice := resp.Choices[0]
 
 	content := choice.Message.Content
-	toolCalls := convertToolCalls(choice.Message.ToolCalls)
+	toolCalls := convertToolCalls(o.logger, choice.Message.ToolCalls)
 
 	genInfo := map[string]any{
 		"CompletionTokens": resp.Usage.CompletionTokens,
@@ -169,77 +178,83 @@ func (o *LLM) generateStreamingContent(
 	model string,
 	start time.Time,
 ) (*schema.ContentResponse, error) {
-	stream := o.client.Chat.Completions.NewStreaming(ctx, params)
-	defer stream.Close()
-
 	var fullContent strings.Builder
-	var toolCalls []llms.ToolCall
+	var accumulatedToolCalls map[int]llms.ToolCall
 	var toolCallArgs map[int]*strings.Builder
-	var toolCallIDs map[int]string
 	var finishReason string
 
-	for stream.Next() {
-		chunk := stream.Current()
+	err := o.doWithRetry(ctx, func() error {
+		fullContent.Reset()
+		accumulatedToolCalls = make(map[int]llms.ToolCall)
+		toolCallArgs = make(map[int]*strings.Builder)
+		finishReason = ""
 
-		if len(chunk.Choices) == 0 {
-			continue
-		}
+		stream := o.client.Chat.Completions.NewStreaming(ctx, params)
+		defer stream.Close()
 
-		delta := chunk.Choices[0].Delta
+		for stream.Next() {
+			chunk := stream.Current()
 
-		if delta.Content != "" {
-			fullContent.WriteString(delta.Content)
-			if callOpts.StreamingFunc != nil {
-				if err := callOpts.StreamingFunc(ctx, []byte(delta.Content)); err != nil {
-					return nil, fmt.Errorf("streaming function returned an error: %w", err)
+			if len(chunk.Choices) == 0 {
+				continue
+			}
+
+			delta := chunk.Choices[0].Delta
+
+			if delta.Content != "" {
+				fullContent.WriteString(delta.Content)
+				if callOpts.StreamingFunc != nil {
+					if err := callOpts.StreamingFunc(ctx, []byte(delta.Content)); err != nil {
+						return fmt.Errorf("streaming function returned an error: %w", err)
+					}
 				}
 			}
+
+			for _, tc := range delta.ToolCalls {
+				idx := int(tc.Index)
+				existing, exists := accumulatedToolCalls[idx]
+				if !exists {
+					existing = llms.ToolCall{}
+				}
+				if tc.ID != "" {
+					existing.ID = tc.ID
+				}
+				if tc.Function.Name != "" {
+					existing.Function.Name = tc.Function.Name
+				}
+				accumulatedToolCalls[idx] = existing
+
+				if _, ok := toolCallArgs[idx]; !ok {
+					toolCallArgs[idx] = &strings.Builder{}
+				}
+				_, _ = toolCallArgs[idx].WriteString(tc.Function.Arguments)
+			}
+
+			if chunk.Choices[0].FinishReason != "" {
+				finishReason = chunk.Choices[0].FinishReason
+			}
 		}
 
-		for _, tc := range delta.ToolCalls {
-			idx := int(tc.Index)
-			if toolCallArgs == nil {
-				toolCallArgs = make(map[int]*strings.Builder)
-				toolCallIDs = make(map[int]string)
-			}
-			if _, exists := toolCallArgs[idx]; !exists {
-				toolCallArgs[idx] = &strings.Builder{}
-				toolCalls = append(toolCalls, llms.ToolCall{
-					Function: llms.FunctionCall{
-						Name: tc.Function.Name,
-					},
-				})
-			}
-			if tc.ID != "" {
-				toolCallIDs[idx] = tc.ID
-			}
-			if tc.Function.Name != "" {
-				toolCalls[idx].Function.Name = tc.Function.Name
-			}
-			_, _ = toolCallArgs[idx].WriteString(tc.Function.Arguments)
-		}
+		return stream.Err()
+	})
 
-		if chunk.Choices[0].FinishReason != "" {
-			finishReason = chunk.Choices[0].FinishReason
-		}
-	}
-
-	if err := stream.Err(); err != nil {
+	if err != nil {
 		return nil, fmt.Errorf("openai streaming failed: %w", err)
 	}
 
 	duration := time.Since(start)
 
-	for i, tc := range toolCalls {
-		if args, ok := toolCallArgs[i]; ok {
-			var parsed map[string]any
-			if err := json.Unmarshal([]byte(args.String()), &parsed); err == nil {
-				tc.Function.Arguments = parsed
+	// Convert map to sorted slice.
+	toolCalls := make([]llms.ToolCall, 0, len(accumulatedToolCalls))
+	for i := 0; i < len(accumulatedToolCalls); i++ {
+		if tc, ok := accumulatedToolCalls[i]; ok {
+			if args, hasArgs := toolCallArgs[i]; hasArgs {
+				var parsed map[string]any
+				if err := json.Unmarshal([]byte(args.String()), &parsed); err == nil {
+					tc.Function.Arguments = parsed
+				}
 			}
-			toolCalls[i] = tc
-		}
-		if id, ok := toolCallIDs[i]; ok {
-			toolCalls[i].ID = id
+			toolCalls = append(toolCalls, tc)
 		}
 	}
 
@@ -408,12 +423,11 @@ func (o *LLM) convertAIMessage(msg schema.MessageContent) openai.ChatCompletionM
 		assistantMsg.Content = openai.ChatCompletionAssistantMessageParamContentUnion{
 			OfArrayOfContentParts: contentParts,
 		}
+	} else if len(toolCalls) > 0 {
+		// Tool-call-only message: leave Content empty, only set ToolCalls.
 	} else {
 		text := msg.GetTextContent()
-		// Only set text content if there's actual text (not just tool call names).
-		// Without this guard, GetTextContent() would return tool function names
-		// via ToolCallContent.String(), which is semantically wrong for the API.
-		if text != "" && !hasOnlyToolParts(msg) {
+		if text != "" {
 			assistantMsg.Content = openai.ChatCompletionAssistantMessageParamContentUnion{
 				OfString: openai.String(text),
 			}
@@ -441,17 +455,6 @@ func (o *LLM) convertToolMessage(msg schema.MessageContent) openai.ChatCompletio
 	return openai.ToolMessage(content, toolCallID)
 }
 
-// hasOnlyToolParts returns true when the message contains no TextContent parts,
-// meaning the text content comes solely from non-text parts (e.g. ToolCallContent.String()).
-func hasOnlyToolParts(msg schema.MessageContent) bool {
-	for _, part := range msg.Parts {
-		if _, ok := part.(schema.TextContent); ok {
-			return false
-		}
-	}
-	return true
-}
-
 func convertTools(tools []llms.ToolDefinition) []openai.ChatCompletionToolParam {
 	result := make([]openai.ChatCompletionToolParam, 0, len(tools))
 	for _, t := range tools {
@@ -472,14 +475,16 @@ func convertTools(tools []llms.ToolDefinition) []openai.ChatCompletionToolParam 
 	return result
 }
 
-func convertToolCalls(toolCalls []openai.ChatCompletionMessageToolCall) []llms.ToolCall {
+func convertToolCalls(logger *slog.Logger, toolCalls []openai.ChatCompletionMessageToolCall) []llms.ToolCall {
 	if len(toolCalls) == 0 {
 		return nil
 	}
 	result := make([]llms.ToolCall, 0, len(toolCalls))
 	for _, tc := range toolCalls {
 		var args map[string]any
-		_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+			logger.Warn("failed to parse tool call arguments", "error", err, "arguments", tc.Function.Arguments)
+		}
 		result = append(result, llms.ToolCall{
 			ID: tc.ID,
 			Function: llms.FunctionCall{
@@ -498,18 +503,22 @@ func (o *LLM) determineModel(opts llms.CallOptions) string {
 	return o.options.model
 }
 
+// EmbedDocuments generates embeddings for a batch of documents.
 func (o *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error) {
 	return o.EmbedDocumentsWithOpts(ctx, texts, embeddings.EmbeddingOptions{Truncate: true})
 }
 
+// EmbedQuery generates an embedding for a single query string.
 func (o *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	return o.EmbedQueryWithOpts(ctx, text, embeddings.EmbeddingOptions{Truncate: true})
 }
 
+// EmbedQueries generates embeddings for multiple query strings.
 func (o *LLM) EmbedQueries(ctx context.Context, texts []string) ([][]float32, error) {
 	return o.EmbedDocumentsWithOpts(ctx, texts, embeddings.EmbeddingOptions{Truncate: true})
 }
 
+// EmbedDocumentsWithOpts generates embeddings for documents with additional options.
 func (o *LLM) EmbedDocumentsWithOpts(ctx context.Context, texts []string, opts embeddings.EmbeddingOptions) ([][]float32, error) {
 	if len(texts) == 0 {
 		return [][]float32{}, nil
@@ -550,12 +559,13 @@ func (o *LLM) EmbedDocumentsWithOpts(ctx context.Context, texts []string, opts e
 	return result, nil
 }
 
+// EmbedQueryWithOpts generates an embedding for a single query with additional options.
 func (o *LLM) EmbedQueryWithOpts(ctx context.Context, text string, opts embeddings.EmbeddingOptions) ([]float32, error) {
-	embeddings, err := o.EmbedDocumentsWithOpts(ctx, []string{text}, opts)
+	embs, err := o.EmbedDocumentsWithOpts(ctx, []string{text}, opts)
 	if err != nil {
 		return nil, err
 	}
-	return embeddings[0], nil
+	return embs[0], nil
 }
 
 // GetDimension returns the embedding dimension by making a sample embedding call.
@@ -692,6 +702,8 @@ func (o *LLM) doWithRetry(ctx context.Context, fn func() error) error {
 	return lastErr
 }
 
+// InvalidateDimensionCache clears the cached embedding dimension so the next
+// call to GetDimension will make a fresh embedding request.
 func (o *LLM) InvalidateDimensionCache() {
 	o.dimMu.Lock()
 	defer o.dimMu.Unlock()

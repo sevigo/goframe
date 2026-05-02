@@ -372,7 +372,7 @@ func TestConvertToolCalls(t *testing.T) {
 		},
 	}
 
-	result := convertToolCalls(toolCalls)
+	result := convertToolCalls(slog.Default(), toolCalls)
 	assert.Len(t, result, 1)
 	assert.Equal(t, "call_abc123", result[0].ID)
 	assert.Equal(t, "get_weather", result[0].Function.Name)
@@ -380,7 +380,7 @@ func TestConvertToolCalls(t *testing.T) {
 }
 
 func TestConvertToolCallsEmpty(t *testing.T) {
-	result := convertToolCalls(nil)
+	result := convertToolCalls(slog.Default(), nil)
 	assert.Nil(t, result)
 }
 

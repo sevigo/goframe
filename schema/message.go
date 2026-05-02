@@ -20,7 +20,7 @@ const (
 )
 
 // ContentPart represents a part of a message content.
-// Content parts can be text, images, or other multimodal content.
+// Content parts can be text, images, tool calls, or tool results.
 type ContentPart interface {
 	String() string
 	isPart()
@@ -71,7 +71,7 @@ type ToolCallContent struct {
 	Arguments map[string]any
 }
 
-// String returns a description of the tool call.
+// String returns the function name of the tool call.
 func (tcc ToolCallContent) String() string {
 	return tcc.FunctionName
 }
@@ -129,6 +129,7 @@ func NewAIMessage(text string) MessageContent {
 }
 
 // NewAIMessageWithToolCalls creates an AI message with text content and tool calls.
+// The text is optional; if empty, only tool call parts are included.
 func NewAIMessageWithToolCalls(text string, toolCalls []ToolCallContent) MessageContent {
 	parts := make([]ContentPart, 0, 1+len(toolCalls))
 	if text != "" {
@@ -155,6 +156,7 @@ func NewToolResultMessage(toolName, content string) MessageContent {
 }
 
 // NewToolResultMessageWithID creates a tool result message with tool name, content, and tool call ID.
+// The tool call ID is required by providers like OpenAI to match the result with the original call.
 func NewToolResultMessageWithID(toolName, toolCallID, content string) MessageContent {
 	return MessageContent{
 		Role: ChatMessageTypeTool,
