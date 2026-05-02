@@ -28,7 +28,6 @@ type LLM struct {
 	options   options
 	logger    *slog.Logger
 	dimension int
-	dimOnce   sync.Once
 	dimMu     sync.Mutex
 }
 
@@ -246,11 +245,13 @@ func (o *LLM) generateStreamingContent(
 
 	// Convert map to sorted slice.
 	toolCalls := make([]llms.ToolCall, 0, len(accumulatedToolCalls))
-	for i := 0; i < len(accumulatedToolCalls); i++ {
+	for i := range len(accumulatedToolCalls) {
 		if tc, ok := accumulatedToolCalls[i]; ok {
 			if args, hasArgs := toolCallArgs[i]; hasArgs {
 				var parsed map[string]any
-				if err := json.Unmarshal([]byte(args.String()), &parsed); err == nil {
+				if err := json.Unmarshal([]byte(args.String()), &parsed); err != nil {
+					o.logger.Warn("failed to parse streaming tool call arguments", "error", err, "arguments", args.String())
+				} else {
 					tc.Function.Arguments = parsed
 				}
 			}
@@ -406,7 +407,11 @@ func (o *LLM) convertAIMessage(msg schema.MessageContent) openai.ChatCompletionM
 				})
 			}
 		case schema.ToolCallContent:
-			argsJSON, _ := json.Marshal(p.Arguments)
+			argsJSON, err := json.Marshal(p.Arguments)
+			if err != nil {
+				o.logger.Warn("failed to marshal tool call arguments", "error", err, "function", p.FunctionName)
+				argsJSON = []byte("{}")
+			}
 			toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallParam{
 				ID: p.ID,
 				Function: openai.ChatCompletionMessageToolCallFunctionParam{
@@ -419,13 +424,14 @@ func (o *LLM) convertAIMessage(msg schema.MessageContent) openai.ChatCompletionM
 
 	assistantMsg := &openai.ChatCompletionAssistantMessageParam{}
 
-	if len(contentParts) > 0 {
+	switch {
+	case len(contentParts) > 0:
 		assistantMsg.Content = openai.ChatCompletionAssistantMessageParamContentUnion{
 			OfArrayOfContentParts: contentParts,
 		}
-	} else if len(toolCalls) > 0 {
+	case len(toolCalls) > 0:
 		// Tool-call-only message: leave Content empty, only set ToolCalls.
-	} else {
+	default:
 		text := msg.GetTextContent()
 		if text != "" {
 			assistantMsg.Content = openai.ChatCompletionAssistantMessageParamContentUnion{
@@ -571,11 +577,6 @@ func (o *LLM) EmbedQueryWithOpts(ctx context.Context, text string, opts embeddin
 // GetDimension returns the embedding dimension by making a sample embedding call.
 // The result is cached after the first call. InvalidateDimensionCache can be used
 // to reset the cache (e.g., if the model is changed at runtime).
-//
-// Note: InvalidateDimensionCache may race with a concurrent GetDimension that has
-// already passed the initial dimension check. This is benign — the worst case is
-// a redundant embedding call — but callers should avoid concurrent cache invalidation
-// and reading if they need strict consistency.
 func (o *LLM) GetDimension(ctx context.Context) (int, error) {
 	o.dimMu.Lock()
 	if o.dimension > 0 {
@@ -585,26 +586,16 @@ func (o *LLM) GetDimension(ctx context.Context) (int, error) {
 	}
 	o.dimMu.Unlock()
 
-	var onceErr error
-	o.dimOnce.Do(func() {
-		sampleEmbedding, err := o.EmbedQuery(ctx, "dimension")
-		if err != nil {
-			onceErr = fmt.Errorf("failed to get dimension by embedding sample text: %w", err)
-			return
-		}
-		o.dimMu.Lock()
-		o.dimension = len(sampleEmbedding)
-		o.dimMu.Unlock()
-	})
-
-	if onceErr != nil {
-		o.dimMu.Lock()
-		o.dimOnce = sync.Once{}
-		o.dimMu.Unlock()
-		return 0, onceErr
+	sampleEmbedding, err := o.EmbedQuery(ctx, "dimension")
+	if err != nil {
+		return 0, fmt.Errorf("failed to get dimension by embedding sample text: %w", err)
 	}
 
-	return o.dimension, nil
+	o.dimMu.Lock()
+	o.dimension = len(sampleEmbedding)
+	o.dimMu.Unlock()
+
+	return len(sampleEmbedding), nil
 }
 
 func (o *LLM) isRetryableError(err error) bool {
@@ -708,7 +699,6 @@ func (o *LLM) InvalidateDimensionCache() {
 	o.dimMu.Lock()
 	defer o.dimMu.Unlock()
 	o.dimension = 0
-	o.dimOnce = sync.Once{}
 }
 
 func maskAPIKey(key string) string {

@@ -145,6 +145,9 @@ func NewAIMessageWithToolCalls(text string, toolCalls []ToolCallContent) Message
 }
 
 // NewToolResultMessage creates a tool result message with the given tool name and content.
+// Note: For providers like OpenAI that require tool call IDs, use NewToolResultMessageWithID
+// instead. Messages created with this function will have an empty ToolCallID, which will
+// cause errors with OpenAI's API when used in tool-result conversations.
 func NewToolResultMessage(toolName, content string) MessageContent {
 	return MessageContent{
 		Role: ChatMessageTypeTool,

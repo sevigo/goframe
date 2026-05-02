@@ -489,12 +489,26 @@ func (l *AgentLoop) think(ctx context.Context, messages []schema.MessageContent)
 	choice := response.Choices[0]
 
 	// Extract token usage from generation info if available.
+	// Providers use different key names; check all variants.
 	if genInfo := choice.GenerationInfo; genInfo != nil {
-		if v, ok := genInfo["InputTokens"].(float64); ok {
+		if v, ok := genInfo["PromptTokens"].(float64); ok {
+			tokens.Input = v
+		} else if v, ok := genInfo["InputTokens"].(float64); ok {
 			tokens.Input = v
 		}
-		if v, ok := genInfo["OutputTokens"].(float64); ok {
+		if v, ok := genInfo["CompletionTokens"].(float64); ok {
 			tokens.Output = v
+		} else if v, ok := genInfo["OutputTokens"].(float64); ok {
+			tokens.Output = v
+		}
+		if v, ok := genInfo["TotalTokens"].(float64); ok {
+			tokens.Reasoning = v - tokens.Input - tokens.Output
+		}
+		if v, ok := genInfo["CacheRead"].(float64); ok {
+			tokens.CacheRead = v
+		}
+		if v, ok := genInfo["CacheWrite"].(float64); ok {
+			tokens.CacheWrite = v
 		}
 	}
 
