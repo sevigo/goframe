@@ -42,7 +42,7 @@ var (
 func New(opts ...Option) (*LLM, error) {
 	o := applyOptions(opts...)
 
-	if o.apiKey == "" {
+	if o.apiKey == "" && !o.allowNoAPIKey {
 		return nil, ErrNoAPIKey
 	}
 

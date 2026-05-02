@@ -37,6 +37,7 @@ type options struct {
 	reasoningEffort string
 	organization    string
 	project         string
+	allowNoAPIKey   bool
 }
 
 // Option configures an OpenAI LLM via the functional options pattern.
