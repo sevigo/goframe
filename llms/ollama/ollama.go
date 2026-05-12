@@ -250,6 +250,7 @@ type chatResponseHandler struct {
 	fullResponse strings.Builder
 	thinking     strings.Builder
 	toolCalls    []llms.ToolCall
+	logprobs     []api.Logprob
 	finalResp    api.ChatResponse
 	streamingFn  func(ctx context.Context, chunk []byte) error
 }
@@ -272,6 +273,9 @@ func (h *chatResponseHandler) handle(ctx context.Context, response api.ChatRespo
 			})
 		}
 	}
+	if len(response.Logprobs) > 0 {
+		h.logprobs = append(h.logprobs, response.Logprobs...)
+	}
 	if h.streamingFn != nil && response.Message.Content != "" {
 		if err := h.streamingFn(ctx, []byte(response.Message.Content)); err != nil {
 			return fmt.Errorf("streaming function returned an error: %w", err)
@@ -287,6 +291,7 @@ func (h *chatResponseHandler) reset() {
 	h.fullResponse.Reset()
 	h.thinking.Reset()
 	h.toolCalls = nil
+	h.logprobs = nil
 	h.finalResp = api.ChatResponse{}
 }
 
@@ -401,6 +406,10 @@ func (o *LLM) buildChatRequest(model string, messages []schema.MessageContent, o
 		req.Tools = convertToolsToAPI(opts.Tools)
 	}
 
+	// Handle log probabilities
+	req.Logprobs = opts.Logprobs
+	req.TopLogprobs = opts.TopLogprobs
+
 	return req
 }
 
@@ -441,6 +450,9 @@ func (o *LLM) buildGenerationInfo(handler *chatResponseHandler, finalResp api.Ch
 	}
 	if len(handler.toolCalls) > 0 {
 		genInfo["ToolCalls"] = handler.toolCalls
+	}
+	if len(handler.logprobs) > 0 {
+		genInfo["Logprobs"] = handler.logprobs
 	}
 	return genInfo
 }
