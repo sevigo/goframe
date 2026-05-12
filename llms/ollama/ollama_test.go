@@ -495,3 +495,98 @@ func TestBuildGenerationInfo_WithLogprobs(t *testing.T) {
 	assert.Equal(t, "hello", lps[0].Token)
 	assert.Equal(t, -0.0123, lps[0].Logprob)
 }
+
+func TestParseKeepAlive_Indefinite(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected time.Duration
+	}{
+		{"zero value", "0", 0},
+		{"indefinite duration", "-1", -1},
+		{"standard duration", "10m", 10 * time.Minute},
+		{"invalid fallback", "invalid", 5 * time.Minute},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseKeepAlive(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestApplyFormatOption_JSONSchemaTypes(t *testing.T) {
+	llm := &LLM{
+		options: applyOptions(),
+		logger:  slog.Default(),
+	}
+
+	t.Run("raw json string", func(t *testing.T) {
+		req := &api.ChatRequest{}
+		opts := llms.CallOptions{
+			JSONSchema: `{"type": "object"}`,
+		}
+		llm.applyFormatOption(req, opts)
+		assert.Equal(t, []byte(`{"type": "object"}`), []byte(req.Format))
+	})
+
+	t.Run("raw json bytes", func(t *testing.T) {
+		req := &api.ChatRequest{}
+		opts := llms.CallOptions{
+			JSONSchema: []byte(`{"type": "array"}`),
+		}
+		llm.applyFormatOption(req, opts)
+		assert.Equal(t, []byte(`{"type": "array"}`), []byte(req.Format))
+	})
+
+	t.Run("structured map", func(t *testing.T) {
+		req := &api.ChatRequest{}
+		opts := llms.CallOptions{
+			JSONSchema: map[string]any{"type": "string"},
+		}
+		llm.applyFormatOption(req, opts)
+		assert.Equal(t, []byte(`{"type":"string"}`), []byte(req.Format))
+	})
+}
+
+func TestBuildChatMessages_RobustImageDecoding(t *testing.T) {
+	llm := &LLM{
+		options: applyOptions(),
+		logger:  slog.Default(),
+	}
+
+	t.Run("with data url prefix", func(t *testing.T) {
+		messages := []schema.MessageContent{
+			{
+				Role: schema.ChatMessageTypeHuman,
+				Parts: []schema.ContentPart{
+					schema.ImageContent{
+						Data: "data:image/png;base64,SGVsbG8=", // "Hello" base64
+					},
+				},
+			},
+		}
+		msgs := llm.buildChatMessages(messages)
+		assert.Len(t, msgs, 1)
+		assert.Len(t, msgs[0].Images, 1)
+		assert.Equal(t, []byte("Hello"), []byte(msgs[0].Images[0]))
+	})
+
+	t.Run("unpadded base64", func(t *testing.T) {
+		messages := []schema.MessageContent{
+			{
+				Role: schema.ChatMessageTypeHuman,
+				Parts: []schema.ContentPart{
+					schema.ImageContent{
+						Data: "SGVsbG8", // unpadded "Hello"
+					},
+				},
+			},
+		}
+		msgs := llm.buildChatMessages(messages)
+		assert.Len(t, msgs, 1)
+		assert.Len(t, msgs[0].Images, 1)
+		assert.Equal(t, []byte("Hello"), []byte(msgs[0].Images[0]))
+	})
+}
