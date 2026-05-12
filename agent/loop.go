@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"time"
 
 	"github.com/sevigo/goframe/llms"
@@ -277,8 +278,8 @@ func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.Message
 		TraceID: traceID,
 	}
 
-	// Build the initial message history with system prompt
-	messages := l.buildInitialHistory(task)
+	// Build the initial message history with system prompt (if not already in history)
+	messages := l.buildInitialHistory(task, history)
 
 	// Merge with provided history
 	messages = append(messages, history...)
@@ -331,8 +332,8 @@ func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.Message
 		// Add AI response to history
 		if len(toolCalls) > 0 {
 			tcParts := make([]schema.ToolCallContent, len(toolCalls))
-			for i, tc := range toolCalls {
-				tcParts[i] = schema.ToolCallContent{
+			for idx, tc := range toolCalls {
+				tcParts[idx] = schema.ToolCallContent{
 					ID:           tc.ID,
 					FunctionName: tc.Function.Name,
 					Arguments:    tc.Function.Arguments,
@@ -402,7 +403,7 @@ func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.Message
 // The returned slice is a new allocation; original messages are never mutated.
 func trimImageMessages(messages []schema.MessageContent, maxImages int) []schema.MessageContent {
 	imageCount := 0
-	trimmed := make([]schema.MessageContent, 0, len(messages))
+	trimmed := make([]schema.MessageContent, len(messages))
 
 	// Iterate in reverse to find most recent images
 	for i := len(messages) - 1; i >= 0; i-- {
@@ -440,7 +441,7 @@ func trimImageMessages(messages []schema.MessageContent, maxImages int) []schema
 			}
 		}
 
-		trimmed = append([]schema.MessageContent{msg}, trimmed...)
+		trimmed[i] = msg
 	}
 
 	return trimmed
@@ -596,41 +597,23 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 			observations = append(observations, schema.NewToolResultMessageWithID(toolName, toolCallID, obsContent))
 		} else {
 			// Extract base64 image if present (for vision models)
-			// Store it so we can send as a follow-up user message (Ollama only supports images in user role)
-			var imageData string
-			if resultMap, ok := result.(map[string]any); ok {
-				if img, ok := resultMap["imageBase64"].(string); ok && img != "" && len(img) > 100 {
-					imageData = img
-				} else if img, ok := resultMap["image_base64"].(string); ok && img != "" && len(img) > 100 {
-					imageData = img
-				} else if img, ok := resultMap["image"].(string); ok && img != "" && len(img) > 100 {
-					imageData = img
-				}
-			}
+			resultForJSON, imageData := extractToolImage(result)
 
-			// Serialize result to JSON (without the image data to reduce token usage)
-			resultForJSON := result
-			if imageData != "" {
-				// Create a copy without the image for the JSON representation
-				if resultMap, ok := result.(map[string]any); ok {
-					resultForJSON = make(map[string]any)
-					for k, v := range resultMap {
-						if k != "imageBase64" && k != "image_base64" && k != "image" {
-							if m, ok := resultForJSON.(map[string]any); ok {
-								m[k] = v
-							}
-						}
-					}
-				}
-			}
-
-			jsonBytes, jsonErr := json.Marshal(resultForJSON)
+			// Format the observation string cleanly
 			var obsContent string
-			if jsonErr != nil {
-				obsContent = fmt.Sprintf("Tool '%s' returned: %v", toolName, result)
+			if strResult, ok := resultForJSON.(string); ok {
+				obsContent = strResult
+			} else if jsonBytes, err := json.Marshal(resultForJSON); err == nil {
+				obsContent = string(jsonBytes)
 			} else {
-				obsContent = fmt.Sprintf("Tool '%s' returned: %s", toolName, string(jsonBytes))
+				obsContent = fmt.Sprintf("%v", resultForJSON)
 			}
+
+			// Hard limit tool output to ~20,000 characters (~5,000 tokens) to prevent context blowout
+			if len(obsContent) > 20000 {
+				obsContent = obsContent[:20000] + "... [Truncated: output too long. Use tools to paginate or narrow search]"
+			}
+
 			observations = append(observations, schema.NewToolResultMessageWithID(toolName, toolCallID, obsContent))
 
 			// If image present, add a user message with the image for vision models
@@ -640,7 +623,7 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 				userMsg := schema.MessageContent{
 					Role: schema.ChatMessageTypeHuman,
 					Parts: []schema.ContentPart{
-						schema.TextContent{Text: fmt.Sprintf("Here is the screenshot from tool '%s':", toolName)},
+						schema.TextContent{Text: "Screenshot:"},
 						imagePart,
 					},
 				}
@@ -653,11 +636,20 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 }
 
 // buildInitialHistory creates the initial message history with system prompt and task.
-func (l *AgentLoop) buildInitialHistory(task Task) []schema.MessageContent {
+func (l *AgentLoop) buildInitialHistory(task Task, history []schema.MessageContent) []schema.MessageContent {
 	messages := make([]schema.MessageContent, 0)
 
-	// Add system prompt
-	if l.systemPrompt != "" {
+	// Check if history already has a system prompt
+	hasSystem := false
+	for _, msg := range history {
+		if msg.Role == schema.ChatMessageTypeSystem {
+			hasSystem = true
+			break
+		}
+	}
+
+	// Add system prompt if it's configured and not already provided
+	if l.systemPrompt != "" && !hasSystem {
 		messages = append(messages, schema.NewSystemMessage(l.systemPrompt))
 	}
 
@@ -669,9 +661,7 @@ func (l *AgentLoop) buildInitialHistory(task Task) []schema.MessageContent {
 	messages = append(messages, schema.NewHumanMessage(taskText))
 
 	return messages
-}
-
-// StreamResult represents a partial result during streaming execution.
+} // StreamResult represents a partial result during streaming execution.
 type StreamResult struct {
 	// State indicates the current loop state.
 	State LoopState
@@ -679,10 +669,97 @@ type StreamResult struct {
 	Text string
 	// ToolCall is a tool call being executed.
 	ToolCall *ToolCallRecord
+	// ToolResult is the output from a tool call.
+	ToolResult any
 	// Error is any error that occurred.
 	Error error
 	// Done indicates if the loop has completed.
 	Done bool
+}
+
+// streamObserver intercepts loop events and forwards them to a channel.
+type streamObserver struct {
+	ch chan<- StreamResult
+}
+
+func (s *streamObserver) OnIterationStart(ctx context.Context, iteration int) {}
+
+func (s *streamObserver) OnThinkComplete(ctx context.Context, response string, toolCalls []llms.ToolCall, tokens TokenUsage, err error) {
+	s.ch <- StreamResult{
+		State: StateThinking,
+		Text:  response,
+	}
+}
+
+func (s *streamObserver) OnToolCall(ctx context.Context, toolName string, params map[string]any) {
+	s.ch <- StreamResult{
+		State: StateActing,
+		ToolCall: &ToolCallRecord{
+			Name:   toolName,
+			Params: params,
+		},
+	}
+}
+
+func (s *streamObserver) OnToolResult(ctx context.Context, toolName string, params map[string]any, result any, duration time.Duration, err error) {
+	s.ch <- StreamResult{
+		State: StateObserving,
+		ToolCall: &ToolCallRecord{
+			Name:   toolName,
+			Params: params,
+		},
+		ToolResult: result,
+		Error:      err,
+	}
+}
+
+func (s *streamObserver) OnLoopComplete(ctx context.Context, result *LoopResult, err error) {}
+
+// compositeObserver multiplexes agent events to multiple observers
+type compositeObserver struct {
+	primary   AgentObserver
+	secondary AgentObserver
+}
+
+func (c *compositeObserver) OnIterationStart(ctx context.Context, iteration int) {
+	if c.primary != nil {
+		c.primary.OnIterationStart(ctx, iteration)
+	}
+	if c.secondary != nil {
+		c.secondary.OnIterationStart(ctx, iteration)
+	}
+}
+func (c *compositeObserver) OnThinkComplete(ctx context.Context, response string, toolCalls []llms.ToolCall, tokens TokenUsage, err error) {
+	if c.primary != nil {
+		c.primary.OnThinkComplete(ctx, response, toolCalls, tokens, err)
+	}
+	if c.secondary != nil {
+		c.secondary.OnThinkComplete(ctx, response, toolCalls, tokens, err)
+	}
+}
+func (c *compositeObserver) OnToolCall(ctx context.Context, toolName string, params map[string]any) {
+	if c.primary != nil {
+		c.primary.OnToolCall(ctx, toolName, params)
+	}
+	if c.secondary != nil {
+		c.secondary.OnToolCall(ctx, toolName, params)
+	}
+}
+func (c *compositeObserver) OnToolResult(ctx context.Context, toolName string, params map[string]any, result any, duration time.Duration, err error) {
+	if c.primary != nil {
+		c.primary.OnToolResult(ctx, toolName, params, result, duration, err)
+	}
+	if c.secondary != nil {
+		c.secondary.OnToolResult(ctx, toolName, params, result, duration, err)
+	}
+}
+func (c *compositeObserver) OnLoopComplete(ctx context.Context, result *LoopResult, err error) {
+	if c.primary != nil {
+		c.primary.OnLoopComplete(ctx, result, err)
+	}
+	if c.secondary != nil {
+		c.secondary.OnLoopComplete(ctx, result, err)
+	}
 }
 
 // RunStream executes the loop and streams results.
@@ -690,10 +767,26 @@ type StreamResult struct {
 func (l *AgentLoop) RunStream(ctx context.Context, task Task, history []schema.MessageContent) (<-chan StreamResult, error) {
 	results := make(chan StreamResult, 100)
 
+	// Create a shallow copy to inject our stream observer without mutating the original loop
+	loopCopy := *l
+
+	// Deep copy slices to avoid shared mutable state races
+	loopCopy.middlewares = make([]ActionMiddleware, len(l.middlewares))
+	copy(loopCopy.middlewares, l.middlewares)
+
+	originalObs := loopCopy.observer
+	streamObs := &streamObserver{ch: results}
+
+	// Composite observer to notify both original and stream
+	loopCopy.observer = &compositeObserver{
+		primary:   streamObs,
+		secondary: originalObs,
+	}
+
 	go func() {
 		defer close(results)
 
-		result, err := l.Run(ctx, task, history)
+		result, err := loopCopy.Run(ctx, task, history)
 
 		if err != nil {
 			results <- StreamResult{
@@ -738,4 +831,54 @@ func toFloat64(candidates ...any) float64 {
 		}
 	}
 	return 0
+}
+
+// extractToolImage extracts and removes base64 image data from a tool result.
+// It returns the original or stripped result and the extracted image string.
+func extractToolImage(result any) (any, string) {
+	if resultMap, ok := result.(map[string]any); ok {
+		for _, key := range []string{"imageBase64", "image_base64", "image"} {
+			if img, ok := resultMap[key].(string); ok && len(img) > 100 {
+				stripped := make(map[string]any)
+				for k, v := range resultMap {
+					if k != "imageBase64" && k != "image_base64" && k != "image" {
+						stripped[k] = v
+					}
+				}
+				return stripped, img
+			}
+		}
+		return result, ""
+	}
+
+	if result == nil {
+		return result, ""
+	}
+
+	v := reflect.ValueOf(result)
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+	if v.Kind() == reflect.Struct {
+		for _, key := range []string{"ImageBase64", "Image_base64", "Image", "imageBase64", "image_base64", "image"} {
+			field := v.FieldByName(key)
+			if field.IsValid() && field.Kind() == reflect.String {
+				img := field.String()
+				if len(img) > 100 {
+					// Fallback to json roundtrip to strip field from struct safely
+					if j, err := json.Marshal(result); err == nil {
+						var m map[string]any
+						if err := json.Unmarshal(j, &m); err == nil {
+							for _, k := range []string{"imageBase64", "image_base64", "image"} {
+								delete(m, k)
+							}
+							return m, img
+						}
+					}
+					return result, img // fallback if json fails
+				}
+			}
+		}
+	}
+	return result, ""
 }
