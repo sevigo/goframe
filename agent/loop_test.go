@@ -28,12 +28,16 @@ func (m *mockLLM) GenerateContent(ctx context.Context, messages []schema.Message
 		},
 	}
 
+	genInfo := map[string]any{
+		"InputTokens":  10.0,
+		"OutputTokens": 20.0,
+	}
+
 	// Add tool calls if configured
 	if m.index < len(m.toolCalls) && len(m.toolCalls[m.index]) > 0 {
-		resp.Choices[0].GenerationInfo = map[string]any{
-			"tool_calls": m.toolCalls[m.index],
-		}
+		genInfo["tool_calls"] = m.toolCalls[m.index]
 	}
+	resp.Choices[0].GenerationInfo = genInfo
 
 	m.index = (m.index + 1) % len(m.responses)
 	m.callCount++
@@ -107,6 +111,10 @@ func TestAgentLoop_Run_NoToolCalls(t *testing.T) {
 
 	if result.Iterations != 1 {
 		t.Errorf("expected 1 iteration, got: %d", result.Iterations)
+	}
+
+	if result.Tokens.Input != 10 || result.Tokens.Output != 20 {
+		t.Errorf("expected tokens to be accumulated (10/20), got: %v/%v", result.Tokens.Input, result.Tokens.Output)
 	}
 }
 
@@ -526,5 +534,98 @@ func TestAgentLoop_CompactionHookNilReturn(t *testing.T) {
 	}
 	if result.Compactions != 0 {
 		t.Errorf("expected 0 compactions (hook returned nil), got %d", result.Compactions)
+	}
+}
+
+func TestTrimImageMessages(t *testing.T) {
+	msgs := []schema.MessageContent{
+		{Role: schema.ChatMessageTypeSystem, Parts: []schema.ContentPart{schema.TextContent{Text: "sys"}}},
+		{Role: schema.ChatMessageTypeHuman, Parts: []schema.ContentPart{schema.ImageContent{Data: "img1"}}},
+		{Role: schema.ChatMessageTypeHuman, Parts: []schema.ContentPart{schema.ImageContent{Data: "img2"}}},
+		{Role: schema.ChatMessageTypeHuman, Parts: []schema.ContentPart{schema.ImageContent{Data: "img3"}}},
+	}
+
+	trimmed := trimImageMessages(msgs, 1)
+	if len(trimmed) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(trimmed))
+	}
+
+	if _, ok := trimmed[1].Parts[0].(schema.TextContent); !ok {
+		t.Error("expected img1 to be trimmed to TextContent")
+	}
+	if _, ok := trimmed[2].Parts[0].(schema.TextContent); !ok {
+		t.Error("expected img2 to be trimmed to TextContent")
+	}
+	if _, ok := trimmed[3].Parts[0].(schema.ImageContent); !ok {
+		t.Error("expected img3 to be kept as ImageContent")
+	}
+}
+
+func TestExtractToolImage(t *testing.T) {
+	longImg := "long_image_string_over_100_chars_long_image_string_over_100_chars_long_image_string_over_100_chars_long_image_string_over_100_chars_long_image_string_over_100_chars"
+
+	// Test map
+	m := map[string]any{"result": "ok", "imageBase64": longImg}
+	res, img := extractToolImage(m)
+	if img == "" {
+		t.Error("expected image to be extracted from map")
+	}
+	if resMap, ok := res.(map[string]any); !ok || resMap["imageBase64"] != nil {
+		t.Error("expected image to be stripped from map")
+	}
+
+	// Test struct
+	type testStruct struct {
+		Result      string
+		ImageBase64 string
+	}
+	s := testStruct{Result: "ok", ImageBase64: longImg}
+	res, img = extractToolImage(s)
+	if img == "" {
+		t.Error("expected image to be extracted from struct")
+	}
+	if resMap, ok := res.(map[string]any); !ok || resMap["imageBase64"] != nil {
+		t.Error("expected image to be stripped from struct into fallback map")
+	}
+}
+
+func TestAgentLoop_Run_Middlewares(t *testing.T) {
+	registry := NewRegistry()
+	_ = registry.Register(&mockTool{
+		name:        "test",
+		description: "Test tool",
+		execFunc: func(ctx context.Context, params map[string]any) (any, error) {
+			return "done", nil
+		},
+	})
+
+	model := &mockLLM{
+		responses: []string{"", "final"},
+		toolCalls: [][]llms.ToolCall{
+			{{Function: llms.FunctionCall{Name: "test", Arguments: map[string]any{}}}},
+			{},
+		},
+	}
+
+	middlewareCalled := false
+	middleware := func(next ActionHandler) ActionHandler {
+		return func(ctx context.Context, toolName string, params map[string]any) (any, error) {
+			middlewareCalled = true
+			return next(ctx, toolName, params)
+		}
+	}
+
+	loop, err := NewAgentLoop(model, registry, WithLoopMiddleware(middleware))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	_, err = loop.Run(context.Background(), Task{Description: "test"}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !middlewareCalled {
+		t.Error("middleware was not called")
 	}
 }

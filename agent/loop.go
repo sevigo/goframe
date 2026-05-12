@@ -534,13 +534,6 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 		toolCallID := tc.ID
 		params := tc.Function.Arguments
 
-		// Normalize params if wrapped in "properties" key
-		if props, ok := params["properties"]; ok {
-			if propsMap, ok := props.(map[string]any); ok {
-				params = propsMap
-			}
-		}
-
 		if l.observer != nil {
 			l.observer.OnToolCall(ctx, toolName, params)
 		}
