@@ -610,7 +610,19 @@ func (o *LLM) isRetryableError(err error) bool {
 	}
 
 	errStr := strings.ToLower(err.Error())
-	patterns := []string{
+
+	nonRetryablePatterns := []string{
+		"insufficient_quota",
+		"invalid_api_key",
+		"authentication",
+	}
+	for _, pattern := range nonRetryablePatterns {
+		if strings.Contains(errStr, pattern) {
+			return false
+		}
+	}
+
+	retryablePatterns := []string{
 		"connection reset",
 		"connection refused",
 		"unexpected eof",
@@ -625,7 +637,7 @@ func (o *LLM) isRetryableError(err error) bool {
 		"server_error",
 	}
 
-	for _, pattern := range patterns {
+	for _, pattern := range retryablePatterns {
 		if strings.Contains(errStr, pattern) {
 			return true
 		}
