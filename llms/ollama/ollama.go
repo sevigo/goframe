@@ -169,10 +169,18 @@ func (o *LLM) buildChatMessages(messages []schema.MessageContent) []api.Message 
 			case schema.TextContent:
 				textParts = append(textParts, p.Text)
 			case schema.ImageContent:
-				imageBytes, err := base64.StdEncoding.DecodeString(p.Data)
+				data := p.Data
+				if idx := strings.Index(data, "base64,"); idx != -1 {
+					data = data[idx+7:]
+				}
+				imageBytes, err := base64.StdEncoding.DecodeString(data)
 				if err != nil {
-					o.logger.Warn("failed to decode base64 image data, image will be skipped", "error", err)
-					continue
+					var fallbackErr error
+					imageBytes, fallbackErr = base64.RawStdEncoding.DecodeString(data)
+					if fallbackErr != nil {
+						o.logger.Warn("failed to decode base64 image data, image will be skipped", "error", err)
+						continue
+					}
 				}
 				images = append(images, api.ImageData(imageBytes))
 			case schema.ToolCallContent:
@@ -430,12 +438,21 @@ func (o *LLM) applyFormatOption(req *api.ChatRequest, opts llms.CallOptions) {
 	if opts.JSONMode {
 		req.Format = json.RawMessage(`"json"`)
 	} else if opts.JSONSchema != nil {
-		schemaBytes, err := json.Marshal(opts.JSONSchema)
-		if err != nil {
-			o.logger.Warn("failed to marshal JSONSchema, structured output will not be applied", "error", err)
-		} else {
-			req.Format = schemaBytes
+		var schemaBytes []byte
+		switch v := opts.JSONSchema.(type) {
+		case []byte:
+			schemaBytes = v
+		case string:
+			schemaBytes = []byte(v)
+		default:
+			var err error
+			schemaBytes, err = json.Marshal(v)
+			if err != nil {
+				o.logger.Warn("failed to marshal JSONSchema, structured output will not be applied", "error", err)
+				return
+			}
 		}
+		req.Format = schemaBytes
 	}
 }
 
@@ -572,10 +589,13 @@ func getStringSlice(m map[string]any, key string) []string {
 	return nil
 }
 
-// parseKeepAlive parses a keep_alive duration string (e.g., "5m", "10m", "0").
+// parseKeepAlive parses a keep_alive duration string (e.g., "5m", "10m", "0", "-1").
 func parseKeepAlive(s string) time.Duration {
 	if s == "0" {
 		return 0
+	}
+	if s == "-1" {
+		return -1
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
