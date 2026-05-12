@@ -40,6 +40,10 @@ type CallOptions struct {
 	KeepAlive string `json:"keep_alive,omitempty"`
 	// ContextLength sets the context window size in tokens.
 	ContextLength int `json:"context_length,omitempty"`
+	// Logprobs specifies whether to return log probabilities of the output tokens.
+	Logprobs bool `json:"logprobs,omitempty"`
+	// TopLogprobs specifies the number of most likely tokens to return at each token position.
+	TopLogprobs int `json:"top_logprobs,omitempty"`
 
 	// setFields tracks which numeric fields were explicitly set,
 	// since zero values (Temperature=0, Seed=0) are valid but
@@ -186,6 +190,20 @@ func WithKeepAlive(keepAlive string) CallOption {
 func WithContextLength(length int) CallOption {
 	return func(o *CallOptions) {
 		o.ContextLength = length
+	}
+}
+
+// WithLogprobs specifies whether to return log probabilities of the output tokens.
+func WithLogprobs(enabled bool) CallOption {
+	return func(o *CallOptions) {
+		o.Logprobs = enabled
+	}
+}
+
+// WithTopLogprobs specifies the number of most likely tokens to return at each token position.
+func WithTopLogprobs(topLogprobs int) CallOption {
+	return func(o *CallOptions) {
+		o.TopLogprobs = topLogprobs
 	}
 }
 

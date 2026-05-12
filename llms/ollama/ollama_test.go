@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ollama/ollama/api"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/sevigo/goframe/llms"
@@ -450,4 +451,47 @@ func TestInvalidateModelDetailsCache(t *testing.T) {
 	assert.Nil(t, llm.details, "details should be nil after invalidation")
 	assert.Nil(t, llm.detailsErr, "detailsErr should be nil after invalidation")
 	llm.detailsMu.RUnlock()
+}
+
+func TestBuildChatRequest_WithLogprobs(t *testing.T) {
+	llm := &LLM{
+		options: applyOptions(),
+		logger:  slog.Default(),
+	}
+
+	opts := llms.CallOptions{}
+	llms.WithLogprobs(true)(&opts)
+	llms.WithTopLogprobs(5)(&opts)
+
+	req := llm.buildChatRequest("test-model", nil, opts)
+	assert.True(t, req.Logprobs)
+	assert.Equal(t, 5, req.TopLogprobs)
+}
+
+func TestBuildGenerationInfo_WithLogprobs(t *testing.T) {
+	llm := &LLM{
+		options: applyOptions(),
+		logger:  slog.Default(),
+	}
+
+	handler := &chatResponseHandler{
+		logprobs: []api.Logprob{
+			{
+				TokenLogprob: api.TokenLogprob{
+					Token:   "hello",
+					Logprob: -0.0123,
+				},
+			},
+		},
+	}
+
+	var finalResp api.ChatResponse
+	genInfo := llm.buildGenerationInfo(handler, finalResp, "test-model", 100*time.Millisecond)
+
+	assert.NotNil(t, genInfo["Logprobs"])
+	lps, ok := genInfo["Logprobs"].([]api.Logprob)
+	assert.True(t, ok)
+	assert.Len(t, lps, 1)
+	assert.Equal(t, "hello", lps[0].Token)
+	assert.Equal(t, -0.0123, lps[0].Logprob)
 }
