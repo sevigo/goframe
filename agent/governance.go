@@ -77,7 +77,7 @@ func (g *Governance) Validate(ctx context.Context, toolName string, params map[s
 
 	for _, check := range checks {
 		if err := check.Validate(ctx, toolName, params); err != nil {
-			logger.Warn("governance check denied tool execution",
+			logger.WarnContext(ctx, "governance check denied tool execution",
 				"tool", toolName,
 				"error", err,
 			)
@@ -85,7 +85,7 @@ func (g *Governance) Validate(ctx context.Context, toolName string, params map[s
 		}
 	}
 
-	logger.Debug("governance checks passed",
+	logger.DebugContext(ctx, "governance checks passed",
 		"tool", toolName,
 		"check_count", len(checks),
 	)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/qdrant/go-client/qdrant"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/sevigo/goframe/schema"
 	"github.com/sevigo/goframe/vectorstores"
@@ -263,14 +264,14 @@ func TestStoreValidateHybridSearchOptions(t *testing.T) {
 	t.Run("nil_sparse_query", func(t *testing.T) {
 		store := &Store{options: options{sparseVectors: []string{"bow"}}}
 		err := store.validateHybridSearchOptions(vectorstores.Options{SparseQuery: nil})
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	})
 
 	t.Run("sparse_query_without_sparse_config", func(t *testing.T) {
 		store := &Store{options: options{sparseVectors: nil}}
 		sparse := &schema.SparseVector{Indices: []uint32{1}, Values: []float32{0.5}}
 		err := store.validateHybridSearchOptions(vectorstores.Options{SparseQuery: sparse})
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), ErrMissingSparseName.Error())
 	})
 
@@ -278,14 +279,14 @@ func TestStoreValidateHybridSearchOptions(t *testing.T) {
 		store := &Store{options: options{sparseVectors: []string{"bow"}}}
 		sparse := &schema.SparseVector{Indices: []uint32{1}, Values: []float32{0.5}}
 		err := store.validateHybridSearchOptions(vectorstores.Options{SparseQuery: sparse})
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	})
 
 	t.Run("mismatched_sparse_vector_length", func(t *testing.T) {
 		store := &Store{options: options{sparseVectors: []string{"bow"}}}
 		sparse := &schema.SparseVector{Indices: []uint32{1, 2}, Values: []float32{0.5}}
 		err := store.validateHybridSearchOptions(vectorstores.Options{SparseQuery: sparse})
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "sparse vector indices and values length mismatch")
 	})
 }
@@ -352,7 +353,7 @@ func TestStoreConvertToQdrantValue(t *testing.T) {
 	t.Run("float64_value", func(t *testing.T) {
 		val := store.convertToQdrantValue(3.14)
 		assert.IsType(t, &qdrant.Value{}, val)
-		assert.Equal(t, 3.14, val.GetDoubleValue())
+		assert.InDelta(t, 3.14, val.GetDoubleValue(), 0.0001)
 	})
 
 	t.Run("bool_value", func(t *testing.T) {
@@ -400,7 +401,7 @@ func TestStoreConvertFromQdrantValue(t *testing.T) {
 	t.Run("double_value", func(t *testing.T) {
 		val := &qdrant.Value{Kind: &qdrant.Value_DoubleValue{DoubleValue: 3.14}}
 		result := store.convertFromQdrantValue(val)
-		assert.Equal(t, 3.14, result)
+		assert.InDelta(t, 3.14, result, 0.0001)
 	})
 
 	t.Run("bool_value", func(t *testing.T) {
@@ -510,7 +511,7 @@ func TestStorePayloadToDocument(t *testing.T) {
 		assert.Equal(t, "test", doc.PageContent)
 		assert.Equal(t, "str", doc.Metadata["string_field"])
 		assert.Equal(t, int64(42), doc.Metadata["int_field"])
-		assert.Equal(t, 3.14, doc.Metadata["float_field"])
+		assert.InDelta(t, 3.14, doc.Metadata["float_field"], 0.0001)
 		assert.True(t, doc.Metadata["bool_field"].(bool))
 		assert.Nil(t, doc.Metadata["null_field"])
 	})
@@ -521,7 +522,7 @@ func TestStorePayloadToDocument(t *testing.T) {
 		}
 
 		doc := store.payloadToDocument(payload)
-		assert.Equal(t, "", doc.PageContent)
+		assert.Empty(t, doc.PageContent)
 	})
 }
 
@@ -718,7 +719,7 @@ func TestStoreDoWithRetry(t *testing.T) {
 			callCount++
 			return nil
 		})
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, 1, callCount)
 	})
 
@@ -731,7 +732,7 @@ func TestStoreDoWithRetry(t *testing.T) {
 			}
 			return nil
 		})
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, 2, callCount)
 	})
 
@@ -741,7 +742,7 @@ func TestStoreDoWithRetry(t *testing.T) {
 			callCount++
 			return fmt.Errorf("invalid parameter")
 		})
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Equal(t, 1, callCount)
 	})
 
@@ -751,7 +752,7 @@ func TestStoreDoWithRetry(t *testing.T) {
 			callCount++
 			return fmt.Errorf("connection refused")
 		})
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "test_op failed after 3 attempts")
 		assert.Equal(t, 3, callCount) // initial + 2 retries
 	})

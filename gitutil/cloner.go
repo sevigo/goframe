@@ -32,7 +32,7 @@ func (c *Cloner) Clone(ctx context.Context, repoURL string) (string, func(), err
 	c.Logger.InfoContext(ctx, "Cloning repository", "url", repoURL, "path", tempPath)
 
 	cleanupFunc := func() {
-		c.Logger.Info("Cleaning up temporary repository", "path", tempPath)
+		c.Logger.InfoContext(ctx, "Cleaning up temporary repository", "path", tempPath)
 		_ = os.RemoveAll(tempPath)
 	}
 

@@ -310,7 +310,7 @@ func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.Message
 			l.observer.OnIterationStart(ctx, i+1)
 		}
 
-		logger.Debug("starting iteration",
+		logger.DebugContext(ctx, "starting iteration",
 			"iteration", i+1,
 			"state", "thinking",
 		)
@@ -358,7 +358,7 @@ func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.Message
 			result.Response = response
 			result.State = StateComplete
 			result.Iterations = i + 1
-			logger.Info("loop completed",
+			logger.InfoContext(ctx, "loop completed",
 				"iterations", result.Iterations,
 				"response_length", len(response),
 			)
@@ -387,7 +387,7 @@ func (l *AgentLoop) Run(ctx context.Context, task Task, history []schema.Message
 		// in check for long-running loops.
 		if l.compactionHook != nil {
 			if compacted := l.compactionHook(ctx, messages, result.Tokens); compacted != nil {
-				logger.Info("context compacted",
+				logger.InfoContext(ctx, "context compacted",
 					"iteration", i+1,
 					"before", len(messages),
 					"after", len(compacted),
@@ -560,7 +560,7 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 		// Run governance checks
 		if l.governance != nil {
 			if err := l.governance.Validate(ctx, toolName, params); err != nil {
-				l.logger.Warn("governance blocked tool execution",
+				l.logger.WarnContext(ctx, "governance blocked tool execution",
 					"tool", toolName,
 					"error", err,
 				)
@@ -590,7 +590,7 @@ func (l *AgentLoop) actAndObserve(ctx context.Context, toolCalls []llms.ToolCall
 
 		// Create observation message
 		if err != nil {
-			l.logger.Error("tool execution failed",
+			l.logger.ErrorContext(ctx, "tool execution failed",
 				"tool", toolName,
 				"error", err,
 				"duration_ms", duration.Milliseconds(),

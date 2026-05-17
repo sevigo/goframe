@@ -156,6 +156,6 @@ func TestGoPlugin_MetadataAndHandling(t *testing.T) {
 		// Invalid Go code should produce an error
 		invalidContent := "package main\nfunc broken{"
 		_, err = plugin.Chunk(invalidContent, "broken.go", nil)
-		assert.Error(t, err)
+		require.Error(t, err)
 	})
 }

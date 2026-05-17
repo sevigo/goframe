@@ -35,7 +35,7 @@ func (r *DefinitionRetriever) GetDefinition(ctx context.Context, symbolName stri
 	// Add sparse vector for better exact symbol matching
 	sparseVec, err := sparse.GenerateSparseVector(ctx, symbolName)
 	if err != nil {
-		slog.Warn("sparse vector generation failed, falling back to dense-only search",
+		slog.Default().WarnContext(ctx, "sparse vector generation failed, falling back to dense-only search",
 			"error", err, "symbol", symbolName)
 	} else {
 		searchOpts = append(searchOpts, WithSparseQuery(sparseVec))

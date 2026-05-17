@@ -110,7 +110,7 @@ func (c *CodeAwareTextSplitter) splitSingleDocument(ctx context.Context, doc sch
 	// 1. Identify Parser once
 	parser, err := c.parserRegistry.GetParserForFile(source, nil)
 	if err != nil {
-		c.logger.Debug("No specific parser found for metadata extraction", "source", source)
+		c.logger.DebugContext(ctx, "No specific parser found for metadata extraction", "source", source)
 	}
 
 	// 2. Extract specific metadata (Package, Imports, and Test status)

@@ -26,23 +26,23 @@ func TestLLM_GenerateContent(t *testing.T) {
 
 		// Test first response
 		resp, err := fakeLLM.GenerateContent(ctx, nil)
-		assert.NoError(t, err, "should not return error")
+		require.NoError(t, err, "should not return error")
 		assert.Len(t, resp.Choices, 1, "should have exactly one choice")
 		assert.Equal(t, "first", resp.Choices[0].Content, "should return first response")
 
 		// Test second response
 		resp, err = fakeLLM.GenerateContent(ctx, nil)
-		assert.NoError(t, err, "should not return error")
+		require.NoError(t, err, "should not return error")
 		assert.Equal(t, "second", resp.Choices[0].Content, "should return second response")
 
 		// Test third response
 		resp, err = fakeLLM.GenerateContent(ctx, nil)
-		assert.NoError(t, err, "should not return error")
+		require.NoError(t, err, "should not return error")
 		assert.Equal(t, "third", resp.Choices[0].Content, "should return third response")
 
 		// Test cycling back to first
 		resp, err = fakeLLM.GenerateContent(ctx, nil)
-		assert.NoError(t, err, "should not return error")
+		require.NoError(t, err, "should not return error")
 		assert.Equal(t, "first", resp.Choices[0].Content, "should cycle back to first response")
 	})
 
@@ -50,8 +50,8 @@ func TestLLM_GenerateContent(t *testing.T) {
 		fakeLLM := fake.NewFakeLLM([]string{})
 
 		resp, err := fakeLLM.GenerateContent(ctx, nil)
-		assert.Error(t, err, "should return error for empty responses")
-		assert.EqualError(t, err, "no responses configured", "should return specific error message")
+		require.Error(t, err, "should return error for empty responses")
+		require.EqualError(t, err, "no responses configured", "should return specific error message")
 		assert.Nil(t, resp, "response should be nil on error")
 	})
 
@@ -60,12 +60,12 @@ func TestLLM_GenerateContent(t *testing.T) {
 
 		// First call
 		resp, err := fakeLLM.GenerateContent(ctx, nil)
-		assert.NoError(t, err, "should not return error")
+		require.NoError(t, err, "should not return error")
 		assert.Equal(t, "only response", resp.Choices[0].Content, "should return the only response")
 
 		// Second call should cycle back
 		resp, err = fakeLLM.GenerateContent(ctx, nil)
-		assert.NoError(t, err, "should not return error")
+		require.NoError(t, err, "should not return error")
 		assert.Equal(t, "only response", resp.Choices[0].Content, "should cycle back to the only response")
 	})
 }
@@ -78,12 +78,12 @@ func TestLLM_Call(t *testing.T) {
 		fakeLLM := fake.NewFakeLLM(responses)
 
 		result, err := fakeLLM.Call(ctx, "test prompt")
-		assert.NoError(t, err, "should not return error")
+		require.NoError(t, err, "should not return error")
 		assert.Equal(t, "hello world", result, "should return first response")
 
 		// Test second call
 		result, err = fakeLLM.Call(ctx, "another prompt")
-		assert.NoError(t, err, "should not return error")
+		require.NoError(t, err, "should not return error")
 		assert.Equal(t, "second response", result, "should return second response")
 	})
 
@@ -92,7 +92,7 @@ func TestLLM_Call(t *testing.T) {
 
 		result, err := fakeLLM.Call(ctx, "test prompt")
 		require.Error(t, err, "should return error for empty responses")
-		assert.EqualError(t, err, "no responses configured", "should return specific error message")
+		require.EqualError(t, err, "no responses configured", "should return specific error message")
 		assert.Empty(t, result, "result should be empty on error")
 	})
 
@@ -132,10 +132,10 @@ func TestLLM_AddResponse(t *testing.T) {
 
 	// Test that the new response is used in cycle
 	_, err := fakeLLM.GenerateContent(context.Background(), nil) // "initial"
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	resp, err := fakeLLM.GenerateContent(context.Background(), nil) // "added response"
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, "added response", resp.Choices[0].Content, "should return the added response")
 }
 

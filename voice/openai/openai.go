@@ -428,7 +428,7 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 	}
 
 	// Debug: log response size
-	s.logger.Debug("captioned response body received",
+	s.logger.DebugContext(ctx, "captioned response body received",
 		"status", resp.StatusCode,
 		"content_length", resp.ContentLength,
 		"body_size", len(respBody),
@@ -448,7 +448,7 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 	// If we found NDJSON format, use the last complete JSON object
 	var jsonBody []byte
 	if len(lastValidJSON) > 0 && len(lastValidJSON) != len(respBody) {
-		s.logger.Debug("detected NDJSON format, using last JSON object",
+		s.logger.DebugContext(ctx, "detected NDJSON format, using last JSON object",
 			"total_size", len(respBody),
 			"json_size", len(lastValidJSON),
 		)
@@ -465,7 +465,7 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 		if len(preview) > 500 {
 			preview = preview[:500] + "..."
 		}
-		s.logger.Error("failed to parse JSON response",
+		s.logger.ErrorContext(ctx, "failed to parse JSON response",
 			"error", unmarshalErr,
 			"response_preview", preview,
 		)
@@ -473,7 +473,7 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 	}
 
 	// Debug: log what we received
-	s.logger.Debug("captioned response parsed",
+	s.logger.DebugContext(ctx, "captioned response parsed",
 		"audio_len", len(capResp.Audio),
 		"timestamps_count", len(capResp.Timestamps),
 		"format", capResp.AudioFormat,
@@ -485,7 +485,7 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 		return nil, fmt.Errorf("openai: failed to decode base64 audio: %w", err)
 	}
 
-	s.logger.Debug("decoded audio",
+	s.logger.DebugContext(ctx, "decoded audio",
 		"base64_len", len(capResp.Audio),
 		"decoded_len", len(audioData),
 		"first_100_bytes", fmt.Sprintf("%x", audioData[:min(100, len(audioData))]),
@@ -494,7 +494,7 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 	// Convert timestamps from seconds to milliseconds
 	// Handle floating point precision issues from Kokoro
 	timestamps := make([]voice.WordTimestamp, 0, len(capResp.Timestamps))
-	s.logger.Debug("processing timestamps",
+	s.logger.DebugContext(ctx, "processing timestamps",
 		"input_count", len(capResp.Timestamps),
 	)
 
@@ -502,7 +502,7 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 		startMs := int(ts.StartTime * 1000)
 		endMs := int(ts.EndTime * 1000)
 
-		s.logger.Debug("timestamp conversion",
+		s.logger.DebugContext(ctx, "timestamp conversion",
 			"index", i,
 			"word", ts.Word,
 			"start_time_sec", ts.StartTime,
@@ -513,7 +513,7 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 
 		// Clamp negative times to 0 (can happen with float precision)
 		if startMs < 0 {
-			s.logger.Warn("negative start time, clamping to 0",
+			s.logger.WarnContext(ctx, "negative start time, clamping to 0",
 				"word", ts.Word,
 				"index", i,
 				"start_time", ts.StartTime,
@@ -522,7 +522,7 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 			startMs = 0
 		}
 		if endMs < 0 {
-			s.logger.Warn("negative end time, clamping to 0",
+			s.logger.WarnContext(ctx, "negative end time, clamping to 0",
 				"word", ts.Word,
 				"index", i,
 				"end_time", ts.EndTime,
@@ -533,7 +533,7 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 
 		// Skip invalid timestamps where end <= start
 		if endMs <= startMs {
-			s.logger.Warn("skipping invalid timestamp",
+			s.logger.WarnContext(ctx, "skipping invalid timestamp",
 				"word", ts.Word,
 				"index", i,
 				"start_ms", startMs,
@@ -549,7 +549,7 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 		})
 	}
 
-	s.logger.Debug("valid timestamps",
+	s.logger.DebugContext(ctx, "valid timestamps",
 		"input_count", len(capResp.Timestamps),
 		"valid_count", len(timestamps),
 		"skipped", len(capResp.Timestamps)-len(timestamps),
@@ -561,7 +561,7 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 		durationMs = timestamps[len(timestamps)-1].EndMs
 	}
 
-	s.logger.Info("captioned synthesis complete",
+	s.logger.InfoContext(ctx, "captioned synthesis complete",
 		"audio_bytes", len(audioData),
 		"word_count", len(timestamps),
 		"duration_ms", durationMs,

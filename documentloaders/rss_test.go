@@ -149,7 +149,7 @@ func TestRSSLoader_LoadAndProcessStream(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, len(batches), 0)
+	// Assertion removed as it was meaningless and test fails on nil slice when expecting len>=0
 
 	if len(batches) > 0 {
 		totalDocs := 0
@@ -253,7 +253,7 @@ func TestRSSLoader_WithTimeout(t *testing.T) {
 	// If there's an error, that's acceptable (timeout)
 	// If no error but no docs, that's also acceptable (feed failed but loader continues)
 	if err == nil {
-		assert.Equal(t, 0, len(docs), "Should have no documents when feed times out")
+		assert.Empty(t, docs, "Should have no documents when feed times out")
 	}
 }
 
@@ -275,18 +275,18 @@ func TestRSSLoader_InvalidURL(t *testing.T) {
 	// RSS loader doesn't return error when feeds fail, it just logs and continues
 	// So we should get an empty result
 	require.NoError(t, err)
-	assert.Equal(t, 0, len(docs), "Should have no documents from invalid URL")
+	assert.Empty(t, docs, "Should have no documents from invalid URL")
 }
 
 func TestRSSLoader_NoFeeds(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	registry := parsers.NewRegistry(logger)
 	_, err := documentloaders.NewRSS([]string{}, registry)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, documentloaders.ErrNoFeedURLs, err)
 }
 
 func TestRSSLoader_NilRegistry(t *testing.T) {
 	_, err := documentloaders.NewRSS([]string{"https://example.com/feed.xml"}, nil)
-	assert.Error(t, err)
+	require.Error(t, err)
 }

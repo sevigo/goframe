@@ -429,14 +429,14 @@ func (t *loggingTool) Execute(ctx context.Context, params map[string]any) (any, 
 
 	result, err := t.Tool.Execute(ctx, params)
 	if err != nil {
-		t.logger.Error("tool execution failed",
+		t.logger.ErrorContext(ctx, "tool execution failed",
 			"name", t.Name(),
 			"error", err,
 		)
 		return nil, err
 	}
 
-	t.logger.Debug("tool execution complete",
+	t.logger.DebugContext(ctx, "tool execution complete",
 		"name", t.Name(),
 	)
 	return result, nil

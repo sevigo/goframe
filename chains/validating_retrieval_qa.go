@@ -79,12 +79,12 @@ func (c *ValidatingRetrievalQA) Call(ctx context.Context, query string) (string,
 
 	docs, err := c.Retriever.GetRelevantDocuments(ctx, query)
 	if err != nil {
-		c.logger.Error("Document retrieval failed", "error", err)
+		c.logger.ErrorContext(ctx, "Document retrieval failed", "error", err)
 		return "", fmt.Errorf("document retrieval failed: %w", err)
 	}
 
 	if len(docs) == 0 {
-		c.logger.Info("No documents retrieved, using direct generation")
+		c.logger.InfoContext(ctx, "No documents retrieved, using direct generation")
 		return c.generateDirectAnswer(ctx, query)
 	}
 
@@ -92,16 +92,16 @@ func (c *ValidatingRetrievalQA) Call(ctx context.Context, query string) (string,
 
 	isRelevant, err := c.validateContext(ctx, query, contextStr)
 	if err != nil {
-		c.logger.Error("Context validation failed", "error", err)
+		c.logger.ErrorContext(ctx, "Context validation failed", "error", err)
 		return "", fmt.Errorf("context validation failed: %w", err)
 	}
 
 	if isRelevant {
-		c.logger.Info("Context validated as relevant, generating RAG answer")
+		c.logger.InfoContext(ctx, "Context validated as relevant, generating RAG answer")
 		return c.generateRAGAnswer(ctx, query, contextStr)
 	}
 
-	c.logger.Info("Context validated as irrelevant, using direct generation")
+	c.logger.InfoContext(ctx, "Context validated as irrelevant, using direct generation")
 	return c.generateDirectAnswer(ctx, query)
 }
 
@@ -128,7 +128,7 @@ func (c *ValidatingRetrievalQA) validateContext(ctx context.Context, query, cont
 		return false, err
 	}
 
-	c.logger.Debug("Validation completed", "response", response)
+	c.logger.DebugContext(ctx, "Validation completed", "response", response)
 
 	// TODO: we should consider more sophisticated validation parsing
 	return strings.Contains(strings.ToLower(response), "yes"), nil

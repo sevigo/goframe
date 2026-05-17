@@ -16,7 +16,8 @@ issues:
   # Maximum count of issues with the same text.
   # Set to 0 to disable.
   # Default: 3
-  max-same-issues: 50
+  max-same-issues: 0
+  max-issues-per-linter: 0
 
 formatters:
   enable:
@@ -35,7 +36,7 @@ formatters:
       # with the given prefixes are grouped after 3rd-party packages.
       # Default: []
       local-prefixes:
-        - github.com/my/project
+        - github.com/sevigo/goframe
 
     # golines:
     #   max-len: 140
@@ -96,14 +97,14 @@ linters:
     - protogetter # reports direct reads from proto message fields when getters should be used
     - reassign # checks that package variables are not reassigned
     - recvcheck # checks for receiver type consistency
-    # - revive # fast, configurable, extensible, flexible, and beautiful linter for Go, drop-in replacement of golint
+    - revive # fast, configurable, extensible, flexible, and beautiful linter for Go, drop-in replacement of golint
     - rowserrcheck # checks whether Err of rows is checked successfully
-    # - sloglint # ensure consistent code style when using log/slog
+    - sloglint # ensure consistent code style when using log/slog
     - spancheck # checks for mistakes with OpenTelemetry/Census spans
     - sqlclosecheck # checks that sql.Rows and sql.Stmt are closed
     - staticcheck # is a go vet on steroids, applying a ton of static analysis checks
     - testableexamples # checks if examples are testable (have an expected output)
-    # - testifylint # checks usage of github.com/stretchr/testify
+    - testifylint # checks usage of github.com/stretchr/testify
     # - testpackage # makes you use a separate _test package
     - tparallel # detects inappropriate usage of t.Parallel() method in your Go test codes
     - unconvert # removes unnecessary type conversions
@@ -153,6 +154,16 @@ linters:
 
   # All settings can be found here https://github.com/golangci/golangci-lint/blob/HEAD/.golangci.reference.yml
   settings:
+    revive:
+      enable-default-rules: true
+      rules:
+        - name: unused-parameter
+          disabled: true
+        - name: exported
+          arguments:
+            - disableStutteringCheck
+        - name: package-comments
+          disabled: true
     gosec:
       excludes:
         - G115

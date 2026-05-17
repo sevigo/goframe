@@ -216,7 +216,7 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 		return nil, errors.New("voice: no segments provided")
 	}
 
-	logger.Info("starting captioned dialogue synthesis",
+	logger.InfoContext(ctx, "starting captioned dialogue synthesis",
 		"segment_count", len(segments),
 		"generate_subtitles", ds.GenerateSubtitles,
 		"crossfade_ms", ds.CrossfadeMs,
@@ -231,7 +231,7 @@ func (ds *DialogueSynthesizerCaptioned) SynthesizeDialogueCaptioned(ctx context.
 		return nil, err
 	}
 
-	logger.Info("all segments synthesized, calculating pauses")
+	logger.InfoContext(ctx, "all segments synthesized, calculating pauses")
 
 	// Calculate perfect pauses between segments
 	pauses := ds.calculateAllPauses(captionedSegments, logger)
@@ -249,7 +249,7 @@ func (ds *DialogueSynthesizerCaptioned) synthesizeAllSegments(ctx context.Contex
 			return nil, fmt.Errorf("voice: no voice mapping for speaker %q (segment %d)", seg.Speaker, i)
 		}
 
-		logger.Debug("synthesizing segment",
+		logger.DebugContext(ctx, "synthesizing segment",
 			"index", i,
 			"speaker", seg.Speaker,
 			"voice_id", voiceID,
@@ -262,7 +262,7 @@ func (ds *DialogueSynthesizerCaptioned) synthesizeAllSegments(ctx context.Contex
 			return nil, fmt.Errorf("voice: failed to synthesize segment %d for speaker %q: %w", i, seg.Speaker, err)
 		}
 
-		logger.Debug("segment synthesized",
+		logger.DebugContext(ctx, "segment synthesized",
 			"index", i,
 			"audio_bytes", len(audio.Data),
 			"duration_ms", audio.DurationMs,
@@ -282,7 +282,7 @@ func (ds *DialogueSynthesizerCaptioned) synthesizeAllSegments(ctx context.Contex
 
 			// Warn if Kokoro added excessive silence (indicates trimming needed)
 			if trailingSilence > MaxTrailingSilenceMs || leadingSilence > MaxLeadingSilenceMs {
-				logger.Warn("Kokoro added excessive silence, will be capped",
+				logger.WarnContext(ctx, "Kokoro added excessive silence, will be capped",
 					"index", i,
 					"speaker", seg.Speaker,
 					"trailing_ms", trailingSilence,
@@ -292,7 +292,7 @@ func (ds *DialogueSynthesizerCaptioned) synthesizeAllSegments(ctx context.Contex
 				)
 			}
 
-			logger.Debug("segment timing calculated",
+			logger.DebugContext(ctx, "segment timing calculated",
 				"index", i,
 				"duration_ms", audio.DurationMs,
 				"speech_duration_ms", speechDuration,

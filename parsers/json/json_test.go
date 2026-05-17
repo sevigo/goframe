@@ -35,7 +35,7 @@ func TestJsonPlugin(t *testing.T) {
 		require.NoError(t, err)
 
 		// Small object should create single chunk
-		assert.Equal(t, 1, len(chunks))
+		assert.Len(t, chunks, 1)
 
 		chunk := chunks[0]
 		assert.Equal(t, "json_document", chunk.Type)
@@ -217,7 +217,7 @@ func TestJsonPlugin(t *testing.T) {
 		chunks, err := plugin.Chunk(invalidContent, "invalid.json", &model.CodeChunkingOptions{})
 		require.NoError(t, err)
 
-		assert.Equal(t, 1, len(chunks))
+		assert.Len(t, chunks, 1)
 		chunk := chunks[0]
 		assert.Equal(t, "json_invalid", chunk.Type)
 		assert.Contains(t, chunk.Annotations, "error")
@@ -230,7 +230,7 @@ func TestJsonPlugin(t *testing.T) {
 		chunks, err := plugin.Chunk(primitiveContent, "message.json", &model.CodeChunkingOptions{})
 		require.NoError(t, err)
 
-		assert.Equal(t, 1, len(chunks))
+		assert.Len(t, chunks, 1)
 		chunk := chunks[0]
 		assert.Equal(t, "json_document", chunk.Type)
 		assert.Equal(t, "Message", chunk.Identifier)
@@ -244,7 +244,7 @@ func TestJsonPlugin(t *testing.T) {
 		chunks, err := plugin.Chunk(emptyContent, "empty.json", &model.CodeChunkingOptions{})
 		require.NoError(t, err)
 
-		assert.Equal(t, 1, len(chunks))
+		assert.Len(t, chunks, 1)
 		chunk := chunks[0]
 		assert.Equal(t, "json_document", chunk.Type)
 		assert.Equal(t, "Empty", chunk.Identifier)

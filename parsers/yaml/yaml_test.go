@@ -250,7 +250,7 @@ max_connections: 100
 		require.NoError(t, err)
 
 		// Should create single document chunk for simple YAML
-		assert.Equal(t, 1, len(chunks))
+		assert.Len(t, chunks, 1)
 		chunk := chunks[0]
 		assert.Equal(t, "yaml_document", chunk.Type)
 		assert.Equal(t, "Simple", chunk.Identifier)
@@ -269,7 +269,7 @@ name: test
 		chunks, err := plugin.Chunk(invalidYaml, "invalid.yaml", &model.CodeChunkingOptions{})
 		require.NoError(t, err)
 
-		assert.Equal(t, 1, len(chunks))
+		assert.Len(t, chunks, 1)
 		chunk := chunks[0]
 		assert.Equal(t, "yaml_invalid", chunk.Type)
 		assert.Contains(t, chunk.Annotations["error"], "yaml") // Should contain YAML error
