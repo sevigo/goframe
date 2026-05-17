@@ -21,14 +21,17 @@ func NewPDFPlugin(logger *slog.Logger) schema.ParserPlugin {
 	}
 }
 
+// Name returns "pdf".
 func (p *PDFPlugin) Name() string {
 	return "pdf"
 }
 
+// Extensions returns the file extensions handled by this plugin.
 func (p *PDFPlugin) Extensions() []string {
 	return []string{".pdf"}
 }
 
+// CanHandle returns true for PDF files.
 func (p *PDFPlugin) CanHandle(path string, info fs.FileInfo) bool {
 	if info != nil && info.IsDir() {
 		return false
@@ -37,10 +40,12 @@ func (p *PDFPlugin) CanHandle(path string, info fs.FileInfo) bool {
 	return ext == ".pdf"
 }
 
+// IsGenerated returns false; PDF files are not source-generated.
 func (p *PDFPlugin) IsGenerated(content string, path string) bool {
 	return false
 }
 
+// ExtractUsedSymbols returns nil; not applicable for PDF.
 func (p *PDFPlugin) ExtractUsedSymbols(content string) []string {
 	return nil
 }

@@ -74,7 +74,7 @@ func main() {
 go get github.com/sevigo/goframe@latest
 ```
 
-Requires Go 1.21+, [Ollama](https://ollama.com/) for local LLMs and embeddings, and [Qdrant](https://qdrant.tech/) for vector storage.
+Requires Go 1.26+, [Ollama](https://ollama.com/) for local LLMs and embeddings, and [Qdrant](https://qdrant.tech/) for vector storage.
 
 ---
 

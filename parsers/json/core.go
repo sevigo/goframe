@@ -40,10 +40,12 @@ func (p *JSONPlugin) CanHandle(path string, info fs.FileInfo) bool {
 	return ext == ".json"
 }
 
+// IsGenerated returns false; JSON files are not source-generated.
 func (p *JSONPlugin) IsGenerated(content string, path string) bool {
 	return false
 }
 
+// ExtractUsedSymbols returns nil; not applicable for JSON.
 func (p *JSONPlugin) ExtractUsedSymbols(content string) []string {
 	return nil
 }

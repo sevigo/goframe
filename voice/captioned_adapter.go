@@ -8,12 +8,14 @@ import (
 
 var _ CaptionedSynthesizer = (*EstimatedCaptionedSynthesizer)(nil)
 
+// EstimatedCaptionedSynthesizer adds estimated word timestamps to any Synthesizer.
 type EstimatedCaptionedSynthesizer struct {
 	Syn             Synthesizer
 	Format          string
 	SilentThreshold int16
 }
 
+// NewEstimatedCaptionedSynthesizer wraps a Synthesizer with estimated captioning.
 func NewEstimatedCaptionedSynthesizer(syn Synthesizer, format ...string) *EstimatedCaptionedSynthesizer {
 	f := "wav"
 	if len(format) > 0 && format[0] != "" {
@@ -26,19 +28,23 @@ func NewEstimatedCaptionedSynthesizer(syn Synthesizer, format ...string) *Estima
 	}
 }
 
+// WithSilentThreshold sets the silence threshold for timestamp estimation.
 func (e *EstimatedCaptionedSynthesizer) WithSilentThreshold(threshold int16) *EstimatedCaptionedSynthesizer {
 	e.SilentThreshold = threshold
 	return e
 }
 
+// Synthesize delegates to the underlying Synthesizer.
 func (e *EstimatedCaptionedSynthesizer) Synthesize(ctx context.Context, text string, opts ...Option) (*Audio, error) {
 	return e.Syn.Synthesize(ctx, text, opts...)
 }
 
+// Stream delegates to the underlying Synthesizer.
 func (e *EstimatedCaptionedSynthesizer) Stream(ctx context.Context, text string, opts ...Option) (io.ReadCloser, error) {
 	return e.Syn.Stream(ctx, text, opts...)
 }
 
+// SynthesizeCaptioned generates audio with estimated word timestamps.
 func (e *EstimatedCaptionedSynthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts ...Option) (*CaptionedAudio, error) {
 	options := &SynthesizeOptions{
 		Format: e.Format,
@@ -74,6 +80,7 @@ func (e *EstimatedCaptionedSynthesizer) SynthesizeCaptioned(ctx context.Context,
 	}, nil
 }
 
+// StreamCaptioned is not implemented; use SynthesizeCaptioned instead.
 func (e *EstimatedCaptionedSynthesizer) StreamCaptioned(ctx context.Context, text string, opts ...Option) (io.ReadCloser, error) {
 	return nil, errors.New("voice: estimated captions do not support streaming; use SynthesizeCaptioned")
 }

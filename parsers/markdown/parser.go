@@ -35,6 +35,7 @@ type MarkdownElement struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
+// FrontMatter holds parsed YAML front matter metadata.
 type FrontMatter struct {
 	Content    string
 	Properties map[string]string

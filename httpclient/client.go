@@ -9,38 +9,41 @@ import (
 
 // Default configuration values for HTTP clients.
 const (
-	// Default timeout for HTTP requests.
+	// DefaultTimeout is the default timeout for HTTP requests.
 	DefaultTimeout = 120 * time.Second
 
-	// Default maximum number of idle connections across all hosts.
+	// DefaultMaxIdleConns is the default maximum number of idle connections across all hosts.
 	DefaultMaxIdleConns = 100
 
-	// Default maximum number of idle connections per host.
+	// DefaultMaxIdleConnsPerHost is the default maximum number of idle connections per host.
 	DefaultMaxIdleConnsPerHost = 20
 
-	// Default timeout for idle connections.
+	// DefaultIdleConnTimeout is the default timeout for idle connections.
 	DefaultIdleConnTimeout = 30 * time.Second
 
-	// Default timeout for TLS handshakes.
+	// DefaultTLSHandshakeTimeout is the default timeout for TLS handshakes.
 	DefaultTLSHandshakeTimeout = 10 * time.Second
 
-	// Default timeout for connection attempts.
+	// DefaultDialTimeout is the default timeout for connection attempts.
 	DefaultDialTimeout = 30 * time.Second
 
-	// Default keep-alive timeout for connections.
+	// DefaultKeepAlive is the default keep-alive timeout for connections.
 	DefaultKeepAlive = 30 * time.Second
 
-	// Default response header timeout.
+	// DefaultResponseHeaderTimeout is the default response header timeout.
 	DefaultResponseHeaderTimeout = 30 * time.Second
 
-	// Default timeout for expecting a 100-continue response.
+	// DefaultExpectContinueTimeout is the default timeout for expecting a 100-continue response.
 	DefaultExpectContinueTimeout = 1 * time.Second
 
-	// Default retry configuration.
+	// DefaultRetryAttempts is the default number of retry attempts.
 	DefaultRetryAttempts = 3
-	DefaultRetryDelay    = 2 * time.Second
+	// DefaultRetryDelay is the initial delay between retry attempts.
+	DefaultRetryDelay = 2 * time.Second
+	// DefaultMaxRetryDelay is the maximum delay between retry attempts.
 	DefaultMaxRetryDelay = 30 * time.Second
-	DefaultRetryJitter   = 1 * time.Second
+	// DefaultRetryJitter is the random jitter added to retry delays.
+	DefaultRetryJitter = 1 * time.Second
 )
 
 // Config holds configuration for creating an HTTP client.

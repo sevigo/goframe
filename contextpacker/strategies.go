@@ -17,7 +17,10 @@ type PackingStrategy interface {
 // GreedyStrategy packs documents in their original order.
 type GreedyStrategy struct{}
 
+// Name returns the strategy name.
 func (GreedyStrategy) Name() string { return "greedy" }
+
+// Order returns documents in their original order.
 func (GreedyStrategy) Order(docs []schema.Document, _ []float64) []schema.Document {
 	return docs
 }
@@ -25,7 +28,10 @@ func (GreedyStrategy) Order(docs []schema.Document, _ []float64) []schema.Docume
 // ImportanceStrategy packs documents ordered by score (highest first).
 type ImportanceStrategy struct{}
 
+// Name returns the strategy name.
 func (ImportanceStrategy) Name() string { return "importance" }
+
+// Order returns documents sorted by score, highest first.
 func (ImportanceStrategy) Order(docs []schema.Document, scores []float64) []schema.Document {
 	if len(scores) == 0 || len(docs) != len(scores) {
 		return docs
@@ -60,7 +66,10 @@ type MetadataStrategy struct {
 	Ascending bool
 }
 
+// Name returns the strategy name.
 func (s MetadataStrategy) Name() string { return "metadata" }
+
+// Order returns documents sorted by a metadata field.
 func (s MetadataStrategy) Order(docs []schema.Document, _ []float64) []schema.Document {
 	if s.Field == "" {
 		return docs

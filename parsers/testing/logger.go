@@ -6,6 +6,7 @@ import (
 	"testing"
 )
 
+// NewTestLogger creates a slog.Logger that captures output to a buffer for test assertions.
 func NewTestLogger(t *testing.T) (*slog.Logger, *bytes.Buffer) {
 	t.Helper()
 

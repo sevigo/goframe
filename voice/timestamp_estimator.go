@@ -5,6 +5,7 @@ import (
 	"unicode"
 )
 
+// EstimateWordTimestamps distributes word timestamps evenly across the speech duration.
 func EstimateWordTimestamps(text string, totalDurationMs int, leadingSilenceMs int) []WordTimestamp {
 	words := tokenizeWords(text)
 	if len(words) == 0 {
@@ -125,13 +126,13 @@ func calculateWordWeight(word string) int {
 	case strings.Contains(word, "?"):
 		weight += 2
 	case strings.Contains(word, ","):
-		weight += 1
+		weight++
 	case strings.Contains(word, ".") || strings.Contains(word, "..."):
 		weight += 2
 	}
 
 	if isCapitalized(word) || isAllCapitalizedOrPunct(word) {
-		weight += 1
+		weight++
 	}
 
 	if weight < 2 {

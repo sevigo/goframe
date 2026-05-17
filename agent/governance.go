@@ -26,6 +26,7 @@ type IntegrityCheck interface {
 // IntegrityCheckFunc is an adapter to use a function as an IntegrityCheck.
 type IntegrityCheckFunc func(ctx context.Context, toolName string, params map[string]any) error
 
+// Validate calls the underlying function.
 func (f IntegrityCheckFunc) Validate(ctx context.Context, toolName string, params map[string]any) error {
 	return f(ctx, toolName, params)
 }
@@ -102,6 +103,7 @@ type PermissionCheck struct {
 	Denied map[string]bool
 }
 
+// NewPermissionCheck creates a permission check with empty allow/deny lists.
 func NewPermissionCheck() *PermissionCheck {
 	return &PermissionCheck{
 		Allowed: make(map[string]bool),
@@ -109,6 +111,7 @@ func NewPermissionCheck() *PermissionCheck {
 	}
 }
 
+// Allow adds tools to the allowed list and removes them from denied.
 func (p *PermissionCheck) Allow(tools ...string) *PermissionCheck {
 	for _, tool := range tools {
 		p.Allowed[tool] = true
@@ -117,6 +120,7 @@ func (p *PermissionCheck) Allow(tools ...string) *PermissionCheck {
 	return p
 }
 
+// Deny adds tools to the denied list and removes them from allowed.
 func (p *PermissionCheck) Deny(tools ...string) *PermissionCheck {
 	for _, tool := range tools {
 		p.Denied[tool] = true
@@ -125,6 +129,7 @@ func (p *PermissionCheck) Deny(tools ...string) *PermissionCheck {
 	return p
 }
 
+// Validate checks if a tool is permitted by the allow/deny lists.
 func (p *PermissionCheck) Validate(ctx context.Context, toolName string, params map[string]any) error {
 	if len(p.Denied) > 0 && p.Denied[toolName] {
 		return fmt.Errorf("tool %q is explicitly denied", toolName)
@@ -145,6 +150,7 @@ type ParameterCheck struct {
 	Forbidden map[string][]string
 }
 
+// NewParameterCheck creates a parameter check with empty required/forbidden maps.
 func NewParameterCheck() *ParameterCheck {
 	return &ParameterCheck{
 		Required:  make(map[string][]string),
@@ -152,16 +158,19 @@ func NewParameterCheck() *ParameterCheck {
 	}
 }
 
+// Require adds required parameter keys for a tool.
 func (p *ParameterCheck) Require(tool string, params ...string) *ParameterCheck {
 	p.Required[tool] = append(p.Required[tool], params...)
 	return p
 }
 
+// Forbid adds forbidden parameter keys for a tool.
 func (p *ParameterCheck) Forbid(tool string, params ...string) *ParameterCheck {
 	p.Forbidden[tool] = append(p.Forbidden[tool], params...)
 	return p
 }
 
+// Validate checks if a tool's parameters satisfy required and forbidden constraints.
 func (p *ParameterCheck) Validate(ctx context.Context, toolName string, params map[string]any) error {
 	if required, ok := p.Required[toolName]; ok {
 		for _, key := range required {
@@ -254,17 +263,20 @@ type ContentSafetyCheck struct {
 	BlockedPatterns map[string][]string
 }
 
+// NewContentSafetyCheck creates a content safety check with empty blocked patterns.
 func NewContentSafetyCheck() *ContentSafetyCheck {
 	return &ContentSafetyCheck{
 		BlockedPatterns: make(map[string][]string),
 	}
 }
 
+// BlockPattern adds blocked content patterns for a tool.
 func (c *ContentSafetyCheck) BlockPattern(tool string, patterns ...string) *ContentSafetyCheck {
 	c.BlockedPatterns[tool] = append(c.BlockedPatterns[tool], patterns...)
 	return c
 }
 
+// Validate checks if a tool's parameters contain blocked content.
 func (c *ContentSafetyCheck) Validate(ctx context.Context, toolName string, params map[string]any) error {
 	patterns, ok := c.BlockedPatterns[toolName]
 	if !ok {
@@ -292,14 +304,17 @@ type CompositeCheck struct {
 	checks []IntegrityCheck
 }
 
+// NewCompositeCheck creates a check that combines multiple integrity checks.
 func NewCompositeCheck(checks ...IntegrityCheck) *CompositeCheck {
 	return &CompositeCheck{checks: checks}
 }
 
+// Add appends an integrity check to the composite.
 func (c *CompositeCheck) Add(check IntegrityCheck) {
 	c.checks = append(c.checks, check)
 }
 
+// Validate runs all checks and returns the first error.
 func (c *CompositeCheck) Validate(ctx context.Context, toolName string, params map[string]any) error {
 	for _, check := range c.checks {
 		if err := check.Validate(ctx, toolName, params); err != nil {

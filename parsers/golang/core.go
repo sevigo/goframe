@@ -10,24 +10,29 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
+// GoPlugin implements schema.ParserPlugin for Go source files.
 type GoPlugin struct {
 	logger *slog.Logger
 }
 
+// NewGoPlugin creates a new Go parser plugin.
 func NewGoPlugin(logger *slog.Logger) schema.ParserPlugin {
 	return &GoPlugin{
 		logger: logger,
 	}
 }
 
+// Name returns "go".
 func (p *GoPlugin) Name() string {
 	return "go"
 }
 
+// Extensions returns the file extensions handled by this plugin.
 func (p *GoPlugin) Extensions() []string {
 	return []string{".go"}
 }
 
+// CanHandle returns true for non-test Go source files.
 func (p *GoPlugin) CanHandle(path string, info fs.FileInfo) bool {
 	if info != nil && info.IsDir() {
 		return false

@@ -53,6 +53,7 @@ func WithTask(task string) Option {
 	}
 }
 
+// WithAPIKey sets the API key for authenticating with the embedding server.
 func WithAPIKey(key string) Option {
 	return func(o *options) {
 		o.apiKey = key

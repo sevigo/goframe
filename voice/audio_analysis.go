@@ -6,10 +6,13 @@ import (
 )
 
 const (
+	// SilenceThresholdDefault is the default amplitude threshold for silence detection.
 	SilenceThresholdDefault = 500
-	SilenceWindowMs         = 10
+	// SilenceWindowMs is the analysis window size in milliseconds.
+	SilenceWindowMs = 10
 )
 
+// ComputeWAVDuration returns the duration of WAV audio data in milliseconds.
 func ComputeWAVDuration(data []byte, info wavInfo) int {
 	if info.sampleRate <= 0 || info.bytesPerSample <= 0 || info.numChannels <= 0 {
 		return 0
@@ -23,6 +26,7 @@ func ComputeWAVDuration(data []byte, info wavInfo) int {
 	return durationMs
 }
 
+// DetectTrailingSilence returns the duration of trailing silence in milliseconds.
 func DetectTrailingSilence(data []byte, info wavInfo, threshold ...int16) int {
 	if info.bitsPerSample != 16 || info.dataOffset >= len(data) {
 		return 0
@@ -51,6 +55,7 @@ func DetectTrailingSilence(data []byte, info wavInfo, threshold ...int16) int {
 	return silenceMs
 }
 
+// DetectLeadingSilence returns the duration of leading silence in milliseconds.
 func DetectLeadingSilence(data []byte, info wavInfo, threshold ...int16) int {
 	if info.bitsPerSample != 16 || info.dataOffset >= len(data) {
 		return 0
@@ -79,6 +84,7 @@ func DetectLeadingSilence(data []byte, info wavInfo, threshold ...int16) int {
 	return silenceMs
 }
 
+// AnalyzeWAVAudio computes duration, leading silence, and trailing silence for WAV data.
 func AnalyzeWAVAudio(data []byte) (int, int, int, error) {
 	info, err := parseWAVHeader(data)
 	if err != nil {
@@ -104,6 +110,7 @@ func AnalyzeWAVAudio(data []byte) (int, int, int, error) {
 	return durationMs, leadingSilenceMs, trailingSilenceMs, nil
 }
 
+// ValidateWAVConsistency checks that all segments share the same audio format.
 func ValidateWAVConsistency(segments [][]byte, expectedInfo wavInfo) error {
 	for i, data := range segments {
 		info, err := parseWAVHeader(data)
@@ -123,6 +130,7 @@ func ValidateWAVConsistency(segments [][]byte, expectedInfo wavInfo) error {
 	return nil
 }
 
+// FormatMismatchError indicates audio format mismatch across segments.
 type FormatMismatchError struct {
 	SegmentIndex int
 	Property     string
@@ -130,6 +138,7 @@ type FormatMismatchError struct {
 	Actual       int
 }
 
+// Error returns the error message.
 func (e *FormatMismatchError) Error() string {
 	return "voice: audio format mismatch"
 }

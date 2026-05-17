@@ -8,16 +8,19 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
+// CodeSparseProvider generates sparse vectors from source code.
 type CodeSparseProvider struct {
 	tokenizer *Tokenizer
 }
 
+// NewCodeSparseProvider creates a new code-aware sparse vector provider.
 func NewCodeSparseProvider() *CodeSparseProvider {
 	return &CodeSparseProvider{
 		tokenizer: NewTokenizer(),
 	}
 }
 
+// GenerateSparseVector produces a sparse vector from text using code-aware tokenization.
 func (p *CodeSparseProvider) GenerateSparseVector(ctx context.Context, text string) (*schema.SparseVector, error) {
 	if text == "" {
 		return nil, errors.New("text cannot be empty")

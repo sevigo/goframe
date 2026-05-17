@@ -22,11 +22,13 @@ const (
 	DefaultChunkSize = 2048
 )
 
+// ParentContextConfig controls whether parent context text is stored in chunk metadata.
 type ParentContextConfig struct {
 	Enabled       bool
 	MaxTextLength int
 }
 
+// CodeAwareTextSplitter splits code at AST boundaries while preserving metadata.
 type CodeAwareTextSplitter struct {
 	tokenizer      Tokenizer
 	parserRegistry parsers.ParserRegistry
@@ -45,6 +47,7 @@ type CodeAwareTextSplitter struct {
 
 var _ TextSplitter = (*CodeAwareTextSplitter)(nil)
 
+// NewCodeAware creates a code-aware text splitter.
 func NewCodeAware(
 	registry parsers.ParserRegistry,
 	tokenizer Tokenizer,
@@ -169,6 +172,7 @@ func (c *CodeAwareTextSplitter) splitSingleDocument(ctx context.Context, doc sch
 	return splitDocs, nil
 }
 
+// ChunkFileWithFileInfo splits a file into chunks with language-specific metadata.
 func (c *CodeAwareTextSplitter) ChunkFileWithFileInfo(
 	ctx context.Context,
 	content, filePath, modelName string,

@@ -65,7 +65,7 @@ func (r *registry) RegisterParser(plugin schema.ParserPlugin) error {
 	return nil
 }
 
-// GetPlugin retrieves a plugin by language name
+// GetParser retrieves a parser by language name.
 func (r *registry) GetParser(language string) (schema.ParserPlugin, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -77,7 +77,7 @@ func (r *registry) GetParser(language string) (schema.ParserPlugin, error) {
 	return plugin, nil
 }
 
-// GetPluginForFile returns the appropriate plugin for a file
+// GetParserForFile returns the appropriate parser for a file.
 func (r *registry) GetParserForFile(path string, info fs.FileInfo) (schema.ParserPlugin, error) {
 	ext := filepath.Ext(path)
 	if ext != "" {
@@ -99,7 +99,7 @@ func (r *registry) GetParserForFile(path string, info fs.FileInfo) (schema.Parse
 	return nil, fmt.Errorf("%w for file %s", ErrPluginNotFound, path)
 }
 
-// GetPluginForExtension returns a plugin for a file extension
+// GetParserForExtension returns a parser for a file extension.
 func (r *registry) GetParserForExtension(ext string) (schema.ParserPlugin, error) {
 	if ext == "" {
 		return nil, fmt.Errorf("%w: empty extension", ErrPluginNotFound)

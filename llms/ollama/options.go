@@ -9,17 +9,25 @@ import (
 
 // Default HTTP client configuration constants.
 const (
-	DefaultTimeout             = 120 * time.Second
-	DefaultMaxIdleConns        = 100
-	DefaultMaxIdleConnsHost    = 20
-	DefaultIdleConnTimeout     = 30 * time.Second
+	// DefaultTimeout is the default HTTP request timeout.
+	DefaultTimeout = 120 * time.Second
+	// DefaultMaxIdleConns is the default maximum idle connections across all hosts.
+	DefaultMaxIdleConns = 100
+	// DefaultMaxIdleConnsHost is the default maximum idle connections per host.
+	DefaultMaxIdleConnsHost = 20
+	// DefaultIdleConnTimeout is the default idle connection timeout.
+	DefaultIdleConnTimeout = 30 * time.Second
+	// DefaultTLSHandshakeTimeout is the default TLS handshake timeout.
 	DefaultTLSHandshakeTimeout = 10 * time.Second
 
-	// Retry configuration defaults.
+	// DefaultRetryAttempts is the default number of retry attempts.
 	DefaultRetryAttempts = 3
-	DefaultRetryDelay    = 2 * time.Second
+	// DefaultRetryDelay is the initial delay between retry attempts.
+	DefaultRetryDelay = 2 * time.Second
+	// DefaultMaxRetryDelay is the maximum delay between retry attempts.
 	DefaultMaxRetryDelay = 30 * time.Second
-	DefaultRetryJitter   = 1 * time.Second
+	// DefaultRetryJitter is the random jitter added to retry delays.
+	DefaultRetryJitter = 1 * time.Second
 )
 
 type options struct {
@@ -39,6 +47,7 @@ type options struct {
 	retryJitter   time.Duration
 }
 
+// Option configures an Ollama LLM.
 type Option func(*options)
 
 func applyOptions(opts ...Option) options {
@@ -57,12 +66,14 @@ func applyOptions(opts ...Option) options {
 	return o
 }
 
+// WithModel sets the model name.
 func WithModel(model string) Option {
 	return func(opts *options) {
 		opts.model = model
 	}
 }
 
+// WithServerURL sets the Ollama server URL.
 func WithServerURL(rawURL string) Option {
 	return func(opts *options) {
 		parsedURL, err := url.Parse(rawURL)
@@ -74,6 +85,7 @@ func WithServerURL(rawURL string) Option {
 	}
 }
 
+// WithHTTPClient sets a custom HTTP client.
 func WithHTTPClient(client *http.Client) Option {
 	return func(opts *options) {
 		if client != nil {
@@ -82,6 +94,7 @@ func WithHTTPClient(client *http.Client) Option {
 	}
 }
 
+// WithLogger sets the logger.
 func WithLogger(logger *slog.Logger) Option {
 	return func(opts *options) {
 		if logger != nil {
@@ -90,18 +103,21 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
+// WithThinking enables or disables model thinking/reasoning output.
 func WithThinking(enabled bool) Option {
 	return func(opts *options) {
 		opts.thinking = &enabled
 	}
 }
 
+// WithReasoningEffort sets the reasoning effort level.
 func WithReasoningEffort(effort string) Option {
 	return func(opts *options) {
 		opts.reasoningEffort = effort
 	}
 }
 
+// WithAPIKey sets the API key for authentication.
 func WithAPIKey(apiKey string) Option {
 	return func(opts *options) {
 		opts.apiKey = apiKey

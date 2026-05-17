@@ -101,7 +101,7 @@ func (p *PDFPlugin) extractTextFromPDF(filePath string) ([]textExtractionResult,
 			})
 			currentDocLineOffset += strings.Count(pageStr, "\n") + 1
 		} else {
-			currentDocLineOffset += 1
+			currentDocLineOffset++
 		}
 	}
 

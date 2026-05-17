@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+
 	"github.com/sevigo/goframe/schema"
 )
 

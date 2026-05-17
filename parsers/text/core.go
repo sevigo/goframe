@@ -60,10 +60,12 @@ func (p *TextPlugin) CanHandle(path string, info fs.FileInfo) bool {
 	return false
 }
 
+// IsGenerated returns false; plain text files are not source-generated.
 func (p *TextPlugin) IsGenerated(content string, path string) bool {
 	return false
 }
 
+// ExtractUsedSymbols returns nil; not applicable for plain text.
 func (p *TextPlugin) ExtractUsedSymbols(content string) []string {
 	return nil
 }

@@ -41,10 +41,12 @@ func (p *CSVPlugin) CanHandle(path string, info fs.FileInfo) bool {
 	return ext == ".csv" || ext == ".tsv"
 }
 
+// IsGenerated returns false; CSV files are not source-generated.
 func (p *CSVPlugin) IsGenerated(content string, path string) bool {
 	return false
 }
 
+// ExtractUsedSymbols returns nil; not applicable for CSV.
 func (p *CSVPlugin) ExtractUsedSymbols(content string) []string {
 	return nil
 }

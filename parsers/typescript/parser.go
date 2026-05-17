@@ -161,6 +161,7 @@ func (p *Parser) ExtractMetadata(content string, path string) (schema.FileMetada
 	return metadata, nil
 }
 
+// IsGenerated checks if a TypeScript file was auto-generated.
 func (p *Parser) IsGenerated(content string, path string) bool {
 	// 1. Check definition files (likely generated or external)
 	if strings.HasSuffix(path, ".d.ts") {

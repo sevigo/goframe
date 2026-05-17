@@ -9,10 +9,12 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
+// DefinitionRetriever looks up symbol definitions using hybrid search.
 type DefinitionRetriever struct {
 	store VectorStore
 }
 
+// NewDefinitionRetriever creates a retriever for looking up symbol definitions.
 func NewDefinitionRetriever(store VectorStore) (*DefinitionRetriever, error) {
 	if store == nil {
 		return nil, fmt.Errorf("store cannot be nil")

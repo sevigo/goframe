@@ -546,6 +546,7 @@ func (p *ProtobufParser) getFirstLine(content string) string {
 	return ""
 }
 
+// IsGenerated checks if a protobuf file was auto-generated.
 func (p *ProtobufParser) IsGenerated(content string, path string) bool {
 	// Check first 10 lines for common generated headers
 	lines := strings.SplitN(content, "\n", 10)
@@ -567,6 +568,7 @@ func (p *ProtobufParser) IsGenerated(content string, path string) bool {
 	return false
 }
 
+// ExtractUsedSymbols returns nil; not yet implemented for protobuf.
 func (p *ProtobufParser) ExtractUsedSymbols(content string) []string {
 	return nil
 }

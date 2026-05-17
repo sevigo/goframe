@@ -53,6 +53,7 @@ type RerankingRetriever struct {
 	MinScore float32
 }
 
+// GetRelevantDocuments retrieves reranked documents and drops the scores.
 func (r RerankingRetriever) GetRelevantDocuments(ctx context.Context, query string) ([]schema.Document, error) {
 	scored, err := r.GetRelevantScoredDocuments(ctx, query)
 	if err != nil {
@@ -65,6 +66,7 @@ func (r RerankingRetriever) GetRelevantDocuments(ctx context.Context, query stri
 	return docs, nil
 }
 
+// GetRelevantScoredDocuments retrieves, reranks, and returns scored documents.
 func (r RerankingRetriever) GetRelevantScoredDocuments(ctx context.Context, query string) ([]schema.ScoredDocument, error) {
 	// Fetch a broad set of candidates from the base retriever
 	docs, err := r.Retriever.GetRelevantDocuments(ctx, query)

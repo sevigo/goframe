@@ -12,8 +12,10 @@ import (
 )
 
 var (
+	// ErrToolInvalidParams is returned when tool parameters are invalid.
 	ErrToolInvalidParams = errors.New("agent: invalid tool parameters")
-	ErrToolExecution     = errors.New("agent: tool execution failed")
+	// ErrToolExecution is returned when a tool execution fails.
+	ErrToolExecution = errors.New("agent: tool execution failed")
 )
 
 // Tool defines the interface for agent tools.
@@ -41,9 +43,16 @@ type ToolFunc struct {
 	execFunc    func(ctx context.Context, params map[string]any) (any, error)
 }
 
-func (t *ToolFunc) Name() string                     { return t.name }
-func (t *ToolFunc) Description() string              { return t.description }
+// Name returns the tool's unique identifier.
+func (t *ToolFunc) Name() string { return t.name }
+
+// Description returns a human-readable description of what the tool does.
+func (t *ToolFunc) Description() string { return t.description }
+
+// ParametersSchema returns a JSON Schema describing the tool's parameters.
 func (t *ToolFunc) ParametersSchema() map[string]any { return t.schema }
+
+// Execute runs the tool with the given parameters.
 func (t *ToolFunc) Execute(ctx context.Context, params map[string]any) (any, error) {
 	return t.execFunc(ctx, params)
 }
@@ -411,6 +420,7 @@ type loggingTool struct {
 	logger *slog.Logger
 }
 
+// Execute runs the wrapped tool and logs the call.
 func (t *loggingTool) Execute(ctx context.Context, params map[string]any) (any, error) {
 	t.logger.DebugContext(ctx, "executing tool",
 		"name", t.Name(),

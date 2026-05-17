@@ -9,10 +9,12 @@ import (
 	"github.com/go-git/go-git/v5"
 )
 
+// Cloner clones git repositories into temporary directories.
 type Cloner struct {
 	Logger *slog.Logger
 }
 
+// NewCloner creates a new git repository cloner.
 func NewCloner(logger *slog.Logger) *Cloner {
 	if logger == nil {
 		logger = slog.Default()
@@ -20,6 +22,7 @@ func NewCloner(logger *slog.Logger) *Cloner {
 	return &Cloner{Logger: logger}
 }
 
+// Clone clones a repository into a temporary directory and returns the path and a cleanup function.
 func (c *Cloner) Clone(ctx context.Context, repoURL string) (string, func(), error) {
 	tempPath, err := os.MkdirTemp("", "goframe-repo-*")
 	if err != nil {

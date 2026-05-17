@@ -69,10 +69,12 @@ func (p *MarkdownPlugin) CanHandle(path string, info fs.FileInfo) bool {
 	return ext == ".md" || ext == ".markdown"
 }
 
+// IsGenerated returns false; Markdown files are always hand-written.
 func (p *MarkdownPlugin) IsGenerated(content string, path string) bool {
 	return false
 }
 
+// ExtractUsedSymbols returns nil; not applicable for Markdown.
 func (p *MarkdownPlugin) ExtractUsedSymbols(content string) []string {
 	return nil
 }

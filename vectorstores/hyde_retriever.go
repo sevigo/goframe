@@ -22,6 +22,7 @@ type HyDERetriever struct {
 	NumGenerations int
 }
 
+// HyDEOption configures a HyDERetriever.
 type HyDEOption func(*HyDERetriever)
 
 // WithNumGenerations sets how many hypothetical documents to generate.
@@ -31,6 +32,7 @@ func WithNumGenerations(n int) HyDEOption {
 	}
 }
 
+// NewHyDERetriever creates a HyDE retriever using the given base retriever and generator.
 func NewHyDERetriever(baseRetriever schema.Retriever, generator func(ctx context.Context, query string) (string, error), opts ...HyDEOption) *HyDERetriever {
 	r := &HyDERetriever{
 		BaseRetriever:  baseRetriever,
@@ -46,6 +48,7 @@ func NewHyDERetriever(baseRetriever schema.Retriever, generator func(ctx context
 	return r
 }
 
+// GetRelevantDocuments retrieves documents using hypothetical document embeddings.
 func (r *HyDERetriever) GetRelevantDocuments(ctx context.Context, query string) ([]schema.Document, error) {
 	if r.NumGenerations == 1 {
 		return r.singleGeneration(ctx, query)

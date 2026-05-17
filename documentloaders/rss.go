@@ -13,9 +13,10 @@ import (
 	"time"
 
 	"github.com/mmcdole/gofeed"
+	"golang.org/x/time/rate"
+
 	"github.com/sevigo/goframe/parsers"
 	"github.com/sevigo/goframe/schema"
-	"golang.org/x/time/rate"
 )
 
 const (
@@ -283,6 +284,7 @@ func (r *RSSLoader) Load(ctx context.Context) ([]schema.Document, error) {
 	return documents, nil
 }
 
+// LoadAndProcessStream processes RSS feed documents in a streaming fashion.
 func (r *RSSLoader) LoadAndProcessStream(ctx context.Context, processFn func(ctx context.Context, docs []schema.Document) error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -633,7 +635,7 @@ func (r *RSSLoader) batchAndProcess(ctx context.Context, docChan <-chan schema.D
 			// Drain remaining docs to prevent blocking senders
 			go func() {
 				for range docChan {
-					// Drain channel
+					continue
 				}
 			}()
 			return ctx.Err()
@@ -655,7 +657,7 @@ func (r *RSSLoader) batchAndProcess(ctx context.Context, docChan <-chan schema.D
 					// Drain remaining docs to prevent blocking senders
 					go func() {
 						for range docChan {
-							// Drain channel
+							continue
 						}
 					}()
 					return fmt.Errorf("batch processing failed: %w", err)

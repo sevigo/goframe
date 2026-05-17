@@ -32,11 +32,13 @@ var defaultHTTPClient = &http.Client{
 	},
 }
 
+// authTransport adds an API key header to requests.
 type authTransport struct {
 	base   http.RoundTripper
 	apiKey string
 }
 
+// RoundTrip clones the request and adds the Authorization header.
 func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.apiKey != "" {
 		req = req.Clone(req.Context())
@@ -53,6 +55,7 @@ func maskAPIKey(key string) string {
 	return key[:4] + "****"
 }
 
+// LLM implements the llms.Model, embeddings.Embedder, and llms.Tokenizer interfaces using Ollama.
 type LLM struct {
 	client     *api.Client
 	options    options
@@ -69,6 +72,7 @@ var (
 	_ llms.Tokenizer                 = (*LLM)(nil)
 )
 
+// New creates a new Ollama LLM client with the given options.
 func New(opts ...Option) (*LLM, error) {
 	o := applyOptions(opts...)
 
@@ -148,6 +152,7 @@ func newOptimizedTransport() *http.Transport {
 	return cloned
 }
 
+// Call generates a response from a single string prompt.
 func (o *LLM) Call(ctx context.Context, prompt string, options ...llms.CallOption) (string, error) {
 	return llms.GenerateFromSinglePrompt(ctx, o, prompt, options...)
 }
@@ -303,6 +308,7 @@ func (h *chatResponseHandler) reset() {
 	h.finalResp = api.ChatResponse{}
 }
 
+// GenerateContent generates a response from a conversation.
 func (o *LLM) GenerateContent(
 	ctx context.Context,
 	messages []schema.MessageContent,
@@ -604,14 +610,17 @@ func parseKeepAlive(s string) time.Duration {
 	return d
 }
 
+// EmbedDocuments generates embeddings for a batch of texts.
 func (o *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error) {
 	return o.EmbedDocumentsWithOpts(ctx, texts, embeddings.EmbeddingOptions{Truncate: true})
 }
 
+// EmbedQuery generates an embedding for a single text.
 func (o *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	return o.EmbedQueryWithOpts(ctx, text, embeddings.EmbeddingOptions{Truncate: true})
 }
 
+// EmbedQueries generates embeddings for multiple queries.
 func (o *LLM) EmbedQueries(ctx context.Context, texts []string) ([][]float32, error) {
 	return o.EmbedDocumentsWithOpts(ctx, texts, embeddings.EmbeddingOptions{Truncate: true})
 }
@@ -676,6 +685,7 @@ func (o *LLM) EmbedQueryWithOpts(ctx context.Context, text string, opts embeddin
 	return resp.Embeddings[0], nil
 }
 
+// GetModelDetails returns metadata about the currently configured model.
 func (o *LLM) GetModelDetails(ctx context.Context) (*schema.ModelDetails, error) {
 	o.detailsMu.RLock()
 	if o.details != nil && o.detailsErr == nil {
@@ -768,6 +778,7 @@ func toInt64(v any) (int64, bool) {
 	return 0, false
 }
 
+// CountTokens returns the number of tokens in the text.
 func (o *LLM) CountTokens(ctx context.Context, text string) (int, error) {
 	if text == "" {
 		return 0, nil
@@ -804,6 +815,7 @@ func (o *LLM) CountTokens(ctx context.Context, text string) (int, error) {
 	return tokenCount, nil
 }
 
+// GetDimension returns the embedding dimension of the model.
 func (o *LLM) GetDimension(ctx context.Context) (int, error) {
 	details, err := o.GetModelDetails(ctx)
 	if err != nil {
@@ -819,6 +831,7 @@ func (o *LLM) determineModel(opts llms.CallOptions) string {
 	return o.options.model
 }
 
+// PullModel downloads a model from the Ollama registry.
 func (o *LLM) PullModel(ctx context.Context, name string) error {
 	o.logger.Info("Pulling model", "model", name)
 	lastLogged := -1
@@ -834,6 +847,7 @@ func (o *LLM) PullModel(ctx context.Context, name string) error {
 	})
 }
 
+// HasModel checks if a model is available locally.
 func (o *LLM) HasModel(ctx context.Context, name string) (bool, error) {
 	list, err := o.client.List(ctx)
 	if err != nil {

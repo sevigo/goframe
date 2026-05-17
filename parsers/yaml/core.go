@@ -41,10 +41,12 @@ func (p *YamlPlugin) CanHandle(path string, info fs.FileInfo) bool {
 	return ext == ".yaml" || ext == ".yml"
 }
 
+// IsGenerated returns false; YAML files are not source-generated.
 func (p *YamlPlugin) IsGenerated(content string, path string) bool {
 	return false
 }
 
+// ExtractUsedSymbols returns nil; not applicable for YAML.
 func (p *YamlPlugin) ExtractUsedSymbols(content string) []string {
 	return nil
 }

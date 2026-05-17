@@ -23,10 +23,14 @@ var (
 type RiskLevel int
 
 const (
-	RiskLow      RiskLevel = iota // Safe operations (read, search)
-	RiskMedium                    // Moderate operations (write, update)
-	RiskHigh                      // Destructive operations (delete, navigate external)
-	RiskCritical                  // Irreversible operations (format disk, publish)
+	// RiskLow represents safe operations (read, search).
+	RiskLow RiskLevel = iota
+	// RiskMedium represents moderate operations (write, update).
+	RiskMedium
+	// RiskHigh represents destructive operations (delete, navigate external).
+	RiskHigh
+	// RiskCritical represents irreversible operations (format disk, publish).
+	RiskCritical
 )
 
 // RiskAssessor evaluates the risk level of tool executions.

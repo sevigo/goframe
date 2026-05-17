@@ -19,11 +19,16 @@ import (
 )
 
 var (
-	ErrNoAPIKey      = errors.New("gemini: API key is required")
-	ErrInvalidModel  = errors.New("gemini: invalid model specified")
-	ErrNoContent     = errors.New("gemini: no content generated")
+	// ErrNoAPIKey is returned when no API key is provided.
+	ErrNoAPIKey = errors.New("gemini: API key is required")
+	// ErrInvalidModel is returned when an invalid model is specified.
+	ErrInvalidModel = errors.New("gemini: invalid model specified")
+	// ErrNoContent is returned when the model generates no content.
+	ErrNoContent = errors.New("gemini: no content generated")
+	// ErrSystemMessage is returned when a system message is not the first message.
 	ErrSystemMessage = errors.New("gemini: system message must be the first message in the conversation")
-	ErrEmbeddings    = errors.New("gemini: failed to generate embeddings")
+	// ErrEmbeddings is returned when embedding generation fails.
+	ErrEmbeddings = errors.New("gemini: failed to generate embeddings")
 )
 
 // LLM implements both the Model and Embedder interfaces for Gemini.

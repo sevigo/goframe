@@ -10,15 +10,18 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
+// CLICommandLoader loads documents by running a shell command.
 type CLICommandLoader struct {
 	Command string
 	Args    []string
 }
 
+// NewCLICommandLoader creates a loader that runs the given command.
 func NewCLICommandLoader(command string, args ...string) *CLICommandLoader {
 	return &CLICommandLoader{Command: command, Args: args}
 }
 
+// Load executes the command and returns the output as documents.
 func (l *CLICommandLoader) Load(ctx context.Context) ([]schema.Document, error) {
 	command := filepath.Base(l.Command)
 	cmd := exec.CommandContext(ctx, command, l.Args...)

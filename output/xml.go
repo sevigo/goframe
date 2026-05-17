@@ -22,14 +22,17 @@ var (
 	tokenArtifactRegex = regexp.MustCompile(`</\s+([a-zA-Z])`)
 )
 
+// XMLParser extracts typed data from LLM-generated XML output.
 type XMLParser[T any] struct {
 	RootTag string
 }
 
+// NewXMLParser creates an XML parser that expects the given root tag.
 func NewXMLParser[T any](rootTag string) *XMLParser[T] {
 	return &XMLParser[T]{RootTag: rootTag}
 }
 
+// Parse extracts typed data from XML text.
 func (p *XMLParser[T]) Parse(ctx context.Context, text string) (T, error) {
 	var result T
 

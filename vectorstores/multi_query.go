@@ -9,6 +9,7 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
+// MultiQueryRetriever generates multiple query variations and deduplicates results.
 type MultiQueryRetriever struct {
 	Store        VectorStore
 	LLM          llms.Model
@@ -21,6 +22,7 @@ type MultiQueryRetriever struct {
 	SparseGenFunc func(ctx context.Context, queries []string) ([]*schema.SparseVector, error)
 }
 
+// GetRelevantDocuments generates query variations and returns deduplicated results.
 func (r MultiQueryRetriever) GetRelevantDocuments(ctx context.Context, query string) ([]schema.Document, error) {
 	prompt := `Generate {{.count}} different versions of the following user query to retrieve relevant code snippets from a vector database. 
 Original query: {{.query}}

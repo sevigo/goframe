@@ -26,19 +26,32 @@ import (
 )
 
 var (
-	ErrMissingEmbedder       = errors.New("qdrant: embedder is required but not provided")
+	// ErrMissingEmbedder is returned when no embedder is provided.
+	ErrMissingEmbedder = errors.New("qdrant: embedder is required but not provided")
+	// ErrMissingCollectionName is returned when no collection name is provided.
 	ErrMissingCollectionName = errors.New("qdrant: collection name is required")
-	ErrInvalidNumDocuments   = errors.New("qdrant: number of documents must be positive")
-	ErrConnectionFailed      = errors.New("qdrant: connection failed")
-	ErrInvalidURL            = errors.New("qdrant: invalid URL provided")
-	ErrCollectionExists      = errors.New("qdrant: collection already exists")
-	ErrEmptyQuery            = errors.New("qdrant: query cannot be empty")
-	ErrDimensionMismatch     = errors.New("qdrant: vector dimension mismatch")
-	ErrBatchSizeTooLarge     = errors.New("qdrant: batch size exceeds maximum allowed")
-	ErrPartialBatchFailure   = errors.New("qdrant: some batches failed to process")
+	// ErrInvalidNumDocuments is returned when the number of documents is not positive.
+	ErrInvalidNumDocuments = errors.New("qdrant: number of documents must be positive")
+	// ErrConnectionFailed is returned when the Qdrant connection cannot be established.
+	ErrConnectionFailed = errors.New("qdrant: connection failed")
+	// ErrInvalidURL is returned when the provided URL is invalid.
+	ErrInvalidURL = errors.New("qdrant: invalid URL provided")
+	// ErrCollectionExists is returned when a collection already exists.
+	ErrCollectionExists = errors.New("qdrant: collection already exists")
+	// ErrEmptyQuery is returned when a search query is empty.
+	ErrEmptyQuery = errors.New("qdrant: query cannot be empty")
+	// ErrDimensionMismatch is returned when vector dimensions don't match.
+	ErrDimensionMismatch = errors.New("qdrant: vector dimension mismatch")
+	// ErrBatchSizeTooLarge is returned when the batch size exceeds the limit.
+	ErrBatchSizeTooLarge = errors.New("qdrant: batch size exceeds maximum allowed")
+	// ErrPartialBatchFailure is returned when some batches fail.
+	ErrPartialBatchFailure = errors.New("qdrant: some batches failed to process")
+	// ErrEmbeddingTotalFailure is returned when all embedding batches fail.
 	ErrEmbeddingTotalFailure = errors.New("qdrant: all embedding batches failed")
-	ErrMissingSparseName     = errors.New("qdrant: sparse vector name required for hybrid search configuration")
-	ErrEmptyFilter           = errors.New("qdrant: cannot delete with an empty filter")
+	// ErrMissingSparseName is returned when a sparse vector name is required but missing.
+	ErrMissingSparseName = errors.New("qdrant: sparse vector name required for hybrid search configuration")
+	// ErrEmptyFilter is returned when attempting to delete with an empty filter.
+	ErrEmptyFilter = errors.New("qdrant: cannot delete with an empty filter")
 )
 
 const (
@@ -480,10 +493,12 @@ func (s *Store) GetEmbedder() embeddings.Embedder {
 	return s.embedder
 }
 
+// AddDocuments adds documents to the store and returns their IDs.
 func (s *Store) AddDocuments(ctx context.Context, docs []schema.Document, options ...vectorstores.Option) ([]string, error) {
 	return s.AddDocumentsBatch(ctx, docs, nil, options...)
 }
 
+// AddDocumentsBatch adds documents in batches with optional progress reporting.
 func (s *Store) AddDocumentsBatch(
 	ctx context.Context,
 	docs []schema.Document,
@@ -844,6 +859,7 @@ func (s *Store) executeSearch(
 	return results, collectionName, nil
 }
 
+// SimilaritySearch finds the most similar documents to the query.
 func (s *Store) SimilaritySearch(
 	ctx context.Context,
 	query string,
@@ -882,6 +898,7 @@ func (s *Store) SimilaritySearch(
 	return docs, nil
 }
 
+// SimilaritySearchWithScores finds similar documents and returns them with relevance scores.
 func (s *Store) SimilaritySearchWithScores(
 	ctx context.Context,
 	query string,
@@ -941,6 +958,7 @@ func (s *Store) SimilaritySearchWithScores(
 	return docsWithScore, nil
 }
 
+// DeleteDocuments removes documents by their IDs.
 func (s *Store) DeleteDocuments(ctx context.Context, ids []string, options ...vectorstores.Option) error {
 	start := time.Now()
 	s.logger.DebugContext(ctx, "Starting document deletion", "count", len(ids))
@@ -953,9 +971,9 @@ func (s *Store) DeleteDocuments(ctx context.Context, ids []string, options ...ve
 	opts := vectorstores.ParseOptions(options...)
 	collectionName := s.getCollectionName(opts)
 
-	pointIds := make([]*qdrant.PointId, len(ids))
+	pointIDs := make([]*qdrant.PointId, len(ids))
 	for i, id := range ids {
-		pointIds[i] = &qdrant.PointId{
+		pointIDs[i] = &qdrant.PointId{
 			PointIdOptions: &qdrant.PointId_Uuid{Uuid: id},
 		}
 	}
@@ -967,7 +985,7 @@ func (s *Store) DeleteDocuments(ctx context.Context, ids []string, options ...ve
 			Wait:           &wait,
 			Points: &qdrant.PointsSelector{
 				PointsSelectorOneOf: &qdrant.PointsSelector_Points{
-					Points: &qdrant.PointsIdsList{Ids: pointIds},
+					Points: &qdrant.PointsIdsList{Ids: pointIDs},
 				},
 			},
 		})
@@ -986,6 +1004,7 @@ func (s *Store) DeleteDocuments(ctx context.Context, ids []string, options ...ve
 	return nil
 }
 
+// ListCollections returns the names of all collections in the Qdrant instance.
 func (s *Store) ListCollections(ctx context.Context) ([]string, error) {
 	start := time.Now()
 	s.logger.DebugContext(ctx, "Listing collections")
@@ -1009,6 +1028,7 @@ func (s *Store) ListCollections(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
+// CreateCollection creates a new collection with the given name and vector dimension.
 func (s *Store) CreateCollection(ctx context.Context, name string, dimension int, options ...vectorstores.Option) error {
 	start := time.Now()
 	s.logger.InfoContext(ctx, "Creating collection", "name", name, "dimension", dimension)
@@ -1075,6 +1095,7 @@ func (s *Store) CreateCollection(ctx context.Context, name string, dimension int
 	return nil
 }
 
+// DeleteCollection deletes a collection by name.
 func (s *Store) DeleteCollection(ctx context.Context, name string) error {
 	start := time.Now()
 	s.logger.InfoContext(ctx, "Deleting collection", "name", name)
@@ -1102,6 +1123,7 @@ func (s *Store) DeleteCollection(ctx context.Context, name string) error {
 	return nil
 }
 
+// DeleteDocumentsByFilter removes documents matching the given metadata filter.
 func (s *Store) DeleteDocumentsByFilter(ctx context.Context, filters map[string]any, options ...vectorstores.Option) error {
 	opts := vectorstores.ParseOptions(options...)
 	collectionName := s.getCollectionName(opts)
@@ -1130,6 +1152,7 @@ func (s *Store) DeleteDocumentsByFilter(ctx context.Context, filters map[string]
 	return nil
 }
 
+// SimilaritySearchBatch performs similarity search for multiple queries at once.
 func (s *Store) SimilaritySearchBatch(
 	ctx context.Context,
 	queries []string,
@@ -1262,6 +1285,7 @@ func (s *Store) SimilaritySearchBatch(
 	return batchResults, nil
 }
 
+// Health checks the connection to the Qdrant server.
 func (s *Store) Health(ctx context.Context) error {
 	_, err := s.client.GetCollectionsClient().List(ctx, &qdrant.ListCollectionsRequest{})
 	if err != nil {

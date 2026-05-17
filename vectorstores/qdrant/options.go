@@ -8,8 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sevigo/goframe/embeddings"
 	"google.golang.org/grpc"
+
+	"github.com/sevigo/goframe/embeddings"
 )
 
 const (
@@ -24,6 +25,7 @@ const (
 	defaultPoolSize         = 10
 )
 
+// ErrInvalidOptions is returned when invalid options are provided.
 var ErrInvalidOptions = errors.New("qdrant: invalid options provided")
 
 type options struct {
@@ -352,6 +354,7 @@ func parseOptions(opts ...Option) (options, error) {
 	return o, nil
 }
 
+// String returns a human-readable summary of the options.
 func (opts *options) String() string {
 	var parts []string
 
@@ -370,6 +373,7 @@ func (opts *options) String() string {
 	return "QdrantOptions{" + strings.Join(parts, ", ") + "}"
 }
 
+// Clone returns a deep copy of the options.
 func (opts *options) Clone() options {
 	return options{
 		collectionName:     opts.collectionName,

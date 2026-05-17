@@ -16,9 +16,13 @@ import (
 )
 
 var (
+	// ErrMaxIterations is returned when the loop exceeds its iteration limit.
 	ErrMaxIterations = errors.New("agent: maximum iterations exceeded")
-	ErrNoLLM         = errors.New("agent: no LLM model provided")
-	ErrNoRegistry    = errors.New("agent: no tool registry provided")
+	// ErrNoLLM is returned when no LLM model is provided.
+	ErrNoLLM = errors.New("agent: no LLM model provided")
+	// ErrNoRegistry is returned when no tool registry is provided.
+	ErrNoRegistry = errors.New("agent: no tool registry provided")
+	// ErrLoopCancelled is returned when the loop is cancelled by context.
 	ErrLoopCancelled = errors.New("agent: loop cancelled by context")
 )
 
@@ -26,11 +30,16 @@ var (
 type LoopState string
 
 const (
-	StateThinking  LoopState = "thinking"
-	StateActing    LoopState = "acting"
+	// StateThinking indicates the LLM is reasoning.
+	StateThinking LoopState = "thinking"
+	// StateActing indicates a tool is being executed.
+	StateActing LoopState = "acting"
+	// StateObserving indicates the loop is processing tool results.
 	StateObserving LoopState = "observing"
-	StateComplete  LoopState = "complete"
-	StateError     LoopState = "error"
+	// StateComplete indicates the loop finished successfully.
+	StateComplete LoopState = "complete"
+	// StateError indicates the loop terminated with an error.
+	StateError LoopState = "error"
 )
 
 // Task represents a unit of work for the agent.
@@ -654,7 +663,9 @@ func (l *AgentLoop) buildInitialHistory(task Task, history []schema.MessageConte
 	messages = append(messages, schema.NewHumanMessage(taskText))
 
 	return messages
-} // StreamResult represents a partial result during streaming execution.
+}
+
+// StreamResult represents a partial result during streaming execution.
 type StreamResult struct {
 	// State indicates the current loop state.
 	State LoopState

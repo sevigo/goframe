@@ -94,7 +94,7 @@ func (p *Packer) PackWithScores(ctx context.Context, docs []schema.Document, sco
 		return PackedResult{}, err
 	}
 
-	return p.packDocuments(docsWithTokens, ctx), nil
+	return p.packDocuments(ctx, docsWithTokens), nil
 }
 
 // PackScored packs ScoredDocuments using their scores for importance ordering.
@@ -147,7 +147,7 @@ func (p *Packer) countDocumentTokens(ctx context.Context, docs []schema.Document
 }
 
 // packDocuments packs documents atomically within the token limit.
-func (p *Packer) packDocuments(docs []documentWithTokens, ctx context.Context) PackedResult {
+func (p *Packer) packDocuments(ctx context.Context, docs []documentWithTokens) PackedResult {
 	var usedDocs []UsedDocument
 	var contentParts []string
 	totalTokens := 0

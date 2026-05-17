@@ -1,243 +1,80 @@
 # GoFrame Agent Development Guide
 
-This document provides essential information for coding agents working on the GoFrame codebase.
+Module: `github.com/sevigo/goframe`  
+Go version: 1.26+
 
-## Build, Lint, and Test Commands
+## Commands
 
 ```bash
-# Run all tests
-make test
-
-# Run tests with race detector
-make test-race
-
-# Run a single test
-go test ./agent/... -v -run TestRegistry
-
-# Run tests for specific package
-go test ./vectorstores/qdrant/... -v
-
-# Run linter
-make lint
-
-# Run linter with auto-fix
-make lint-fix
-
-# Pre-push checks (lint + test)
-make pre-push
+make lint          # golangci-lint (installs to ./bin if missing)
+make lint-fix      # auto-fix lint issues
+make test          # all tests (Docker env vars set automatically for testcontainers)
+make test-race     # tests with race detector
+make pre-push      # lint + test (run before pushing)
+go test ./agent/... -v -run TestRegistry    # single test
+go test ./vectorstores/qdrant/... -v       # single package
+make build-examples                          # verify all examples compile
 ```
 
-## Code Style Guidelines
+The Makefile wraps `go test` with Docker environment variables for testcontainers-go. Running `go test` directly may still work but `make test` is safer.
 
-### Import Organization
+## Architecture
 
-Imports are organized in three groups separated by blank lines:
+Go RAG library for code understanding. Core pipeline:
 
-```go
-import (
-	// Standard library
-	"context"
-	"fmt"
-	
-	// External packages
-	"github.com/some/external/pkg"
-	
-	// Internal packages
-	"github.com/sevigo/goframe/llms"
-)
+```
+GitLoader → ParserRegistry → CodeAwareTextSplitter → Embedder + SparseProvider → Qdrant
 ```
 
-Use `goimports` for automatic formatting.
+Key packages and their roles:
 
-### Package Comments
+- `schema/` — core types: `Document`, `SparseVector`, `Retriever`, `Reranker`
+- `llms/` — LLM clients: `ollama`, `openai`, `gemini` (each subpackage)
+- `embeddings/` — embedder interface + batch embedding; `embeddings/sparse/` (BoW), `embeddings/sparse/code/` (code-aware tokenizer)
+- `vectorstores/qdrant/` — Qdrant store with hybrid search, metadata filtering
+- `vectorstores/` — `DependencyRetriever`, `DefinitionRetriever`, `ToRetriever`
+- `parsers/` — language parser plugins (Go, TypeScript, Markdown, JSON, YAML, Terraform, Protobuf, PDF, CSV, HTML, RSS)
+- `textsplitter/` — `CodeAwareTextSplitter` (AST-boundary splitting)
+- `documentloaders/` — `GitLoader` for git repo ingestion
+- `chains/` — `LLMChain[T]`, `RetrievalQA`, `MapReduceChain`
+- `agent/` — agent SDK: session management, MCP server config, streaming
+- `voice/` — TTS (Kokoro, ElevenLabs)
 
-Every package must have a doc comment:
+Examples in `examples/` are standalone programs, each with just a `main.go`. No per-example `go.mod`. `examples/vision-example/` has `//go:build ignore`.
 
-```go
-// Package agent provides an abstraction layer.
-//
-// The agent package enables programmatic control of AI agents.
-package agent
-```
+## Linter
 
-### Naming Conventions
+Uses golangci-lint v2.11.3. Notable rules:
 
-- **Types**: PascalCase (`AgentLoop`, `Registry`)
-- **Interfaces**: noun or `-er` suffix (`Tool`, `RiskAssessor`)
-- **Functions**: camelCase (`NewRegistry`, `WithLoopGovernance`)
-- **Errors**: `ErrXxx` sentinel errors (`ErrToolNotFound`)
-- **Options**: `WithXxx` prefix (`WithAPIKey`)
+- **Error wrapping**: `%w` only (enforced by `errorlint`); never `%v`
+- **Named returns**: banned (`nonamedreturns`)
+- **Function limits**: 150 lines, 60 statements (`funlen`)
+- **Cyclomatic complexity**: max 30 (`cyclop`)
+- **No `init()`**: `gochecknoinits`
+- **No naked returns**: `nakedret` with `max-func-lines: 0`
+- **nolint directives**: must name specific linter AND include explanation (`nolintlint: require-specific + require-explanation`)
+- **Global logger banned in non-test**: `sloglint: no-global=all, context=scope` — use `slog.WithContext`-style or pass logger explicitly
+- **Import grouping**: `goimports` with local-prefixes (currently set to `github.com/my/project` in `.golangci.yaml` — **bug**, should be `github.com/sevigo/goframe`)
+- **`log` package banned** in non-main files: use `log/slog` (`depguard`)
+- **`math/rand` banned** in non-test: use `math/rand/v2` (`depguard`)
+- `examples/` path excluded from all lint analysis
 
-### Error Handling
+## Testing
 
-Use `%w` for error wrapping (enforced by errorlint):
+- Uses `stretchr/testify` — `require` for critical setup (stops on failure), `assert` for verifications
+- Subtest pattern: `t.Run("scenario", func(t *testing.T) { ... })` with arrange/act/assert
+- `testdata/` at project root only (MSMARCO CSV for RAG evaluation example)
+- Integration tests: `voice/integration_test.go` uses `//go:build integration` tag — run with `go test -tags=integration ./voice/...`
 
-```go
-if err != nil {
-	return fmt.Errorf("operation failed: %w", err)
-}
-```
+## External Services
 
-Define sentinel errors:
+Tests use testcontainers-go. Docker must be running for `make test`.  
+`docker-compose.yml` provides Qdrant + Ollama for local development: `docker compose up -d`
 
-```go
-var (
-	ErrToolNotFound = errors.New("agent: tool not found")
-	ErrToolExecution = errors.New("agent: tool execution failed")
-)
-```
+## Code Conventions
 
-### Context Cancellation
-
-Always check context in long-running operations:
-
-```go
-func (t *Tool) Execute(ctx context.Context, params map[string]any) (any, error) {
-	select {
-	case <-time.After(5 * time.Second):
-		return "completed", nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-```
-
-### Thread Safety
-
-Use `sync.RWMutex` for concurrent access:
-
-```go
-type Registry struct {
-	tools map[string]Tool
-	mu    sync.RWMutex
-}
-
-func (r *Registry) Get(name string) (Tool, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.tools[name], nil
-}
-```
-
-## Testing Guidelines
-
-### Test Structure
-
-```go
-func TestRegistry_Execute(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		// Arrange
-		registry := NewRegistry()
-		tool := &mockTool{name: "test"}
-		_ = registry.Register(tool)
-		
-		// Act
-		result, err := registry.Execute(context.Background(), "test", nil)
-		
-		// Assert
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
-}
-```
-
-### Table-Driven Tests
-
-```go
-func TestRiskLevel(t *testing.T) {
-	tests := []struct {
-		name     string
-		toolName string
-		wantRisk RiskLevel
-	}{
-		{"low", "read", RiskLow},
-		{"high", "delete", RiskHigh},
-	}
-	
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// test implementation
-		})
-	}
-}
-```
-
-## Linter Rules
-
-Key rules enforced by golangci-lint:
-
-- **Error wrapping**: Use `%w`, not `%v`
-- **Named returns**: Not allowed
-- **Function length**: Max 150 lines, 60 statements
-- **Cyclomatic complexity**: Max 30
-- **Unused code**: All unused code fails lint
-- **Imports**: Use `goimports`
-
-## Logging
-
-Use `log/slog` for structured logging:
-
-```go
-logger := slog.Default()
-logger.Debug("executing tool", "name", toolName, "params", params)
-logger.Info("loop completed", "iterations", result.Iterations)
-logger.Warn("governance blocked", "tool", toolName, "error", err)
-logger.Error("tool execution failed", "tool", toolName, "error", err)
-```
-
-## Common Patterns
-
-### Constructor with Options
-
-```go
-func NewAgentLoop(model llms.Model, registry *Registry, opts ...Option) (*AgentLoop, error) {
-	loop := &AgentLoop{
-		model:         model,
-		registry:      registry,
-		maxIterations: 10,
-	}
-	for _, opt := range opts {
-		opt(loop)
-	}
-	return loop, nil
-}
-```
-
-### Functional Options
-
-```go
-type Option func(*Config)
-
-func WithAPIKey(apiKey string) Option {
-	return func(c *Config) {
-		c.apiKey = apiKey
-	}
-}
-```
-
-### Error Wrapping
-
-```go
-result, err := tool.Execute(ctx, params)
-if err != nil {
-	return nil, fmt.Errorf("%w: %w", ErrToolExecution, err)
-}
-```
-
-## Pre-commit Checklist
-
-1. Run `make lint-fix` to auto-fix formatting
-2. Run `make test` to ensure all tests pass
-3. Check exported types have godoc comments
-4. Verify error wrapping uses `%w`
-5. Ensure context cancellation in long-running operations
-6. Add tests for new functionality
-7. Update package documentation if adding new types
-
-## Important Files
-
-1. `doc.go` - Package documentation
-2. `errors.go` - Sentinel error definitions  
-3. Interface definitions in main files
-4. Test files for expected behavior
+- Constructor with functional options: `NewXxx(opts ...Option)` + `WithXxx()` pattern
+- Sentinel errors: `var ErrXxx = errors.New(...)` in `errors.go` files (found in `agent/`, `contextpacker/`, `llms/openai/`)
+- Package doc comments in `doc.go` files (found in `agent/`, `chains/`, `documentloaders/`, `gitutil/`, `output/`, and many subpackages)
+- Context cancellation in long-running operations
+- `sync.RWMutex` for concurrent access to shared state

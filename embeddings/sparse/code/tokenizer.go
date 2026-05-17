@@ -30,6 +30,7 @@ var (
 // for source code inputs.
 type Tokenizer struct{}
 
+// NewTokenizer creates a new code-aware tokenizer.
 func NewTokenizer() *Tokenizer {
 	return &Tokenizer{}
 }

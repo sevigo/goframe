@@ -20,13 +20,16 @@ const (
 )
 
 var (
-	ErrAPIKeyRequired  = errors.New("elevenlabs: API key required")
+	// ErrAPIKeyRequired is returned when no API key is provided.
+	ErrAPIKeyRequired = errors.New("elevenlabs: API key required")
+	// ErrVoiceIDRequired is returned when no voice ID is provided.
 	ErrVoiceIDRequired = errors.New("elevenlabs: voice ID required")
 )
 
 var _ voice.Synthesizer = (*Synthesizer)(nil)
 var _ voice.CaptionedSynthesizer = (*Synthesizer)(nil)
 
+// Synthesizer implements the voice.Synthesizer and voice.CaptionedSynthesizer interfaces.
 type Synthesizer struct {
 	client          *http.Client
 	baseURL         string
@@ -38,14 +41,17 @@ type Synthesizer struct {
 	similarityBoost float64
 }
 
+// Option configures a Synthesizer.
 type Option func(*Synthesizer)
 
+// WithAPIKey sets the ElevenLabs API key.
 func WithAPIKey(apiKey string) Option {
 	return func(s *Synthesizer) {
 		s.apiKey = strings.TrimSpace(apiKey)
 	}
 }
 
+// WithBaseURL sets the API base URL.
 func WithBaseURL(baseURL string) Option {
 	return func(s *Synthesizer) {
 		if baseURL != "" {
@@ -54,12 +60,14 @@ func WithBaseURL(baseURL string) Option {
 	}
 }
 
+// WithVoiceID sets the voice to use for synthesis.
 func WithVoiceID(voiceID string) Option {
 	return func(s *Synthesizer) {
 		s.voiceID = strings.TrimSpace(voiceID)
 	}
 }
 
+// WithModelID sets the model ID for synthesis.
 func WithModelID(modelID string) Option {
 	return func(s *Synthesizer) {
 		if modelID != "" {
@@ -68,6 +76,7 @@ func WithModelID(modelID string) Option {
 	}
 }
 
+// WithFormat sets the output audio format.
 func WithFormat(format string) Option {
 	return func(s *Synthesizer) {
 		if format != "" {
@@ -76,6 +85,7 @@ func WithFormat(format string) Option {
 	}
 }
 
+// WithStability sets the voice stability (0-1).
 func WithStability(stability float64) Option {
 	return func(s *Synthesizer) {
 		if stability >= 0 && stability <= 1 {
@@ -84,6 +94,7 @@ func WithStability(stability float64) Option {
 	}
 }
 
+// WithSimilarityBoost sets the voice similarity boost (0-1).
 func WithSimilarityBoost(boost float64) Option {
 	return func(s *Synthesizer) {
 		if boost >= 0 && boost <= 1 {
@@ -92,6 +103,7 @@ func WithSimilarityBoost(boost float64) Option {
 	}
 }
 
+// WithHTTPClient sets a custom HTTP client.
 func WithHTTPClient(client *http.Client) Option {
 	return func(s *Synthesizer) {
 		if client != nil {
@@ -100,6 +112,7 @@ func WithHTTPClient(client *http.Client) Option {
 	}
 }
 
+// NewSynthesizer creates an ElevenLabs synthesizer with the given options.
 func NewSynthesizer(opts ...Option) (*Synthesizer, error) {
 	s := &Synthesizer{
 		client:  http.DefaultClient,
@@ -145,6 +158,7 @@ type alignment struct {
 	Chars            []string `json:"chars"`
 }
 
+// Synthesize generates audio from text.
 func (s *Synthesizer) Synthesize(ctx context.Context, text string, opts ...voice.Option) (*voice.Audio, error) {
 	options := s.buildOptions(opts)
 
@@ -198,6 +212,7 @@ func (s *Synthesizer) Synthesize(ctx context.Context, text string, opts ...voice
 	}, nil
 }
 
+// Stream returns a streaming audio response as an io.ReadCloser.
 func (s *Synthesizer) Stream(ctx context.Context, text string, opts ...voice.Option) (io.ReadCloser, error) {
 	options := s.buildOptions(opts)
 
@@ -243,6 +258,7 @@ func (s *Synthesizer) Stream(ctx context.Context, text string, opts ...voice.Opt
 	return resp.Body, nil
 }
 
+// SynthesizeCaptioned generates audio with word-level timestamps.
 func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts ...voice.Option) (*voice.CaptionedAudio, error) {
 	options := s.buildOptions(opts)
 
@@ -333,6 +349,7 @@ func (s *Synthesizer) SynthesizeCaptioned(ctx context.Context, text string, opts
 	}, nil
 }
 
+// StreamCaptioned is not implemented; use SynthesizeCaptioned instead.
 func (s *Synthesizer) StreamCaptioned(ctx context.Context, text string, opts ...voice.Option) (io.ReadCloser, error) {
 	return nil, errors.New("elevenlabs: StreamCaptioned not implemented; use SynthesizeCaptioned")
 }

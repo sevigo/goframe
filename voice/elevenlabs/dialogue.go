@@ -14,11 +14,13 @@ import (
 	"github.com/sevigo/goframe/voice"
 )
 
+// DialogueInput represents a single speaker's text in a multi-turn dialogue.
 type DialogueInput struct {
 	Text    string `json:"text"`
 	VoiceID string `json:"voice_id"`
 }
 
+// DialogueRequest is the request body for the dialogue API.
 type DialogueRequest struct {
 	Inputs    []DialogueInput `json:"inputs"`
 	ModelID   string          `json:"model_id,omitempty"`
@@ -26,6 +28,7 @@ type DialogueRequest struct {
 	Stability float64         `json:"stability,omitempty"`
 }
 
+// DialogueResult contains the synthesized dialogue audio and metadata.
 type DialogueResult struct {
 	Audio      []byte
 	Format     string
@@ -34,6 +37,7 @@ type DialogueResult struct {
 	Subtitles  string
 }
 
+// DialogueSegmentResult contains per-segment metadata for a synthesized dialogue.
 type DialogueSegmentResult struct {
 	Speaker        string
 	Text           string
@@ -66,9 +70,11 @@ type voiceSegment struct {
 }
 
 var (
+	// ErrNoInputs is returned when no dialogue inputs are provided.
 	ErrNoInputs = errors.New("elevenlabs: dialogue requires at least one input")
 )
 
+// SynthesizeDialogue generates multi-speaker dialogue audio.
 func (s *Synthesizer) SynthesizeDialogue(ctx context.Context, segments []voice.DialogueSegment) (*DialogueResult, error) {
 	if len(segments) == 0 {
 		return nil, ErrNoInputs
@@ -89,6 +95,7 @@ func (s *Synthesizer) SynthesizeDialogue(ctx context.Context, segments []voice.D
 	return s.synthesizeDialogueInputs(ctx, inputs, segments)
 }
 
+// SynthesizeDialogueWithVoices generates dialogue using an explicit voice mapping.
 func (s *Synthesizer) SynthesizeDialogueWithVoices(ctx context.Context, voiceMap map[string]string, segments []voice.DialogueSegment) (*DialogueResult, error) {
 	if len(segments) == 0 {
 		return nil, ErrNoInputs
@@ -306,6 +313,7 @@ func (s *Synthesizer) generateSubtitles(segments []DialogueSegmentResult) string
 	return sb.String()
 }
 
+// StreamDialogue is not implemented; use SynthesizeDialogue instead.
 func (s *Synthesizer) StreamDialogue(ctx context.Context, segments []voice.DialogueSegment) (io.ReadCloser, error) {
 	return nil, errors.New("elevenlabs: StreamDialogue not implemented; use SynthesizeDialogue")
 }
