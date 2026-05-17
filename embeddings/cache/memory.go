@@ -13,13 +13,16 @@ type entry struct {
 	key        string
 	vector     []float32
 	accessTime time.Time
+	createTime time.Time
 }
 
-// MemoryCache is an in-memory LRU cache for embedding vectors.
+// MemoryCache is an in-memory LRU cache for embedding vectors
+// with optional TTL-based expiration.
 type MemoryCache struct {
 	entries    map[string]*list.Element
 	lruList    *list.List
 	maxEntries int
+	ttl        time.Duration
 	mu         sync.RWMutex
 	logger     *slog.Logger
 	hits       int64
@@ -41,6 +44,7 @@ func NewMemoryCache(opts ...CacheOption) *MemoryCache {
 		entries:    make(map[string]*list.Element),
 		lruList:    list.New(),
 		maxEntries: cfg.maxEntries,
+		ttl:        cfg.ttl,
 		logger:     cfg.logger.With("component", "embedding_cache"),
 	}
 }
@@ -49,9 +53,16 @@ func (m *MemoryCache) Get(_ context.Context, key CacheKey) ([]float32, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	hash := key.Hash()
+	hash := key.String()
 	if elem, ok := m.entries[hash]; ok {
 		e, _ := elem.Value.(*entry)
+		if m.isExpired(e) {
+			m.lruList.Remove(elem)
+			delete(m.entries, hash)
+			m.evictions++
+			m.misses++
+			return nil, false
+		}
 		e.accessTime = time.Now()
 		m.lruList.MoveToFront(elem)
 		m.hits++
@@ -66,29 +77,26 @@ func (m *MemoryCache) Set(_ context.Context, key CacheKey, vector []float32) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	hash := key.Hash()
+	now := time.Now()
+	hash := key.String()
 	if elem, ok := m.entries[hash]; ok {
 		e, _ := elem.Value.(*entry)
 		e.vector = vector
-		e.accessTime = time.Now()
+		e.accessTime = now
+		e.createTime = now
 		m.lruList.MoveToFront(elem)
 		return
 	}
 
 	for m.lruList.Len() >= m.maxEntries {
-		oldest := m.lruList.Back()
-		if oldest != nil {
-			e, _ := oldest.Value.(*entry)
-			delete(m.entries, e.key)
-			m.lruList.Remove(oldest)
-			m.evictions++
-		}
+		m.evictOldest()
 	}
 
 	e := &entry{
 		key:        hash,
 		vector:     vector,
-		accessTime: time.Now(),
+		accessTime: now,
+		createTime: now,
 	}
 	elem := m.lruList.PushFront(e)
 	m.entries[hash] = elem
@@ -98,7 +106,7 @@ func (m *MemoryCache) Delete(_ context.Context, key CacheKey) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	hash := key.Hash()
+	hash := key.String()
 	if elem, ok := m.entries[hash]; ok {
 		m.lruList.Remove(elem)
 		delete(m.entries, hash)
@@ -145,4 +153,21 @@ func (m *MemoryCache) ResetStats() {
 	m.hits = 0
 	m.misses = 0
 	m.evictions = 0
+}
+
+func (m *MemoryCache) isExpired(e *entry) bool {
+	if m.ttl <= 0 {
+		return false
+	}
+	return time.Since(e.createTime) > m.ttl
+}
+
+func (m *MemoryCache) evictOldest() {
+	oldest := m.lruList.Back()
+	if oldest != nil {
+		e, _ := oldest.Value.(*entry)
+		delete(m.entries, e.key)
+		m.lruList.Remove(oldest)
+		m.evictions++
+	}
 }

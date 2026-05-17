@@ -215,3 +215,48 @@ func TestDefaultRetryConfig(t *testing.T) {
 	assert.Equal(t, DefaultMaxRetryDelay, cfg.MaxDelay)
 	assert.Equal(t, DefaultRetryJitter, cfg.Jitter)
 }
+
+func TestDoWithRetryCustomClassifier(t *testing.T) {
+	attempts := 0
+	cfg := &RetryConfig{
+		Attempts: 3,
+		Delay:    1 * time.Millisecond,
+		MaxDelay: 10 * time.Millisecond,
+		Jitter:   0,
+		IsRetryable: func(err error) bool {
+			return err.Error() == "retry_me"
+		},
+	}
+
+	err := DoWithRetry(context.Background(), cfg, "test_op", func() error {
+		attempts++
+		if attempts < 3 {
+			return errors.New("retry_me")
+		}
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 3, attempts)
+}
+
+func TestDoWithRetryCustomClassifierNonRetryable(t *testing.T) {
+	cfg := &RetryConfig{
+		Attempts: 3,
+		Delay:    1 * time.Millisecond,
+		MaxDelay: 10 * time.Millisecond,
+		Jitter:   0,
+		IsRetryable: func(err error) bool {
+			return false
+		},
+	}
+
+	attempts := 0
+	err := DoWithRetry(context.Background(), cfg, "test_op", func() error {
+		attempts++
+		return errors.New("connection refused")
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, 1, attempts, "should not retry when custom classifier returns false")
+}

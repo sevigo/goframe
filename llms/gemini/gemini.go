@@ -25,7 +25,7 @@ var nonRetryablePatterns = []string{
 	"API_KEY_DISABLED",
 	"PERMISSION_DENIED",
 	"INVALID_ARGUMENT",
-	"QUOTA_EXCEEDED",
+	"QUOTA_EXCEEDED", // Daily quota exceeded — retrying won't help until quota resets
 }
 
 var retryablePatterns = []string{
@@ -46,7 +46,7 @@ type LLM struct {
 	logger     *slog.Logger
 	httpClient *http.Client
 	ownsClient bool
-	retryCfg   *httpclient.RetryConfig
+	retryCfg   httpclient.RetryConfig
 
 	dimension int
 	dimOnce   sync.Once
@@ -91,16 +91,20 @@ func New(ctx context.Context, opts ...Option) (*LLM, error) {
 		return nil, fmt.Errorf("failed to create gemini client: %w", err)
 	}
 
-	retryCfg := &o.retry
-
 	llm := &LLM{
 		client:     client,
 		options:    o,
 		logger:     o.logger.With("component", "gemini_llm", "model", o.model),
 		httpClient: httpClient,
 		ownsClient: ownsClient,
-		retryCfg:   retryCfg,
+		retryCfg: httpclient.RetryConfig{
+			Attempts: o.retry.Attempts,
+			Delay:    o.retry.Delay,
+			MaxDelay: o.retry.MaxDelay,
+			Jitter:   o.retry.Jitter,
+		},
 	}
+	llm.retryCfg.IsRetryable = llm.isRetryableError
 
 	llm.logger.InfoContext(ctx, "Gemini LLM initialized successfully", "api_key_prefix", maskAPIKey(o.apiKey))
 	return llm, nil
@@ -158,7 +162,7 @@ func (g *LLM) GenerateContent(
 
 	if callOpts.StreamingFunc == nil {
 		var resp *genai.GenerateContentResponse
-		retryErr := httpclient.DoWithRetry(ctx, g.retryCfg, "gemini generate content", func() error {
+		retryErr := httpclient.DoWithRetry(ctx, &g.retryCfg, "gemini generate content", func() error {
 			var genErr error
 			resp, genErr = g.client.Models.GenerateContent(ctx, g.options.model, geminiHistory, genConfig)
 			return genErr
@@ -219,7 +223,7 @@ func (g *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, 
 	}
 
 	var res *genai.EmbedContentResponse
-	err := httpclient.DoWithRetry(ctx, g.retryCfg, "gemini embed documents", func() error {
+	err := httpclient.DoWithRetry(ctx, &g.retryCfg, "gemini embed documents", func() error {
 		var genErr error
 		res, genErr = g.client.Models.EmbedContent(ctx, g.options.embeddingModel, contents, nil)
 		return genErr
@@ -242,7 +246,7 @@ func (g *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, 
 func (g *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	content := genai.NewContentFromText(text, genai.RoleUser)
 	var res *genai.EmbedContentResponse
-	err := httpclient.DoWithRetry(ctx, g.retryCfg, "gemini embed query", func() error {
+	err := httpclient.DoWithRetry(ctx, &g.retryCfg, "gemini embed query", func() error {
 		var genErr error
 		res, genErr = g.client.Models.EmbedContent(ctx, g.options.embeddingModel, []*genai.Content{content}, nil)
 		return genErr

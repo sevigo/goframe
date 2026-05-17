@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,10 +56,10 @@ func TestCacheKeyHash(t *testing.T) {
 	k4 := CacheKey{Provider: "ollama", Model: "nomic", Text: "world"}
 	k5 := CacheKey{Provider: "ollama", Model: "nomic", Dimensions: 256, Text: "hello"}
 
-	assert.Equal(t, k1.Hash(), k2.Hash(), "same keys must produce same hash")
-	assert.NotEqual(t, k1.Hash(), k3.Hash(), "different providers must produce different hashes")
-	assert.NotEqual(t, k1.Hash(), k4.Hash(), "different texts must produce different hashes")
-	assert.NotEqual(t, k1.Hash(), k5.Hash(), "different dimensions must produce different hashes")
+	assert.Equal(t, k1.String(), k2.String(), "same keys must produce same hash")
+	assert.NotEqual(t, k1.String(), k3.String(), "different providers must produce different hashes")
+	assert.NotEqual(t, k1.String(), k4.String(), "different texts must produce different hashes")
+	assert.NotEqual(t, k1.String(), k5.String(), "different dimensions must produce different hashes")
 }
 
 func TestMemoryCacheBasic(t *testing.T) {
@@ -254,4 +255,38 @@ func TestCachedEmbedderEmptyDocuments(t *testing.T) {
 	docs, err := cached.EmbedDocuments(context.Background(), []string{})
 	require.NoError(t, err)
 	assert.Empty(t, docs)
+}
+
+func TestMemoryCacheTTLExpiration(t *testing.T) {
+	c := NewMemoryCache(WithMaxEntries(100), WithTTL(100*time.Millisecond))
+	ctx := context.Background()
+
+	c.Set(ctx, CacheKey{Text: "a"}, []float32{1.0})
+	vec, ok := c.Get(ctx, CacheKey{Text: "a"})
+	assert.True(t, ok)
+	assert.Equal(t, []float32{1.0}, vec)
+
+	time.Sleep(150 * time.Millisecond)
+
+	_, ok = c.Get(ctx, CacheKey{Text: "a"})
+	assert.False(t, ok, "entry should be expired after TTL")
+}
+
+func TestMemoryCacheTTLNotExpired(t *testing.T) {
+	c := NewMemoryCache(WithMaxEntries(100), WithTTL(1*time.Second))
+	ctx := context.Background()
+
+	c.Set(ctx, CacheKey{Text: "a"}, []float32{1.0})
+	vec, ok := c.Get(ctx, CacheKey{Text: "a"})
+	assert.True(t, ok)
+	assert.Equal(t, []float32{1.0}, vec)
+}
+
+func TestMemoryCacheNoTTL(t *testing.T) {
+	c := NewMemoryCache(WithMaxEntries(100))
+	ctx := context.Background()
+
+	c.Set(ctx, CacheKey{Text: "a"}, []float32{1.0})
+	_, ok := c.Get(ctx, CacheKey{Text: "a"})
+	assert.True(t, ok, "without TTL, entries should never expire")
 }

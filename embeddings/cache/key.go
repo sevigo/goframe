@@ -12,8 +12,6 @@
 package cache
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 )
 
@@ -26,8 +24,7 @@ type CacheKey struct {
 	Text       string
 }
 
-// Hash returns a stable SHA-256 hash of the cache key for map lookups.
-func (k CacheKey) Hash() string {
-	h := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%d:%t:%s", k.Provider, k.Model, k.Dimensions, k.Truncate, k.Text)))
-	return hex.EncodeToString(h[:])
+// String returns a deterministic string representation for map lookups.
+func (k CacheKey) String() string {
+	return fmt.Sprintf("%s:%s:%d:%t:%s", k.Provider, k.Model, k.Dimensions, k.Truncate, k.Text)
 }
