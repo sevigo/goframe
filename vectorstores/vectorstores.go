@@ -42,6 +42,23 @@ type DocumentWithScore struct {
 	Score float32
 }
 
+// DocumentGroup represents a group of documents sharing the same payload field value.
+type DocumentGroup struct {
+	// ID is the group identifier (string, integer, or unsigned integer).
+	ID string
+	// Hits are the documents in this group, sorted by relevance.
+	Hits []DocumentWithScore
+}
+
+// ScrollResult represents a page of results from a scroll operation,
+// along with an optional cursor for fetching the next page.
+type ScrollResult struct {
+	// Documents are the documents in this page.
+	Documents []schema.Document
+	// NextOffset is the cursor for the next page. Empty string means no more results.
+	NextOffset string
+}
+
 // Option configures vector store operations.
 type Option func(*Options)
 
@@ -61,6 +78,16 @@ type Options struct {
 	SparseQuery *schema.SparseVector
 	// SparseQueries are sparse vectors for batch hybrid search.
 	SparseQueries []*schema.SparseVector
+	// GroupBy is the payload field to group search results by.
+	GroupBy string
+	// GroupSize is the maximum number of documents per group.
+	GroupSize int
+	// Limit is the maximum number of results to return.
+	Limit int
+	// Offset is the cursor for scroll pagination.
+	Offset string
+	// ExactCount requests an exact count instead of an approximate one.
+	ExactCount bool
 }
 
 // WithSparseQuery sets the sparse vector for hybrid search.
@@ -122,6 +149,41 @@ func WithFilter(key string, value any) Option {
 			opts.Filters = make(map[string]any)
 		}
 		opts.Filters[key] = value
+	}
+}
+
+// WithGroupBy sets the payload field to group search results by.
+func WithGroupBy(field string) Option {
+	return func(opts *Options) {
+		opts.GroupBy = field
+	}
+}
+
+// WithGroupSize sets the maximum number of documents returned per group.
+func WithGroupSize(size int) Option {
+	return func(opts *Options) {
+		opts.GroupSize = size
+	}
+}
+
+// WithLimit sets the maximum number of results to return.
+func WithLimit(limit int) Option {
+	return func(opts *Options) {
+		opts.Limit = limit
+	}
+}
+
+// WithOffset sets the offset cursor for scroll pagination.
+func WithOffset(offset string) Option {
+	return func(opts *Options) {
+		opts.Offset = offset
+	}
+}
+
+// WithExactCount requests an exact count instead of an approximate one.
+func WithExactCount(exact bool) Option {
+	return func(opts *Options) {
+		opts.ExactCount = exact
 	}
 }
 
