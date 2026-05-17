@@ -70,7 +70,9 @@ func New(ctx context.Context, opts ...Option) (*LLM, error) {
 	var ownsClient bool
 	httpClient := o.httpClient
 	if httpClient == nil {
-		httpClient = &http.Client{}
+		httpClient = &http.Client{
+			Transport: http.DefaultTransport.(*http.Transport).Clone(),
+		}
 		ownsClient = true
 	}
 
