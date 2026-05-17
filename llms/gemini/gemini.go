@@ -70,8 +70,12 @@ func New(ctx context.Context, opts ...Option) (*LLM, error) {
 	var ownsClient bool
 	httpClient := o.httpClient
 	if httpClient == nil {
+		defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+		if !ok {
+			return nil, fmt.Errorf("failed to initialize gemini client: http.DefaultTransport is not an *http.Transport")
+		}
 		httpClient = &http.Client{
-			Transport: http.DefaultTransport.(*http.Transport).Clone(),
+			Transport: defaultTransport.Clone(),
 		}
 		ownsClient = true
 	}
