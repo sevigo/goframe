@@ -1237,10 +1237,11 @@ func (s *Store) Scroll(ctx context.Context, options ...vectorstores.Option) (*ve
 
 	nextOffset := ""
 	if nextPageOffset != nil {
-		if uuid := nextPageOffset.GetUuid(); uuid != "" {
-			nextOffset = uuid
-		} else if num := nextPageOffset.GetNum(); num != 0 {
-			nextOffset = strconv.FormatUint(num, 10)
+		switch id := nextPageOffset.GetPointIdOptions().(type) {
+		case *qdrant.PointId_Uuid:
+			nextOffset = id.Uuid
+		case *qdrant.PointId_Num:
+			nextOffset = strconv.FormatUint(id.Num, 10)
 		}
 	}
 
