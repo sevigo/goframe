@@ -93,7 +93,8 @@ func TestIsRetryableError(t *testing.T) {
 		err      error
 		expected bool
 	}{
-		{"timeout error", errors.New("context deadline exceeded"), true},
+		{"context canceled", context.Canceled, false},
+		{"context deadline exceeded", context.DeadlineExceeded, false},
 		{"connection refused", errors.New("connection refused"), true},
 		{"connection reset", errors.New("connection reset by peer"), true},
 		{"unexpected EOF", errors.New("unexpected EOF"), true},

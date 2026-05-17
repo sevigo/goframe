@@ -12,8 +12,6 @@ import (
 
 // RetryableErrorPatterns contains error patterns that indicate a transient failure.
 var RetryableErrorPatterns = []string{
-	"context deadline exceeded",
-	"context canceled",
 	"http2: server sent GOAWAY",
 	"connection reset by peer",
 	"connection refused",
@@ -33,6 +31,10 @@ var RetryableErrorPatterns = []string{
 // IsRetryableError determines if an error is transient and should be retried.
 func IsRetryableError(err error) bool {
 	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 
