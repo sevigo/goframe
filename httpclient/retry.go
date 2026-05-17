@@ -12,8 +12,6 @@ import (
 
 // RetryableErrorPatterns contains error patterns that indicate a transient failure.
 var RetryableErrorPatterns = []string{
-	"context deadline exceeded",
-	"context canceled",
 	"http2: server sent GOAWAY",
 	"connection reset by peer",
 	"connection refused",
@@ -33,6 +31,10 @@ var RetryableErrorPatterns = []string{
 // IsRetryableError determines if an error is transient and should be retried.
 func IsRetryableError(err error) bool {
 	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 
@@ -67,6 +69,10 @@ type RetryConfig struct {
 
 	// Jitter is the random jitter added to retry delays.
 	Jitter time.Duration
+
+	// IsRetryable determines if an error is transient and should be retried.
+	// If nil, the default IsRetryableError function is used.
+	IsRetryable func(err error) bool
 }
 
 // DefaultRetryConfig returns a RetryConfig with default values.
@@ -87,6 +93,11 @@ func DoWithRetry(ctx context.Context, cfg *RetryConfig, operation string, fn fun
 		cfg = DefaultRetryConfig()
 	}
 
+	isRetryable := cfg.IsRetryable
+	if isRetryable == nil {
+		isRetryable = IsRetryableError
+	}
+
 	if cfg.Attempts == 0 {
 		return fn()
 	}
@@ -102,13 +113,11 @@ func DoWithRetry(ctx context.Context, cfg *RetryConfig, operation string, fn fun
 
 		lastErr = err
 
-		// Check if we've exhausted our retries
 		if attempt >= cfg.Attempts {
 			break
 		}
 
-		// Only retry on transient errors
-		if !IsRetryableError(err) {
+		if !isRetryable(err) {
 			break
 		}
 

@@ -15,30 +15,38 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/sevigo/goframe/embeddings"
+	"github.com/sevigo/goframe/httpclient"
 	"github.com/sevigo/goframe/llms"
 	"github.com/sevigo/goframe/schema"
 )
 
-var (
-	// ErrNoAPIKey is returned when no API key is provided.
-	ErrNoAPIKey = errors.New("gemini: API key is required")
-	// ErrInvalidModel is returned when an invalid model is specified.
-	ErrInvalidModel = errors.New("gemini: invalid model specified")
-	// ErrNoContent is returned when the model generates no content.
-	ErrNoContent = errors.New("gemini: no content generated")
-	// ErrSystemMessage is returned when a system message is not the first message.
-	ErrSystemMessage = errors.New("gemini: system message must be the first message in the conversation")
-	// ErrEmbeddings is returned when embedding generation fails.
-	ErrEmbeddings = errors.New("gemini: failed to generate embeddings")
-)
+var nonRetryablePatterns = []string{
+	"API_KEY_INVALID",
+	"API_KEY_DISABLED",
+	"PERMISSION_DENIED",
+	"INVALID_ARGUMENT",
+	"QUOTA_EXCEEDED", // Daily quota exceeded — retrying won't help until quota resets
+}
 
-// LLM implements both the Model and Embedder interfaces for Gemini.
+var retryablePatterns = []string{
+	"RESOURCE_EXHAUSTED",
+	"INTERNAL",
+	"429",
+	"500",
+	"503",
+	"connection reset",
+	"connection refused",
+	"timeout",
+	"unexpected EOF",
+}
+
 type LLM struct {
 	client     *genai.Client
 	options    options
 	logger     *slog.Logger
 	httpClient *http.Client
 	ownsClient bool
+	retryCfg   httpclient.RetryConfig
 
 	dimension int
 	dimOnce   sync.Once
@@ -48,7 +56,6 @@ type LLM struct {
 var _ llms.Model = (*LLM)(nil)
 var _ embeddings.Embedder = (*LLM)(nil)
 
-// New creates a new Gemini LLM client.
 func New(ctx context.Context, opts ...Option) (*LLM, error) {
 	o := applyOptions(opts...)
 
@@ -70,13 +77,7 @@ func New(ctx context.Context, opts ...Option) (*LLM, error) {
 	var ownsClient bool
 	httpClient := o.httpClient
 	if httpClient == nil {
-		defaultTransport, ok := http.DefaultTransport.(*http.Transport)
-		if !ok {
-			return nil, fmt.Errorf("failed to initialize gemini client: http.DefaultTransport is not an *http.Transport")
-		}
-		httpClient = &http.Client{
-			Transport: defaultTransport.Clone(),
-		}
+		httpClient = newOptimizedHTTPClient(o.requestTimeout)
 		ownsClient = true
 	}
 
@@ -96,14 +97,26 @@ func New(ctx context.Context, opts ...Option) (*LLM, error) {
 		logger:     o.logger.With("component", "gemini_llm", "model", o.model),
 		httpClient: httpClient,
 		ownsClient: ownsClient,
+		retryCfg: httpclient.RetryConfig{
+			Attempts: o.retry.Attempts,
+			Delay:    o.retry.Delay,
+			MaxDelay: o.retry.MaxDelay,
+			Jitter:   o.retry.Jitter,
+		},
 	}
+	llm.retryCfg.IsRetryable = llm.isRetryableError
 
-	llm.logger.InfoContext(ctx, "Gemini LLM initialized successfully")
+	llm.logger.InfoContext(ctx, "Gemini LLM initialized successfully", "api_key_prefix", maskAPIKey(o.apiKey))
 	return llm, nil
 }
 
-// Close releases resources held by the Gemini client.
-// Closes idle HTTP connections used by the underlying genai client.
+func newOptimizedHTTPClient(timeout time.Duration) *http.Client {
+	cfg := httpclient.NewConfig(
+		httpclient.WithTimeout(timeout),
+	)
+	return httpclient.NewClient(cfg)
+}
+
 func (g *LLM) Close() error {
 	if g.ownsClient && g.httpClient != nil {
 		if tr, ok := g.httpClient.Transport.(*http.Transport); ok {
@@ -113,12 +126,10 @@ func (g *LLM) Close() error {
 	return nil
 }
 
-// Call is a convenience method for a single-turn conversation.
 func (g *LLM) Call(ctx context.Context, prompt string, options ...llms.CallOption) (string, error) {
 	return llms.GenerateFromSinglePrompt(ctx, g, prompt, options...)
 }
 
-// GenerateContent handles multi-turn conversations and streaming.
 func (g *LLM) GenerateContent(
 	ctx context.Context,
 	messages []schema.MessageContent,
@@ -131,7 +142,6 @@ func (g *LLM) GenerateContent(
 		opt(callOpts)
 	}
 
-	// Create the generation configuration for this specific call.
 	genConfig := &genai.GenerateContentConfig{}
 	if callOpts.TemperatureSet() {
 		genConfig.Temperature = genai.Ptr(float32(callOpts.Temperature))
@@ -142,21 +152,25 @@ func (g *LLM) GenerateContent(
 		return nil, err
 	}
 
-	// Prepend systemInstruction if it exists
 	if systemInstruction != nil {
 		geminiHistory = append([]*genai.Content{systemInstruction}, geminiHistory...)
 	}
 
 	if len(geminiHistory) == 0 {
-		return nil, errors.New("gemini: no messages to send")
+		return nil, ErrNoMessages
 	}
 
 	if callOpts.StreamingFunc == nil {
-		resp, err := g.client.Models.GenerateContent(ctx, g.options.model, geminiHistory, genConfig)
+		var resp *genai.GenerateContentResponse
+		retryErr := httpclient.DoWithRetry(ctx, &g.retryCfg, "gemini generate content", func() error {
+			var genErr error
+			resp, genErr = g.client.Models.GenerateContent(ctx, g.options.model, geminiHistory, genConfig)
+			return genErr
+		})
 		duration := time.Since(start)
-		if err != nil {
-			g.logger.ErrorContext(ctx, "Gemini client failed", "error", err, "duration", duration)
-			return nil, err
+		if retryErr != nil {
+			g.logger.ErrorContext(ctx, "Gemini client failed", "error", retryErr, "duration", duration)
+			return nil, retryErr
 		}
 		return g.responseToSchema(resp, duration)
 	}
@@ -170,7 +184,7 @@ func (g *LLM) GenerateContent(
 		}
 		if errStream != nil {
 			g.logger.ErrorContext(ctx, "Gemini stream error", "error", errStream)
-			return nil, errStream
+			return nil, fmt.Errorf("gemini stream failed: %w", errStream)
 		}
 
 		finalResp = resp
@@ -202,16 +216,20 @@ func (g *LLM) GenerateContent(
 	}, nil
 }
 
-// EmbedDocuments generates embeddings for a slice of texts.
 func (g *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error) {
 	contents := make([]*genai.Content, len(texts))
 	for i, text := range texts {
 		contents[i] = genai.NewContentFromText(text, genai.RoleUser)
 	}
 
-	res, err := g.client.Models.EmbedContent(ctx, g.options.embeddingModel, contents, nil)
+	var res *genai.EmbedContentResponse
+	err := httpclient.DoWithRetry(ctx, &g.retryCfg, "gemini embed documents", func() error {
+		var genErr error
+		res, genErr = g.client.Models.EmbedContent(ctx, g.options.embeddingModel, contents, nil)
+		return genErr
+	})
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", ErrEmbeddings.Error(), err)
+		return nil, fmt.Errorf("%w: %w", ErrEmbeddings, err)
 	}
 
 	if len(res.Embeddings) != len(texts) {
@@ -225,12 +243,16 @@ func (g *LLM) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, 
 	return embeddings, nil
 }
 
-// EmbedQuery generates an embedding for a single text query.
 func (g *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	content := genai.NewContentFromText(text, genai.RoleUser)
-	res, err := g.client.Models.EmbedContent(ctx, g.options.embeddingModel, []*genai.Content{content}, nil)
+	var res *genai.EmbedContentResponse
+	err := httpclient.DoWithRetry(ctx, &g.retryCfg, "gemini embed query", func() error {
+		var genErr error
+		res, genErr = g.client.Models.EmbedContent(ctx, g.options.embeddingModel, []*genai.Content{content}, nil)
+		return genErr
+	})
 	if err != nil {
-		return nil, fmt.Errorf("%s for query: %w", ErrEmbeddings.Error(), err)
+		return nil, fmt.Errorf("%w: query embedding failed: %w", ErrEmbeddings, err)
 	}
 
 	if len(res.Embeddings) == 0 || res.Embeddings[0] == nil {
@@ -239,16 +261,11 @@ func (g *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	return res.Embeddings[0].Values, nil
 }
 
-// EmbedQueries generates embeddings for multiple queries.
 func (g *LLM) EmbedQueries(ctx context.Context, texts []string) ([][]float32, error) {
 	return g.EmbedDocuments(ctx, texts)
 }
 
-// GetDimension returns the embedding dimension of the model.
-// It caches the result after the first successful call. If the first call fails,
-// subsequent calls will retry until a successful result is obtained.
 func (g *LLM) GetDimension(ctx context.Context) (int, error) {
-	// Fast path: check if we already have a cached dimension
 	g.dimMu.Lock()
 	if g.dimension > 0 {
 		dim := g.dimension
@@ -257,7 +274,6 @@ func (g *LLM) GetDimension(ctx context.Context) (int, error) {
 	}
 	g.dimMu.Unlock()
 
-	// Use sync.Once for the initial call
 	var onceErr error
 	g.dimOnce.Do(func() {
 		sampleEmbedding, err := g.EmbedQuery(ctx, "dimension")
@@ -271,7 +287,6 @@ func (g *LLM) GetDimension(ctx context.Context) (int, error) {
 	})
 
 	if onceErr != nil {
-		// Allow retry by resetting sync.Once
 		g.dimMu.Lock()
 		g.dimOnce = sync.Once{}
 		g.dimMu.Unlock()
@@ -281,7 +296,41 @@ func (g *LLM) GetDimension(ctx context.Context) (int, error) {
 	return g.dimension, nil
 }
 
-// convertToGeminiMessages converts the generic schema to Gemini's native types.
+func (g *LLM) isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+
+	errStr := err.Error()
+	for _, pattern := range nonRetryablePatterns {
+		if strings.Contains(errStr, pattern) {
+			return false
+		}
+	}
+
+	if httpclient.IsRetryableError(err) {
+		return true
+	}
+
+	for _, pattern := range retryablePatterns {
+		if strings.Contains(errStr, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func maskAPIKey(key string) string {
+	if len(key) <= 8 {
+		return "****"
+	}
+	return key[:4] + "****" + key[len(key)-4:]
+}
+
 func (g *LLM) convertToGeminiMessages(messages []schema.MessageContent) ([]*genai.Content, *genai.Content, error) {
 	geminiContents := make([]*genai.Content, 0, len(messages))
 	var systemInstruction *genai.Content
@@ -298,9 +347,9 @@ func (g *LLM) convertToGeminiMessages(messages []schema.MessageContent) ([]*gena
 			if i != 0 || systemMessageFound {
 				return nil, nil, ErrSystemMessage
 			}
-			systemInstruction = genai.NewContentFromText(msg.GetTextContent(), genai.RoleUser) // Gemini treats system prompts as user roles
+			systemInstruction = genai.NewContentFromText(msg.GetTextContent(), genai.RoleUser)
 			systemMessageFound = true
-			continue // Do not add to the main history slice
+			continue
 		default:
 			role = genai.RoleUser
 		}
@@ -319,7 +368,6 @@ func (g *LLM) convertToGeminiMessages(messages []schema.MessageContent) ([]*gena
 	return geminiContents, systemInstruction, nil
 }
 
-// responseToSchema converts Gemini's response to the generic schema.
 func (g *LLM) responseToSchema(resp *genai.GenerateContentResponse, duration time.Duration) (*schema.ContentResponse, error) {
 	if len(resp.Candidates) == 0 {
 		return nil, ErrNoContent
@@ -351,7 +399,6 @@ func (g *LLM) responseToSchema(resp *genai.GenerateContentResponse, duration tim
 	}, nil
 }
 
-// extractContentFromResponse safely extracts the text content from a response.
 func (g *LLM) extractContentFromResponse(resp *genai.GenerateContentResponse) string {
 	var builder strings.Builder
 	if resp == nil {
