@@ -11,7 +11,7 @@ require (
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/mmcdole/gofeed v1.3.0
-	github.com/ollama/ollama v0.23.2
+	github.com/ollama/ollama v0.24.0
 	github.com/openai/openai-go v1.12.0
 	github.com/qdrant/go-client v1.17.1
 	github.com/stretchr/testify v1.11.1

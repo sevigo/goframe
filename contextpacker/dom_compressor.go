@@ -21,6 +21,15 @@ import (
 	"strings"
 )
 
+var (
+	htmlCommentRe   = regexp.MustCompile(`<!--[\s\S]*?-->`)
+	dataAttrRe      = regexp.MustCompile(`\s+data-[a-zA-Z0-9-]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`)
+	emptyDivRe      = regexp.MustCompile(`<div\s*>\s*</div>`)
+	multiNewlineCRe = regexp.MustCompile(`\n{3,}`)
+	scriptTagRe     = regexp.MustCompile(`<script[^>]*>[\s\S]*?</script>`)
+	styleTagRe      = regexp.MustCompile(`<style[^>]*>[\s\S]*?</style>`)
+)
+
 // DOMCompressor strips non-essential HTML elements and attributes
 // to reduce token usage while preserving semantic structure.
 type DOMCompressor struct {
@@ -163,16 +172,20 @@ func (c *DOMCompressor) Compress(dom string) (string, error) {
 
 // removeTag removes all occurrences of a tag and its content.
 func (c *DOMCompressor) removeTag(html, tagName string) string {
-	// Match opening tag with attributes, content, and closing tag
-	pattern := fmt.Sprintf(`<%s[^>]*>[\s\S]*?</%s>`, tagName, tagName)
-	re := regexp.MustCompile(pattern)
-	return re.ReplaceAllString(html, "")
+	switch tagName {
+	case "script":
+		return scriptTagRe.ReplaceAllString(html, "")
+	case "style":
+		return styleTagRe.ReplaceAllString(html, "")
+	default:
+		pattern := fmt.Sprintf(`<%s[^>]*>[\s\S]*?</%s>`, tagName, tagName)
+		return regexp.MustCompile(pattern).ReplaceAllString(html, "")
+	}
 }
 
 // removeComments removes HTML comments.
 func (c *DOMCompressor) removeComments(html string) string {
-	re := regexp.MustCompile(`<!--[\s\S]*?-->`)
-	return re.ReplaceAllString(html, "")
+	return htmlCommentRe.ReplaceAllString(html, "")
 }
 
 // removeAttributes removes specific attributes from all tags.
@@ -195,10 +208,7 @@ func (c *DOMCompressor) removeAttributes(html string) string {
 
 // removeDataAttributes removes all data-* attributes.
 func (c *DOMCompressor) removeDataAttributes(html string) string {
-	// Match data-* attributes with values
-	pattern := `\s+data-[a-zA-Z0-9-]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`
-	re := regexp.MustCompile(pattern)
-	return re.ReplaceAllString(html, "")
+	return dataAttrRe.ReplaceAllString(html, "")
 }
 
 // shouldKeepAttribute checks if an attribute should be preserved.
@@ -213,25 +223,15 @@ func (c *DOMCompressor) shouldKeepAttribute(attr string) bool {
 
 // flattenDivs removes redundant <div> wrappers with no attributes or content.
 func (c *DOMCompressor) flattenDivs(html string) string {
-	// Remove empty divs: <div></div> or <div> </div>
-	emptyDivPattern := `<div\s*>\s*</div>`
-	re := regexp.MustCompile(emptyDivPattern)
-	for re.MatchString(html) {
-		html = re.ReplaceAllString(html, "")
+	for emptyDivRe.MatchString(html) {
+		html = emptyDivRe.ReplaceAllString(html, "")
 	}
-
-	// Note: Layout divs (divs with only class/style attributes) are handled
-	// by the attribute removal step, which strips class and style attributes.
-	// This simplifies the HTML while preserving structure.
-
 	return html
 }
 
 // normalizeWhitespace reduces multiple whitespace to single space.
 func (c *DOMCompressor) normalizeWhitespace(html string) string {
-	// Replace multiple newlines with single newline
-	re := regexp.MustCompile(`\n{3,}`)
-	html = re.ReplaceAllString(html, "\n\n")
+	html = multiNewlineCRe.ReplaceAllString(html, "\n\n")
 
 	// Replace multiple spaces with single space (but preserve in pre/code)
 	// This is a simple implementation - a full parser would be more accurate

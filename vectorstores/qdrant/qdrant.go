@@ -958,6 +958,50 @@ func (s *Store) SimilaritySearchWithScores(
 	return docsWithScore, nil
 }
 
+// GetByID retrieves a single document by its ID.
+func (s *Store) GetByID(ctx context.Context, id string, options ...vectorstores.Option) (schema.Document, error) {
+	docs, err := s.GetByIDs(ctx, []string{id}, options...)
+	if err != nil {
+		return schema.Document{}, err
+	}
+	if len(docs) == 0 {
+		return schema.Document{}, fmt.Errorf("qdrant: document with id %q not found", id)
+	}
+	return docs[0], nil
+}
+
+// GetByIDs retrieves multiple documents by their IDs.
+func (s *Store) GetByIDs(ctx context.Context, ids []string, options ...vectorstores.Option) ([]schema.Document, error) {
+	if len(ids) == 0 {
+		return []schema.Document{}, nil
+	}
+
+	opts := vectorstores.ParseOptions(options...)
+	collectionName := s.getCollectionName(opts)
+
+	pointIDs := make([]*qdrant.PointId, len(ids))
+	for i, id := range ids {
+		pointIDs[i] = &qdrant.PointId{
+			PointIdOptions: &qdrant.PointId_Uuid{Uuid: id},
+		}
+	}
+
+	resp, err := s.client.GetPointsClient().Get(ctx, &qdrant.GetPoints{
+		CollectionName: collectionName,
+		Ids:            pointIDs,
+		WithPayload:    &qdrant.WithPayloadSelector{SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("qdrant: failed to get points by ID: %w", err)
+	}
+
+	docs := make([]schema.Document, 0, len(resp.GetResult()))
+	for _, point := range resp.GetResult() {
+		docs = append(docs, s.payloadToDocument(point.GetPayload()))
+	}
+	return docs, nil
+}
+
 // DeleteDocuments removes documents by their IDs.
 func (s *Store) DeleteDocuments(ctx context.Context, ids []string, options ...vectorstores.Option) error {
 	start := time.Now()
