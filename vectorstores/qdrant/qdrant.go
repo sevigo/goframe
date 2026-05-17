@@ -1196,6 +1196,200 @@ func (s *Store) DeleteDocumentsByFilter(ctx context.Context, filters map[string]
 	return nil
 }
 
+// Scroll retrieves documents page by page using a cursor for pagination.
+// It returns a ScrollResult containing the documents and a next-offset cursor.
+// An empty next-offset indicates no more results.
+func (s *Store) Scroll(ctx context.Context, options ...vectorstores.Option) (*vectorstores.ScrollResult, error) {
+	opts := vectorstores.ParseOptions(options...)
+	collectionName := s.getCollectionName(opts)
+
+	scrollReq := &qdrant.ScrollPoints{
+		CollectionName: collectionName,
+		WithPayload: &qdrant.WithPayloadSelector{
+			SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
+		},
+	}
+
+	if len(opts.Filters) > 0 {
+		scrollReq.Filter = buildQdrantFilter(opts.Filters)
+	}
+
+	if opts.Limit > 0 {
+		limit := uint32(opts.Limit)
+		scrollReq.Limit = &limit
+	}
+
+	if opts.Offset != "" {
+		scrollReq.Offset = &qdrant.PointId{
+			PointIdOptions: &qdrant.PointId_Uuid{Uuid: opts.Offset},
+		}
+	}
+
+	points, nextPageOffset, err := s.client.ScrollAndOffset(ctx, scrollReq)
+	if err != nil {
+		return nil, fmt.Errorf("qdrant: scroll failed: %w", err)
+	}
+
+	docs := make([]schema.Document, 0, len(points))
+	for _, point := range points {
+		docs = append(docs, s.payloadToDocument(point.GetPayload()))
+	}
+
+	nextOffset := ""
+	if nextPageOffset != nil {
+		if uuid := nextPageOffset.GetUuid(); uuid != "" {
+			nextOffset = uuid
+		} else if num := nextPageOffset.GetNum(); num != 0 {
+			nextOffset = strconv.FormatUint(num, 10)
+		}
+	}
+
+	s.logger.DebugContext(ctx, "Scroll completed",
+		"collection", collectionName, "results", len(docs), "has_next", nextOffset != "")
+
+	return &vectorstores.ScrollResult{
+		Documents:  docs,
+		NextOffset: nextOffset,
+	}, nil
+}
+
+// Count returns the number of documents in the collection, optionally filtered by metadata.
+func (s *Store) Count(ctx context.Context, options ...vectorstores.Option) (uint64, error) {
+	opts := vectorstores.ParseOptions(options...)
+	collectionName := s.getCollectionName(opts)
+
+	countReq := &qdrant.CountPoints{
+		CollectionName: collectionName,
+	}
+
+	if len(opts.Filters) > 0 {
+		countReq.Filter = buildQdrantFilter(opts.Filters)
+	}
+
+	if opts.ExactCount {
+		countReq.Exact = &opts.ExactCount
+	}
+
+	count, err := s.client.Count(ctx, countReq)
+	if err != nil {
+		return 0, fmt.Errorf("qdrant: count failed: %w", err)
+	}
+
+	s.logger.DebugContext(ctx, "Count completed",
+		"collection", collectionName, "count", count)
+
+	return count, nil
+}
+
+// SearchGroups performs a similarity search and groups results by a payload field.
+func (s *Store) SearchGroups(
+	ctx context.Context,
+	query string,
+	numGroups int,
+	options ...vectorstores.Option,
+) ([]vectorstores.DocumentGroup, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, ErrEmptyQuery
+	}
+
+	if numGroups <= 0 {
+		return nil, ErrInvalidNumDocuments
+	}
+
+	if s.embedder == nil {
+		return nil, ErrMissingEmbedder
+	}
+
+	opts := vectorstores.ParseOptions(options...)
+	if opts.GroupBy == "" {
+		return nil, fmt.Errorf("qdrant: group_by field is required for grouped search")
+	}
+
+	collectionName := s.getCollectionName(opts)
+
+	queryVector, err := s.embedder.EmbedQuery(ctx, query)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Query embedding failed for grouped search", "error", err)
+		return nil, fmt.Errorf("failed to embed query: %w", err)
+	}
+
+	groupSize := uint32(3)
+	if opts.GroupSize > 0 {
+		groupSize = uint32(opts.GroupSize)
+	}
+
+	searchReq := &qdrant.SearchPointGroups{
+		CollectionName: collectionName,
+		Vector:         queryVector,
+		Limit:          uint32(numGroups),
+		GroupBy:        opts.GroupBy,
+		GroupSize:      groupSize,
+		WithPayload: &qdrant.WithPayloadSelector{
+			SelectorOptions: &qdrant.WithPayloadSelector_Enable{Enable: true},
+		},
+	}
+
+	if len(opts.Filters) > 0 {
+		searchReq.Filter = buildQdrantFilter(opts.Filters)
+	}
+
+	if opts.ScoreThreshold > 0 {
+		searchReq.ScoreThreshold = &opts.ScoreThreshold
+	}
+
+	if opts.SparseQuery != nil && len(s.options.sparseVectors) > 0 {
+		sparseName := s.options.sparseVectors[0]
+		searchReq.SparseIndices = &qdrant.SparseIndices{
+			Data: opts.SparseQuery.Indices,
+		}
+		searchReq.VectorName = &sparseName
+	}
+
+	resp, err := s.client.GetPointsClient().SearchGroups(ctx, searchReq)
+	if err != nil {
+		return nil, fmt.Errorf("qdrant: grouped search failed: %w", err)
+	}
+
+	groups := make([]vectorstores.DocumentGroup, 0, len(resp.GetResult().GetGroups()))
+	for _, group := range resp.GetResult().GetGroups() {
+		groupID := ""
+		if id := group.GetId(); id != nil {
+			switch k := id.GetKind().(type) {
+			case *qdrant.GroupId_StringValue:
+				groupID = k.StringValue
+			case *qdrant.GroupId_IntegerValue:
+				groupID = strconv.FormatInt(k.IntegerValue, 10)
+			case *qdrant.GroupId_UnsignedValue:
+				groupID = strconv.FormatUint(k.UnsignedValue, 10)
+			}
+		}
+
+		hits := make([]vectorstores.DocumentWithScore, 0, len(group.GetHits()))
+		for _, point := range group.GetHits() {
+			hits = append(hits, vectorstores.DocumentWithScore{
+				Document: s.payloadToDocument(point.GetPayload()),
+				Score:    point.GetScore(),
+			})
+		}
+
+		groups = append(groups, vectorstores.DocumentGroup{
+			ID:   groupID,
+			Hits: hits,
+		})
+	}
+
+	s.logger.DebugContext(ctx, "Grouped search completed",
+		"collection", collectionName, "groups", len(groups), "group_by", opts.GroupBy)
+
+	return groups, nil
+}
+
+// EnsurePayloadIndex creates a payload index for the specified key in the given collection.
+// This is useful for ensuring query performance on frequently filtered fields.
+func (s *Store) EnsurePayloadIndex(ctx context.Context, collectionName, key string) error {
+	return s.createPayloadIndex(ctx, collectionName, key)
+}
+
 // SimilaritySearchBatch performs similarity search for multiple queries at once.
 func (s *Store) SimilaritySearchBatch(
 	ctx context.Context,

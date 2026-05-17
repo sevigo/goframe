@@ -789,3 +789,127 @@ func TestOptionsCloneWithNewFields(t *testing.T) {
 	cloned.payloadIndexes[0] = "modified"
 	assert.Equal(t, "source", original.payloadIndexes[0])
 }
+
+func TestScrollOptionParsing(t *testing.T) {
+	t.Run("default_options", func(t *testing.T) {
+		opts := vectorstores.ParseOptions()
+		assert.Equal(t, 0, opts.Limit)
+		assert.Empty(t, opts.Offset)
+		assert.Empty(t, opts.Filters)
+	})
+
+	t.Run("with_offset_and_limit", func(t *testing.T) {
+		opts := vectorstores.ParseOptions(
+			vectorstores.WithOffset("abc-123"),
+			vectorstores.WithLimit(50),
+		)
+		assert.Equal(t, "abc-123", opts.Offset)
+		assert.Equal(t, 50, opts.Limit)
+	})
+
+	t.Run("with_filters", func(t *testing.T) {
+		opts := vectorstores.ParseOptions(
+			vectorstores.WithFilters(map[string]any{"source": "test.go"}),
+			vectorstores.WithOffset("next-page"),
+		)
+		assert.Equal(t, "next-page", opts.Offset)
+		assert.Equal(t, "test.go", opts.Filters["source"])
+	})
+}
+
+func TestCountOptionParsing(t *testing.T) {
+	t.Run("exact_count_default", func(t *testing.T) {
+		opts := vectorstores.ParseOptions()
+		assert.False(t, opts.ExactCount)
+	})
+
+	t.Run("exact_count_enabled", func(t *testing.T) {
+		opts := vectorstores.ParseOptions(
+			vectorstores.WithExactCount(true),
+		)
+		assert.True(t, opts.ExactCount)
+	})
+
+	t.Run("exact_count_with_filters", func(t *testing.T) {
+		opts := vectorstores.ParseOptions(
+			vectorstores.WithExactCount(true),
+			vectorstores.WithFilter("language", "go"),
+		)
+		assert.True(t, opts.ExactCount)
+		assert.Equal(t, "go", opts.Filters["language"])
+	})
+}
+
+func TestSearchGroupsOptionParsing(t *testing.T) {
+	t.Run("default_group_size", func(t *testing.T) {
+		opts := vectorstores.ParseOptions()
+		assert.Equal(t, 0, opts.GroupSize)
+		assert.Empty(t, opts.GroupBy)
+	})
+
+	t.Run("with_group_by_and_size", func(t *testing.T) {
+		opts := vectorstores.ParseOptions(
+			vectorstores.WithGroupBy("source"),
+			vectorstores.WithGroupSize(5),
+		)
+		assert.Equal(t, "source", opts.GroupBy)
+		assert.Equal(t, 5, opts.GroupSize)
+	})
+
+	t.Run("with_score_threshold", func(t *testing.T) {
+		opts := vectorstores.ParseOptions(
+			vectorstores.WithGroupBy("kind"),
+			vectorstores.WithScoreThreshold(0.7),
+		)
+		assert.Equal(t, "kind", opts.GroupBy)
+		assert.InDelta(t, 0.7, opts.ScoreThreshold, 0.001)
+	})
+}
+
+func TestSearchGroupsValidation(t *testing.T) {
+	t.Run("empty_query_returns_error", func(t *testing.T) {
+		store := &Store{
+			embedder: &MockEmbedder{dimension: 4},
+			options:  options{collectionName: "test"},
+			logger:   slog.Default(),
+		}
+		_, err := store.SearchGroups(context.Background(), "", 10,
+			vectorstores.WithGroupBy("source"))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrEmptyQuery)
+	})
+
+	t.Run("invalid_num_documents_returns_error", func(t *testing.T) {
+		store := &Store{
+			embedder: &MockEmbedder{dimension: 4},
+			options:  options{collectionName: "test"},
+			logger:   slog.Default(),
+		}
+		_, err := store.SearchGroups(context.Background(), "test", 0,
+			vectorstores.WithGroupBy("source"))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidNumDocuments)
+	})
+
+	t.Run("nil_embedder_returns_error", func(t *testing.T) {
+		store := &Store{
+			options: options{collectionName: "test"},
+			logger:  slog.Default(),
+		}
+		_, err := store.SearchGroups(context.Background(), "test", 10,
+			vectorstores.WithGroupBy("source"))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrMissingEmbedder)
+	})
+
+	t.Run("missing_group_by_returns_error", func(t *testing.T) {
+		store := &Store{
+			embedder: &MockEmbedder{dimension: 4},
+			options:  options{collectionName: "test"},
+			logger:   slog.Default(),
+		}
+		_, err := store.SearchGroups(context.Background(), "test", 10)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "group_by field is required")
+	})
+}
