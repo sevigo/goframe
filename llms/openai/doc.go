@@ -26,4 +26,18 @@
 // Embedding usage:
 //
 //	embeddings, err := llm.EmbedQuery(ctx, "Hello world")
+//
+// Image embedding usage (via OpenRouter with a multimodal model):
+//
+//	llm, err := openai.New(
+//	    openai.WithAPIKey("sk-or-..."),
+//	    openai.WithBaseURL("https://openrouter.ai/api/v1"),
+//	    openai.WithEmbeddingModel("google/gemini-embedding-2-preview"),
+//	)
+//
+//	imageData, _ := os.ReadFile("photo.png")
+//	vec, err := llm.EmbedImage(ctx, embeddings.ImageData{
+//	    Data:     imageData,
+//	    MimeType: "image/png",
+//	})
 package openai

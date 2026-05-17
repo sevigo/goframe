@@ -124,6 +124,24 @@ func NewCachedEmbedder(embedder Embedder, cache Cache) *CachedEmbedder
 - [x] Ship an in-memory LRU cache implementation
 - [x] Add tests
 
+### Image Embedding
+
+Multimodal embedding — embed images into the same vector space as text for cross-modal retrieval.
+
+```go
+type ImageEmbedder interface {
+    EmbedImages(ctx context.Context, images []ImageData) ([][]float32, error)
+    EmbedImage(ctx context.Context, image ImageData) ([]float32, error)
+}
+```
+
+- [x] Define `ImageData` type and `ImageEmbedder` interface in `embeddings/`
+- [x] Implement `ImageEmbedder` on `gemini.LLM` via `genai.NewContentFromBytes`
+- [x] Implement `ImageEmbedder` on `openai.LLM` via raw HTTP (OpenRouter multimodal format)
+- [x] Extend `CachedEmbedder` and `CacheKey` for image embedding with SHA-256 hashing
+- [x] Add `ImageCacheKey`, `EmbedImages`, `EmbedImage` to cache
+- [x] Add tests for cache layer and interface compliance
+
 ### More Language Parsers
 
 Current parser coverage: Go, TypeScript/TSX, Markdown, JSON, YAML, Terraform, Protobuf, PDF, CSV, HTML, RSS.

@@ -8,6 +8,8 @@ import (
 	"github.com/sevigo/goframe/embeddings"
 )
 
+type ImageData = embeddings.ImageData
+
 type cachedEmbedderConfig struct {
 	provider string
 	model    string
@@ -51,6 +53,7 @@ type CachedEmbedder struct {
 
 var _ embeddings.Embedder = (*CachedEmbedder)(nil)
 var _ embeddings.EmbedderWithOptions = (*CachedEmbedder)(nil)
+var _ embeddings.ImageEmbedder = (*CachedEmbedder)(nil)
 
 // NewCachedEmbedder creates a new caching wrapper around the given embedder.
 func NewCachedEmbedder(inner embeddings.Embedder, opts ...Option) (*CachedEmbedder, error) {
@@ -189,6 +192,68 @@ func (c *CachedEmbedder) EmbedDocumentsWithOpts(ctx context.Context, texts []str
 	}
 
 	return results, nil
+}
+
+// EmbedImages generates embeddings for multiple images, using the cache when available.
+// The inner embedder must implement [embeddings.ImageEmbedder]; otherwise an error is returned.
+func (c *CachedEmbedder) EmbedImages(ctx context.Context, images []ImageData) ([][]float32, error) {
+	imageEmbedder, ok := c.inner.(embeddings.ImageEmbedder)
+	if !ok {
+		return nil, fmt.Errorf("cache: inner embedder does not implement ImageEmbedder")
+	}
+
+	results := make([][]float32, len(images))
+	var missedIndices []int
+	var missedImages []ImageData
+
+	for i, img := range images {
+		key := ImageCacheKey(c.provider, c.model, img)
+		if vec, ok := c.cache.Get(ctx, key); ok {
+			results[i] = vec
+		} else {
+			missedIndices = append(missedIndices, i)
+			missedImages = append(missedImages, img)
+		}
+	}
+
+	if len(missedImages) == 0 {
+		return results, nil
+	}
+
+	fetched, err := imageEmbedder.EmbedImages(ctx, missedImages)
+	if err != nil {
+		return nil, err
+	}
+
+	for j, idx := range missedIndices {
+		results[idx] = fetched[j]
+		key := ImageCacheKey(c.provider, c.model, missedImages[j])
+		c.cache.Set(ctx, key, fetched[j])
+	}
+
+	return results, nil
+}
+
+// EmbedImage generates an embedding for a single image, using the cache when available.
+// The inner embedder must implement [embeddings.ImageEmbedder]; otherwise an error is returned.
+func (c *CachedEmbedder) EmbedImage(ctx context.Context, image ImageData) ([]float32, error) {
+	key := ImageCacheKey(c.provider, c.model, image)
+	if vec, ok := c.cache.Get(ctx, key); ok {
+		return vec, nil
+	}
+
+	imageEmbedder, ok := c.inner.(embeddings.ImageEmbedder)
+	if !ok {
+		return nil, fmt.Errorf("cache: inner embedder does not implement ImageEmbedder")
+	}
+
+	result, err := imageEmbedder.EmbedImage(ctx, image)
+	if err != nil {
+		return nil, err
+	}
+
+	c.cache.Set(ctx, key, result)
+	return result, nil
 }
 
 // Stats returns current cache hit/miss/eviction statistics.
