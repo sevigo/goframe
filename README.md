@@ -109,6 +109,7 @@ At query time:
 | `documentloaders/` | `GitLoader` — streaming file ingestion from git repos with metadata |
 | `chains/` | `LLMChain[T]`, `RetrievalQA`, `MapReduceChain` |
 | `agent/` | OpenCode agent SDK — session management, MCP server config, streaming |
+| `comfyui/` | ComfyUI client — workflow builder, image generation, WebSocket progress streaming |
 
 ---
 

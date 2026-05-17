@@ -61,20 +61,45 @@ func (s *Store) GetByID(ctx context.Context, id string) (*schema.Document, error
 func (s *Store) GetByIDs(ctx context.Context, ids []string) ([]schema.Document, error)
 ```
 
-- [ ] Implement `GetByID()` and `GetByIDs()`
-- [ ] Add tests
+- [x] Implement `GetByID()` and `GetByIDs()`
+- [x] Add tests
+
+### ComfyUI Client
+
+Go client for ComfyUI's HTTP and WebSocket APIs — workflow construction, image generation, progress streaming.
+
+```go
+client, _ := comfyui.New(comfyui.WithHost("127.0.0.1:8188"))
+result, _ := client.Generate(ctx, workflow)
+```
+
+- [x] REST API: QueuePrompt, GetHistory, GetImage, UploadImage, GetQueue, Interrupt
+- [x] WebSocket progress streaming (StreamProgress, GenerateAsync)
+- [x] Workflow builder (AddNode, SetInput, Connect)
+- [x] Options: WithHost, WithHTTPClient, WithRetry*, WithRequestTimeout, WithClientID
+- [x] Sentinel errors and tests
 
 ### Connection Lifecycle
 
 Standardize `Close()` across all clients. Currently only `qdrant.Store` has it.
 
-- [ ] Add `Close()` to `ollama.LLM` (cleanup HTTP connections)
-- [ ] Add `Close()` to `gemini.LLM` (cleanup gRPC)
-- [ ] Document lifecycle management in README
+- [x] Add `Close()` to `ollama.LLM` (cleanup HTTP connections)
+- [x] Add `Close()` to `gemini.LLM` (cleanup gRPC)
+- [x] Document lifecycle management in README
 
 ---
 
 ## Medium Priority
+
+### Gemini Resilience
+
+Retry logic and error classification for the Gemini provider.
+
+- [x] Add retry via `httpclient.DoWithRetry` with custom `isRetryableError`
+- [x] Add `WithRetry*`, `WithRequestTimeout` options
+- [x] Add sentinel errors (API_KEY_INVALID, QUOTA_EXCEEDED, etc.)
+- [x] Add `maskAPIKey` for safe logging
+- [x] Add tests
 
 ### Embedding Cache
 
@@ -94,10 +119,10 @@ type Cache interface {
 func NewCachedEmbedder(embedder Embedder, cache Cache) *CachedEmbedder
 ```
 
-- [ ] Define `Cache` interface
-- [ ] Implement `CachedEmbedder`
-- [ ] Ship an in-memory LRU cache implementation
-- [ ] Add tests
+- [x] Define `Cache` interface
+- [x] Implement `CachedEmbedder`
+- [x] Ship an in-memory LRU cache implementation
+- [x] Add tests
 
 ### More Language Parsers
 
@@ -142,7 +167,7 @@ Still compiling inside functions:
 - `contextpacker/dom_compressor.go`
 
 - [x] Audit all parser packages
-- [ ] Move regex compilation to `var` block in remaining files
+- [x] Move regex compilation to `var` block in remaining files
 - [ ] Add benchmarks to confirm improvement
 
 ### Qdrant: Payload Index Management
