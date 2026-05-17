@@ -207,14 +207,7 @@ func (s *Store) Recommend(ctx context.Context, positiveIDs []string, negativeIDs
 
 ### Godoc Coverage
 
-Complete package-level documentation for all public packages so pkg.go.dev renders usefully.
-
-Priority order (least documented first):
-- `embeddings/sparse/code` — needs package doc
-- `gitutil` — needs package doc
-- `parsers/testing` — needs package doc
-
-Most other packages now have package-level documentation.
+Public symbol godoc is complete across all packages. Package-level `doc.go` files exist in all public packages.
 
 ---
 
