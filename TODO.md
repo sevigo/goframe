@@ -131,13 +131,18 @@ func TestQdrantIntegration(t *testing.T) {
 
 Several parsers compile regexes inside functions on every call. Move to package-level vars.
 
-Affected:
-- `parsers/markdown/parser.go`
-- `parsers/markdown/extractor.go`
-- `parsers/text/chunker.go`
+Already fixed:
+- `parsers/markdown/parser.go` — precompiled at package level
+- `parsers/text/chunker.go` — precompiled at package level
 
-- [ ] Audit all parser packages
-- [ ] Move regex compilation to `var` block
+Still compiling inside functions:
+- `parsers/text/extractor.go`
+- `parsers/yaml/extractor.go`
+- `parsers/pdf/extractor.go`
+- `contextpacker/dom_compressor.go`
+
+- [x] Audit all parser packages
+- [ ] Move regex compilation to `var` block in remaining files
 - [ ] Add benchmarks to confirm improvement
 
 ### Qdrant: Payload Index Management
@@ -148,8 +153,9 @@ Expose payload index creation so consumers can ensure fast filtering without man
 func (s *Store) EnsurePayloadIndex(ctx context.Context, field string, fieldType PayloadFieldType) error
 ```
 
-- [ ] Implement `EnsurePayloadIndex()`
-- [ ] Call automatically for standard fields (`chunk_type`, `identifier`, `source`, `is_test`) on collection creation
+- [x] Call automatically for standard fields (`chunk_type`, `identifier`, `source`, `is_test`) on collection creation
+- [ ] Implement public `EnsurePayloadIndex()` method (private `createPayloadIndex` exists)
+- [ ] Add `PayloadFieldType` option (currently hardcoded to keyword)
 - [ ] Add tests
 
 ---
@@ -218,7 +224,6 @@ The following belong in applications built on top of GoFrame, not in the library
 - PR overlay / ephemeral index layering — application-level state management
 - Consensus review pipeline — application-level orchestration
 - Incremental git indexer with PostgreSQL state — application-level persistence
-- Token-aware context packing — application-level prompt assembly
 - GitHub API client / PR diff parser — application-specific
 - Hallucination detection pipeline — application-level validation
 - Code FAQ system — application-level feature
