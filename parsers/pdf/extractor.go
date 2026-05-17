@@ -153,6 +153,14 @@ var (
 
 	// Regex for splitting paragraphs
 	paragraphRegex = regexp.MustCompile(paragraphSeparatorRegex)
+
+	pageMarkerRe = regexp.MustCompile(`--- Page (\d+) ---`)
+
+	sectionHeaderPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`^\d+\.`),
+		regexp.MustCompile(`^Chapter\s+\d+`),
+		regexp.MustCompile(`^Section\s+\d+`),
+	}
 )
 
 // cleanExtractedText normalizes extracted text
@@ -232,7 +240,7 @@ func (p *PDFPlugin) findSectionsWithPattern(
 		}
 
 		textUpToSectionContent := fullTextWithMarkers[:matchIndices[1]]
-		pageMatches := regexp.MustCompile(`--- Page (\d+) ---`).FindAllStringSubmatch(textUpToSectionContent, -1)
+		pageMatches := pageMarkerRe.FindAllStringSubmatch(textUpToSectionContent, -1)
 		if len(pageMatches) > 0 {
 			chunk.Annotations["start_page_approx"] = pageMatches[len(pageMatches)-1][1]
 		}
@@ -309,14 +317,8 @@ func (p *PDFPlugin) isLikelySectionHeader(line string) bool {
 		return false
 	}
 
-	patterns := []string{
-		`^\d+\.`,         // "1. Introduction"
-		`^Chapter\s+\d+`, // "Chapter 1"
-		`^Section\s+\d+`, // "Section 1"
-	}
-
-	for _, pattern := range patterns {
-		if matched, _ := regexp.MatchString(pattern, line); matched {
+	for _, re := range sectionHeaderPatterns {
+		if re.MatchString(line) {
 			return true
 		}
 	}

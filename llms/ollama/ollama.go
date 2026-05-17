@@ -63,6 +63,8 @@ type LLM struct {
 	details    *schema.ModelDetails
 	detailsMu  sync.RWMutex
 	detailsErr error
+	httpClient *http.Client
+	ownsClient bool
 }
 
 var (
@@ -91,7 +93,8 @@ func New(opts ...Option) (*LLM, error) {
 	}
 
 	httpClient := o.httpClient
-	if httpClient == nil {
+	ownsClient := httpClient == nil
+	if ownsClient {
 		httpClient = cloneDefaultHTTPClient()
 	}
 
@@ -107,21 +110,37 @@ func New(opts ...Option) (*LLM, error) {
 			Transport: at,
 			Timeout:   httpClient.Timeout,
 		}
+		ownsClient = true
 		o.logger.Debug("Ollama client initialized with API key", "prefix", maskAPIKey(o.apiKey))
 	} else if httpClient.Transport == nil {
 		httpClient.Transport = newOptimizedTransport()
+		ownsClient = true
 	}
 
 	client := api.NewClient(serverURL, httpClient)
 
 	llm := &LLM{
-		client:  client,
-		options: o,
-		logger:  o.logger.With("component", "ollama_llm", "model", o.model),
+		client:     client,
+		options:    o,
+		logger:     o.logger.With("component", "ollama_llm", "model", o.model),
+		httpClient: httpClient,
+		ownsClient: ownsClient,
 	}
 
 	llm.logger.Info("Ollama LLM initialized successfully")
 	return llm, nil
+}
+
+// Close releases resources held by the LLM client.
+// If the HTTP client was created by New, it closes idle connections.
+// If a custom HTTP client was provided via WithHTTPClient, this is a no-op.
+func (o *LLM) Close() error {
+	if o.ownsClient && o.httpClient != nil {
+		if tr, ok := o.httpClient.Transport.(*http.Transport); ok {
+			tr.CloseIdleConnections()
+		}
+	}
+	return nil
 }
 
 // cloneDefaultHTTPClient returns a copy of the default HTTP client

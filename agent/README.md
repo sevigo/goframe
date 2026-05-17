@@ -21,7 +21,8 @@ package main
 import (
 	"context"
 	"fmt"
-	
+	"log/slog"
+
 	"github.com/sevigo/goframe/agent"
 	"github.com/sevigo/goframe/llms/ollama"
 )
@@ -30,11 +31,14 @@ func main() {
 	ctx := context.Background()
 
 	// 1. Initialize an LLM model
-	model := ollama.NewModel("qwen2.5-coder")
+	model, err := ollama.New(ollama.WithModel("qwen2.5-coder"))
+	if err != nil {
+		panic(err)
+	}
 
 	// 2. Build a Tool Registry
 	registry := agent.NewRegistry()
-	registry.Register(myFileReadTool) // A tool matching llms.Tool interface
+	registry.Register(myFileReadTool) // A tool matching agent.Tool interface
 
 	// 3. Build the Native Agent Loop
 	ag, err := agent.NewAgentLoop(model, registry,
@@ -47,7 +51,7 @@ func main() {
 
 	// 4. Provide Initial Task
 	task := agent.Task{
-		Goal: "Read main.go and summarize its purpose.",
+		Description: "Read main.go and summarize its purpose.",
 	}
 
 	// 5. Run the Autonomous Loop
@@ -117,26 +121,33 @@ ag, _ := agent.NewAgentLoop(model, registry,
 To bridge metrics directly to OpenTelemetry, Datadog, Prometheus, or simple logging files, implement the `AgentObserver` interface.
 
 ```go
+import (
+	"log/slog"
+
+	"github.com/sevigo/goframe/agent"
+	"github.com/sevigo/goframe/llms"
+)
+
 type MyTelemetry struct{}
 
 func (t *MyTelemetry) OnIterationStart(ctx context.Context, iteration int) {
-	fmt.Printf("====== STARTING ITERATION %d ======\n", iteration)
+	slog.InfoContext(ctx, "Starting iteration", "iteration", iteration)
 }
 
 func (t *MyTelemetry) OnThinkComplete(ctx context.Context, response string, toolCalls []llms.ToolCall, tokens agent.TokenUsage, err error) {
-	fmt.Printf("Thinking burned %.0f input tokens.\n", tokens.Input)
+	slog.InfoContext(ctx, "Thinking completed", "input_tokens", tokens.Input)
 }
 
-func (t *MyTelemetry) OnToolCall(ctx context.Context, toolName string, params map[string]any) { }
+func (t *MyTelemetry) OnToolCall(ctx context.Context, toolName string, params map[string]any) {}
 
 func (t *MyTelemetry) OnToolResult(ctx context.Context, toolName string, params map[string]any, result any, duration time.Duration, err error) {
-	fmt.Printf("Tool %s executed in %v\n", toolName, duration)
+	slog.InfoContext(ctx, "Tool executed", "tool", toolName, "duration", duration)
 }
 
-func (t *MyTelemetry) OnLoopComplete(ctx context.Context, result *agent.LoopResult, err error) { }
+func (t *MyTelemetry) OnLoopComplete(ctx context.Context, result *agent.LoopResult, err error) {}
 
 // Inject into the Agent
-ag, _ := agent.NewAgentLoop(model, registry, 
+ag, _ := agent.NewAgentLoop(model, registry,
 	agent.WithLoopObserver(&MyTelemetry{}),
 )
 ```
@@ -148,11 +159,11 @@ ag, _ := agent.NewAgentLoop(model, registry,
 While middlewares handle tool-invocation dynamic interception, **Governance** enforces strict system boundaries. `Governance` asserts invariants irrespective of the specific tools:
 
 ```go
-authCheck := &myRateLimitCheck{}
+authCheck := agent.IntegrityCheckFunc(myRateLimitCheck)
 
-governance := agent.NewGovernance([]agent.RuleCheck{authCheck})
+governance := agent.NewGovernance(authCheck)
 
-ag, _ := agent.NewAgentLoop(model, registry, 
+ag, _ := agent.NewAgentLoop(model, registry,
 	agent.WithLoopGovernance(governance),
 )
 ```

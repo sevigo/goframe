@@ -12,6 +12,11 @@ import (
 	model "github.com/sevigo/goframe/schema"
 )
 
+var (
+	yamlAnchorRe = regexp.MustCompile(`&\w+`)
+	yamlAliasRe  = regexp.MustCompile(`\*\w+`)
+)
+
 // ExtractMetadata extracts language-specific metadata from YAML content
 func (p *YamlPlugin) ExtractMetadata(content string, path string) (model.FileMetadata, error) {
 	metadata := model.FileMetadata{
@@ -188,12 +193,10 @@ func (p *YamlPlugin) extractYamlFeatures(content string, metadata *model.FileMet
 	}
 
 	// Check for anchors and aliases
-	anchorRegex := regexp.MustCompile(`&\w+`)
-	aliasRegex := regexp.MustCompile(`\*\w+`)
-	if anchorRegex.MatchString(content) {
+	if yamlAnchorRe.MatchString(content) {
 		metadata.Properties["has_anchors"] = "true"
 	}
-	if aliasRegex.MatchString(content) {
+	if yamlAliasRe.MatchString(content) {
 		metadata.Properties["has_aliases"] = "true"
 	}
 

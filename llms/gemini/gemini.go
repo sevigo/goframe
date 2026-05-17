@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -33,14 +34,15 @@ var (
 
 // LLM implements both the Model and Embedder interfaces for Gemini.
 type LLM struct {
-	client  *genai.Client
-	options options
-	logger  *slog.Logger
+	client     *genai.Client
+	options    options
+	logger     *slog.Logger
+	httpClient *http.Client
+	ownsClient bool
 
-	// dimension is cached after the first call to GetDimension
 	dimension int
 	dimOnce   sync.Once
-	dimMu     sync.Mutex // protects dimOnce reset
+	dimMu     sync.Mutex
 }
 
 var _ llms.Model = (*LLM)(nil)
@@ -65,19 +67,50 @@ func New(ctx context.Context, opts ...Option) (*LLM, error) {
 		o.logger = slog.Default()
 	}
 
-	client, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: o.apiKey})
+	var ownsClient bool
+	httpClient := o.httpClient
+	if httpClient == nil {
+		defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+		if !ok {
+			return nil, fmt.Errorf("failed to initialize gemini client: http.DefaultTransport is not an *http.Transport")
+		}
+		httpClient = &http.Client{
+			Transport: defaultTransport.Clone(),
+		}
+		ownsClient = true
+	}
+
+	clientConfig := &genai.ClientConfig{
+		APIKey:     o.apiKey,
+		HTTPClient: httpClient,
+	}
+
+	client, err := genai.NewClient(ctx, clientConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gemini client: %w", err)
 	}
 
 	llm := &LLM{
-		client:  client,
-		options: o,
-		logger:  o.logger.With("component", "gemini_llm", "model", o.model),
+		client:     client,
+		options:    o,
+		logger:     o.logger.With("component", "gemini_llm", "model", o.model),
+		httpClient: httpClient,
+		ownsClient: ownsClient,
 	}
 
 	llm.logger.InfoContext(ctx, "Gemini LLM initialized successfully")
 	return llm, nil
+}
+
+// Close releases resources held by the Gemini client.
+// Closes idle HTTP connections used by the underlying genai client.
+func (g *LLM) Close() error {
+	if g.ownsClient && g.httpClient != nil {
+		if tr, ok := g.httpClient.Transport.(*http.Transport); ok {
+			tr.CloseIdleConnections()
+		}
+	}
+	return nil
 }
 
 // Call is a convenience method for a single-turn conversation.

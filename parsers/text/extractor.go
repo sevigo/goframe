@@ -9,6 +9,8 @@ import (
 	"github.com/sevigo/goframe/schema"
 )
 
+var sentenceEndRe = regexp.MustCompile(`[.!?]+`)
+
 // ExtractMetadata extracts metadata from text content
 func (p *TextPlugin) ExtractMetadata(content string, path string) (schema.FileMetadata, error) {
 	metadata := schema.FileMetadata{
@@ -79,7 +81,7 @@ func (p *TextPlugin) analyzeTextContent(_ string, lines []string, metadata *sche
 		wordCount += len(words)
 
 		// Simple sentence counting
-		sentences := regexp.MustCompile(`[.!?]+`).Split(trimmed, -1)
+		sentences := sentenceEndRe.Split(trimmed, -1)
 		sentenceCount += len(sentences) - 1
 	}
 
