@@ -55,6 +55,7 @@ type LLM struct {
 
 var _ llms.Model = (*LLM)(nil)
 var _ embeddings.Embedder = (*LLM)(nil)
+var _ embeddings.ImageEmbedder = (*LLM)(nil)
 
 func New(ctx context.Context, opts ...Option) (*LLM, error) {
 	o := applyOptions(opts...)
@@ -263,6 +264,49 @@ func (g *LLM) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 
 func (g *LLM) EmbedQueries(ctx context.Context, texts []string) ([][]float32, error) {
 	return g.EmbedDocuments(ctx, texts)
+}
+
+func (g *LLM) EmbedImages(ctx context.Context, images []embeddings.ImageData) ([][]float32, error) {
+	if len(images) == 0 {
+		return nil, fmt.Errorf("%w: no images provided", ErrEmbeddings)
+	}
+
+	contents := make([]*genai.Content, len(images))
+	for i, img := range images {
+		contents[i] = genai.NewContentFromBytes(img.Data, img.MimeType, genai.RoleUser)
+	}
+
+	var res *genai.EmbedContentResponse
+	err := httpclient.DoWithRetry(ctx, &g.retryCfg, "gemini embed images", func() error {
+		var genErr error
+		res, genErr = g.client.Models.EmbedContent(ctx, g.options.embeddingModel, contents, nil)
+		return genErr
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrEmbeddings, err)
+	}
+
+	if len(res.Embeddings) != len(images) {
+		return nil, fmt.Errorf("%w: expected %d embeddings, but got %d", ErrEmbeddings, len(images), len(res.Embeddings))
+	}
+
+	result := make([][]float32, len(res.Embeddings))
+	for i, e := range res.Embeddings {
+		result[i] = e.Values
+	}
+	return result, nil
+}
+
+func (g *LLM) EmbedImage(ctx context.Context, image embeddings.ImageData) ([]float32, error) {
+	embeddings, err := g.EmbedImages(ctx, []embeddings.ImageData{image})
+	if err != nil {
+		return nil, err
+	}
+
+	if len(embeddings) == 0 {
+		return nil, fmt.Errorf("%w: embedding is nil or empty", ErrEmbeddings)
+	}
+	return embeddings[0], nil
 }
 
 func (g *LLM) GetDimension(ctx context.Context) (int, error) {

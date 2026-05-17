@@ -1,12 +1,16 @@
 package openai
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/rand/v2"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -24,14 +28,16 @@ import (
 // for OpenAI models. It supports chat completions, streaming, function calling,
 // structured output, and embeddings.
 type LLM struct {
-	client    openai.Client
-	options   options
-	logger    *slog.Logger
-	dimension int
-	dimMu     sync.Mutex
+	client     openai.Client
+	options    options
+	logger     *slog.Logger
+	dimension  int
+	dimMu      sync.Mutex
+	httpClient *http.Client
 }
 
 var (
+	_ embeddings.ImageEmbedder       = (*LLM)(nil)
 	_ llms.Model                     = (*LLM)(nil)
 	_ embeddings.Embedder            = (*LLM)(nil)
 	_ embeddings.EmbedderWithOptions = (*LLM)(nil)
@@ -77,10 +83,16 @@ func New(opts ...Option) (*LLM, error) {
 
 	client := openai.NewClient(clientOpts...)
 
+	httpClient := &http.Client{Timeout: o.requestTimeout}
+	if o.requestTimeout <= 0 {
+		httpClient.Timeout = 120 * time.Second
+	}
+
 	llm := &LLM{
-		client:  client,
-		options: o,
-		logger:  o.logger.With("component", "openai_llm", "model", o.model),
+		client:     client,
+		options:    o,
+		logger:     o.logger.With("component", "openai_llm", "model", o.model),
+		httpClient: httpClient,
 	}
 
 	llm.logger.Info("OpenAI LLM initialized successfully", "api_key_prefix", maskAPIKey(o.apiKey))
@@ -576,6 +588,97 @@ func (o *LLM) EmbedQueryWithOpts(ctx context.Context, text string, opts embeddin
 	return embs[0], nil
 }
 
+// EmbedImages generates embeddings for multiple images using a multimodal embedding
+// model (e.g., google/gemini-embedding-2-preview or nvidia/llama-nemotron-embed-vl-1b-v2
+// via OpenRouter). The raw HTTP call is necessary because the OpenAI SDK does not
+// support multimodal embedding input.
+func (o *LLM) EmbedImages(ctx context.Context, images []embeddings.ImageData) ([][]float32, error) {
+	if len(images) == 0 {
+		return nil, fmt.Errorf("%w: no images provided", ErrEmbeddings)
+	}
+
+	baseURL := o.resolveBaseURL()
+
+	input := make([]multimodalEmbeddingInput, len(images))
+	for i, img := range images {
+		input[i] = multimodalEmbeddingInput{
+			Content: []multimodalEmbeddingContent{
+				{Type: "image_url", ImageURL: &imageURL{URL: "data:" + img.MimeType + ";base64," + base64.StdEncoding.EncodeToString(img.Data)}},
+			},
+		}
+	}
+
+	reqBody := multimodalEmbeddingRequest{
+		Model:          o.options.embeddingModel,
+		Input:          input,
+		EncodingFormat: "float",
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to marshal request: %w", ErrEmbeddings, err)
+	}
+
+	var resp multimodalEmbeddingResponse
+	err = o.doWithRetry(ctx, func() error {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/embeddings", bytes.NewReader(body))
+		if reqErr != nil {
+			return reqErr
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+o.options.apiKey)
+
+		httpResp, httpErr := o.httpClient.Do(req)
+		if httpErr != nil {
+			return httpErr
+		}
+		defer httpResp.Body.Close()
+
+		respBytes, readErr := io.ReadAll(httpResp.Body)
+		if readErr != nil {
+			return readErr
+		}
+
+		if httpResp.StatusCode >= 400 {
+			return fmt.Errorf("%w: server error %d: %s", ErrEmbeddings, httpResp.StatusCode, string(respBytes))
+		}
+
+		return json.Unmarshal(respBytes, &resp)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrEmbeddings, err)
+	}
+
+	if len(resp.Data) != len(images) {
+		return nil, fmt.Errorf("%w: expected %d embeddings, but got %d", ErrEmbeddings, len(images), len(resp.Data))
+	}
+
+	result := make([][]float32, len(resp.Data))
+	for i, d := range resp.Data {
+		result[i] = d.Embedding
+	}
+	return result, nil
+}
+
+// EmbedImage generates an embedding for a single image.
+func (o *LLM) EmbedImage(ctx context.Context, image embeddings.ImageData) ([]float32, error) {
+	embs, err := o.EmbedImages(ctx, []embeddings.ImageData{image})
+	if err != nil {
+		return nil, err
+	}
+	if len(embs) == 0 {
+		return nil, fmt.Errorf("%w: empty embedding response", ErrEmbeddings)
+	}
+	return embs[0], nil
+}
+
+func (o *LLM) resolveBaseURL() string {
+	if o.options.baseURL != "" {
+		return strings.TrimSuffix(o.options.baseURL, "/")
+	}
+	return "https://api.openai.com/v1"
+}
+
 // GetDimension returns the embedding dimension by making a sample embedding call.
 // The result is cached after the first call. InvalidateDimensionCache can be used
 // to reset the cache (e.g., if the model is changed at runtime).
@@ -720,4 +823,36 @@ func maskAPIKey(key string) string {
 		return "****"
 	}
 	return key[:4] + "****"
+}
+
+type multimodalEmbeddingRequest struct {
+	Model          string                     `json:"model"`
+	Input          []multimodalEmbeddingInput `json:"input"`
+	EncodingFormat string                     `json:"encoding_format"`
+}
+
+type multimodalEmbeddingInput struct {
+	Content []multimodalEmbeddingContent `json:"content"`
+}
+
+type multimodalEmbeddingContent struct {
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageURL *imageURL `json:"image_url,omitempty"`
+}
+
+type imageURL struct {
+	URL string `json:"url"`
+}
+
+type multimodalEmbeddingResponse struct {
+	Data []struct {
+		Embedding []float32 `json:"embedding"`
+		Index     int       `json:"index"`
+	} `json:"data"`
+	Model string `json:"model"`
+	Usage struct {
+		PromptTokens int `json:"prompt_tokens"`
+		TotalTokens  int `json:"total_tokens"`
+	} `json:"usage"`
 }

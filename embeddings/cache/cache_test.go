@@ -13,8 +13,9 @@ import (
 )
 
 type fakeEmbedder struct {
-	calls atomic.Int64
-	dim   int
+	calls      atomic.Int64
+	imageCalls atomic.Int64
+	dim        int
 }
 
 func (f *fakeEmbedder) EmbedDocuments(_ context.Context, texts []string) ([][]float32, error) {
@@ -47,6 +48,24 @@ func (f *fakeEmbedder) EmbedQueryWithOpts(ctx context.Context, text string, _ em
 	return f.EmbedQuery(ctx, text)
 }
 
+func (f *fakeEmbedder) EmbedImages(_ context.Context, images []ImageData) ([][]float32, error) {
+	f.imageCalls.Add(int64(len(images)))
+	result := make([][]float32, len(images))
+	for i := range images {
+		result[i] = []float32{0.7, 0.8, 0.9}
+	}
+	return result, nil
+}
+
+func (f *fakeEmbedder) EmbedImage(ctx context.Context, image ImageData) ([]float32, error) {
+	imgs, err := f.EmbedImages(ctx, []ImageData{image})
+	if err != nil {
+		return nil, err
+	}
+	return imgs[0], nil
+}
+
+var _ embeddings.ImageEmbedder = (*fakeEmbedder)(nil)
 var _ embeddings.EmbedderWithOptions = (*fakeEmbedder)(nil)
 
 func TestCacheKeyHash(t *testing.T) {
@@ -289,4 +308,80 @@ func TestMemoryCacheNoTTL(t *testing.T) {
 	c.Set(ctx, CacheKey{Text: "a"}, []float32{1.0})
 	_, ok := c.Get(ctx, CacheKey{Text: "a"})
 	assert.True(t, ok, "without TTL, entries should never expire")
+}
+
+func TestImageCacheKey(t *testing.T) {
+	img1 := ImageData{Data: []byte("hello"), MimeType: "image/png"}
+	img2 := ImageData{Data: []byte("hello"), MimeType: "image/png"}
+	img3 := ImageData{Data: []byte("world"), MimeType: "image/png"}
+
+	k1 := ImageCacheKey("gemini", "gemini-embedding-001", img1)
+	k2 := ImageCacheKey("gemini", "gemini-embedding-001", img2)
+	k3 := ImageCacheKey("gemini", "gemini-embedding-001", img3)
+
+	assert.Equal(t, k1.String(), k2.String(), "same image data must produce same key")
+	assert.NotEqual(t, k1.String(), k3.String(), "different image data must produce different keys")
+}
+
+func TestCachedEmbedderImageHit(t *testing.T) {
+	fake := &fakeEmbedder{dim: 3}
+	cached, err := NewCachedEmbedder(fake,
+		WithProviderName("test"),
+		WithModelName("fake"),
+	)
+	require.NoError(t, err)
+
+	var _ embeddings.ImageEmbedder = cached
+
+	ctx := context.Background()
+	img := ImageData{Data: []byte("test-image"), MimeType: "image/png"}
+
+	vec1, err := cached.EmbedImage(ctx, img)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), fake.imageCalls.Load())
+
+	vec2, err := cached.EmbedImage(ctx, img)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), fake.imageCalls.Load(), "should be cached, no extra calls")
+	assert.Equal(t, vec1, vec2)
+}
+
+func TestCachedEmbedderImagesPartialHit(t *testing.T) {
+	fake := &fakeEmbedder{dim: 3}
+	cached, err := NewCachedEmbedder(fake,
+		WithProviderName("test"),
+		WithModelName("fake"),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	imgA := ImageData{Data: []byte("image-a"), MimeType: "image/png"}
+	imgB := ImageData{Data: []byte("image-b"), MimeType: "image/png"}
+
+	_, err = cached.EmbedImage(ctx, imgA)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), fake.imageCalls.Load())
+
+	_, err = cached.EmbedImages(ctx, []ImageData{imgA, imgB})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), fake.imageCalls.Load(), "only imgB should miss cache")
+}
+
+func TestCachedEmbedderImageNoImpl(t *testing.T) {
+	type embedderOnly struct {
+		embeddings.Embedder
+	}
+
+	inner := embedderOnly{}
+	cached, err := NewCachedEmbedder(&inner)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	img := ImageData{Data: []byte("test"), MimeType: "image/png"}
+
+	_, err = cached.EmbedImage(ctx, img)
+	require.Error(t, err, "should error when inner does not implement ImageEmbedder")
+
+	_, err = cached.EmbedImages(ctx, []ImageData{img})
+	require.Error(t, err, "should error when inner does not implement ImageEmbedder")
 }

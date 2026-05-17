@@ -1,6 +1,11 @@
-// Package embeddings provides interfaces and utilities for text embedding.
-// Embeddings are vector representations of text that capture semantic meaning
-// for use in similarity search and RAG applications.
+// Package embeddings provides interfaces and utilities for text and image embedding.
+// Embeddings are vector representations that capture semantic meaning for use in
+// similarity search and RAG applications.
+//
+// The Embedder interface covers text embeddings, while ImageEmbedder extends
+// support to multimodal embedding models that can embed images into the same
+// vector space as text (e.g., Google's Gemini Embedding models, or OpenRouter's
+// multimodal embedding endpoints).
 package embeddings
 
 import (
@@ -30,6 +35,24 @@ type EmbedderWithOptions interface {
 	EmbedDocumentsWithOpts(ctx context.Context, texts []string, opts EmbeddingOptions) ([][]float32, error)
 	// EmbedQueryWithOpts generates an embedding with additional options.
 	EmbedQueryWithOpts(ctx context.Context, text string, opts EmbeddingOptions) ([]float32, error)
+}
+
+// ImageData represents an image for embedding, using raw bytes and a MIME type.
+type ImageData struct {
+	// Data is the raw image bytes (not base64-encoded).
+	Data []byte
+	// MimeType is the MIME type (e.g., "image/png", "image/jpeg").
+	MimeType string
+}
+
+// ImageEmbedder is the interface for providers that can generate embeddings
+// from images. This enables multimodal retrieval where images are embedded
+// into the same vector space as text.
+type ImageEmbedder interface {
+	// EmbedImages generates embeddings for multiple images.
+	EmbedImages(ctx context.Context, images []ImageData) ([][]float32, error)
+	// EmbedImage generates an embedding for a single image.
+	EmbedImage(ctx context.Context, image ImageData) ([]float32, error)
 }
 
 // EmbeddingOptions contains options for embedding requests.
