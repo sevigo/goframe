@@ -88,8 +88,9 @@ func TestWorkflowConnect(t *testing.T) {
 
 	loader.Connect("MODEL", sampler.ID, "model")
 
-	_, ok := sampler.Inputs["model"]
-	assert.True(t, ok, "connection should exist")
+	conn, ok := sampler.Inputs["model"].([]any)
+	require.True(t, ok, "connection should exist")
+	assert.Equal(t, []any{4, "MODEL"}, conn, "connection should be [source_node_id, output_name]")
 }
 
 func TestWorkflowMarshal(t *testing.T) {

@@ -205,41 +205,40 @@ func (c *Client) GetImage(ctx context.Context, filename string, subfolder string
 }
 
 func (c *Client) UploadImage(ctx context.Context, filename string, imageData []byte, overwrite bool, imageType string) (*UploadResponse, error) {
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
-
-	part, formErr := writer.CreateFormFile("image", filename)
-	if formErr != nil {
-		return nil, fmt.Errorf("comfyui: failed to create form file: %w", formErr)
-	}
-	if _, writeErr := part.Write(imageData); writeErr != nil {
-		return nil, fmt.Errorf("comfyui: failed to write image data: %w", writeErr)
-	}
-
-	if overwrite {
-		if fieldErr := writer.WriteField("overwrite", "true"); fieldErr != nil {
-			return nil, fmt.Errorf("comfyui: failed to write overwrite field: %w", fieldErr)
-		}
-	}
-	if imageType != "" {
-		if fieldErr := writer.WriteField("type", imageType); fieldErr != nil {
-			return nil, fmt.Errorf("comfyui: failed to write type field: %w", fieldErr)
-		}
-	}
-
-	if closeErr := writer.Close(); closeErr != nil {
-		return nil, fmt.Errorf("comfyui: failed to close multipart writer: %w", closeErr)
-	}
-
-	contentType := writer.FormDataContentType()
-
 	var uploadResp UploadResponse
+
 	err := httpclient.DoWithRetry(ctx, &c.retryCfg, "comfyui upload image", func() error {
+		var buf bytes.Buffer
+		writer := multipart.NewWriter(&buf)
+
+		part, formErr := writer.CreateFormFile("image", filename)
+		if formErr != nil {
+			return fmt.Errorf("comfyui: failed to create form file: %w", formErr)
+		}
+		if _, writeErr := part.Write(imageData); writeErr != nil {
+			return fmt.Errorf("comfyui: failed to write image data: %w", writeErr)
+		}
+
+		if overwrite {
+			if fieldErr := writer.WriteField("overwrite", "true"); fieldErr != nil {
+				return fmt.Errorf("comfyui: failed to write overwrite field: %w", fieldErr)
+			}
+		}
+		if imageType != "" {
+			if fieldErr := writer.WriteField("type", imageType); fieldErr != nil {
+				return fmt.Errorf("comfyui: failed to write type field: %w", fieldErr)
+			}
+		}
+
+		if closeErr := writer.Close(); closeErr != nil {
+			return fmt.Errorf("comfyui: failed to close multipart writer: %w", closeErr)
+		}
+
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/upload/image", &buf)
 		if reqErr != nil {
 			return reqErr
 		}
-		req.Header.Set("Content-Type", contentType)
+		req.Header.Set("Content-Type", writer.FormDataContentType())
 
 		resp, respErr := c.httpClient.Do(req)
 		if respErr != nil {
@@ -485,34 +484,36 @@ func (c *Client) Generate(ctx context.Context, workflow *Workflow) (*ImageResult
 }
 
 func (c *Client) collectImages(ctx context.Context, history *HistoryEntry, result *ImageResult) {
-	outputs, ok := history.Outputs["images"]
-	if !ok {
-		return
-	}
-
-	imagesList, ok := outputs.([]any)
-	if !ok {
-		return
-	}
-
-	for _, img := range imagesList {
-		imgMap, ok := img.(map[string]any)
+	for _, output := range history.Outputs {
+		nodeOutput, ok := output.(map[string]any)
 		if !ok {
 			continue
 		}
 
-		filename, _ := imgMap["filename"].(string)
-		subfolder, _ := imgMap["subfolder"].(string)
-		imgType, _ := imgMap["type"].(string)
-		result.Filenames = append(result.Filenames, filename)
-
-		imageData, imgErr := c.GetImage(ctx, filename, subfolder, imgType)
-		if imgErr != nil {
-			c.logger.WarnContext(ctx, "Failed to download image",
-				"filename", filename, "error", imgErr)
+		imagesList, ok := nodeOutput["images"].([]any)
+		if !ok {
 			continue
 		}
-		result.Images = append(result.Images, imageData)
+
+		for _, img := range imagesList {
+			imgMap, ok := img.(map[string]any)
+			if !ok {
+				continue
+			}
+
+			filename, _ := imgMap["filename"].(string)
+			subfolder, _ := imgMap["subfolder"].(string)
+			imgType, _ := imgMap["type"].(string)
+			result.Filenames = append(result.Filenames, filename)
+
+			imageData, imgErr := c.GetImage(ctx, filename, subfolder, imgType)
+			if imgErr != nil {
+				c.logger.WarnContext(ctx, "Failed to download image",
+					"filename", filename, "error", imgErr)
+				continue
+			}
+			result.Images = append(result.Images, imageData)
+		}
 	}
 }
 

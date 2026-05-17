@@ -18,17 +18,10 @@ func NewWorkflow() *Workflow {
 }
 
 type Node struct {
-	ID       int                    `json:"class_type"`
-	Inputs   map[string]any         `json:"inputs"`
-	Meta     map[string]any         `json:"_meta,omitempty"`
-	Outputs  map[string][]LinkInput `json:"-"` // internal routing, not serialized
+	ID       int            `json:"-"`
+	Inputs   map[string]any `json:"-"`
+	Meta     map[string]any `json:"-"`
 	workflow *Workflow
-}
-
-type LinkInput struct {
-	NodeID       int    `json:"node_id"`
-	OutputSocket string `json:"output_socket"`
-	InputSocket  string `json:"input_socket"`
 }
 
 func (w *Workflow) AddNode(classType string, id int) *Node {
@@ -38,7 +31,6 @@ func (w *Workflow) AddNode(classType string, id int) *Node {
 	node := &Node{
 		ID:       id,
 		Inputs:   make(map[string]any),
-		Outputs:  make(map[string][]LinkInput),
 		workflow: w,
 	}
 	node.Inputs["class_type"] = classType
@@ -61,7 +53,7 @@ func (n *Node) Connect(outputName string, targetID int, inputName string) *Node 
 	}
 
 	n.workflow.mu.Lock()
-	target.Inputs[inputName] = []any{targetID, outputName}
+	target.Inputs[inputName] = []any{n.ID, outputName}
 	n.workflow.mu.Unlock()
 
 	return n
