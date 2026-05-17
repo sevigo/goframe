@@ -1,6 +1,7 @@
 package ollama
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -78,7 +79,7 @@ func WithServerURL(rawURL string) Option {
 	return func(opts *options) {
 		parsedURL, err := url.Parse(rawURL)
 		if err != nil {
-			slog.Warn("Failed to parse server URL", "url", rawURL, "error", err)
+			slog.Default().WarnContext(context.Background(), "Failed to parse server URL", "url", rawURL, "error", err)
 			return
 		}
 		opts.ollamaServerURL = parsedURL
@@ -174,7 +175,7 @@ func WithKeepAlive(keepAlive string) Option {
 		}
 		d, err := time.ParseDuration(keepAlive)
 		if err != nil {
-			slog.Warn("Failed to parse keep_alive duration", "keep_alive", keepAlive, "error", err)
+			slog.Default().WarnContext(context.Background(), "Failed to parse keep_alive duration", "keep_alive", keepAlive, "error", err)
 			return
 		}
 		opts.keepAlive = d

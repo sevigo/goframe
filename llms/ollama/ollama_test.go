@@ -13,6 +13,7 @@ import (
 
 	"github.com/ollama/ollama/api"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/sevigo/goframe/llms"
 	"github.com/sevigo/goframe/schema"
@@ -38,14 +39,14 @@ func TestNewDoesNotMutateDefaultHTTPClient(t *testing.T) {
 		WithModel("test-model"),
 		WithServerURL(u.String()),
 	)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, origTransport, defaultHTTPClient.Transport, "defaultHTTPClient should not be mutated")
 
 	_, err = New(
 		WithModel("test-model"),
 		WithServerURL(u.String()),
 	)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, origTransport, defaultHTTPClient.Transport, "second New() should not mutate defaultHTTPClient")
 }
 
@@ -156,7 +157,7 @@ func TestDoWithRetryNoRetry(t *testing.T) {
 		return nil
 	})
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 1, callCount)
 }
 
@@ -173,7 +174,7 @@ func TestDoWithRetrySuccess(t *testing.T) {
 		return nil
 	})
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 3, callCount)
 }
 
@@ -187,7 +188,7 @@ func TestDoWithRetryNonRetryableError(t *testing.T) {
 		return errors.New("invalid model name")
 	})
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, 1, callCount, "should not retry non-retryable errors")
 }
 
@@ -201,7 +202,7 @@ func TestDoWithRetryExhausted(t *testing.T) {
 		return errors.New("connection refused")
 	})
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, 3, callCount, "should try initial + 2 retries = 3 total attempts")
 }
 
@@ -218,7 +219,7 @@ func TestDoWithRetryContextCancellation(t *testing.T) {
 		return errors.New("connection refused")
 	})
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, context.Canceled, err)
 	assert.Equal(t, 1, callCount, "should stop after context cancellation")
 }
@@ -233,7 +234,7 @@ func TestDoWithRetryContextCanceledNotRetryable(t *testing.T) {
 		return context.Canceled
 	})
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, 1, callCount, "context.Canceled should not be retried")
 }
 
@@ -288,7 +289,7 @@ func TestNewUsesDefaultHTTPClient(t *testing.T) {
 		WithModel("test-model"),
 		WithServerURL(u.String()),
 	)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, llm)
 }
 
@@ -301,7 +302,7 @@ func TestNewWithCustomHTTPClient(t *testing.T) {
 		WithServerURL(u.String()),
 		WithHTTPClient(customClient),
 	)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, llm)
 }
 
@@ -333,7 +334,7 @@ func TestCallOptionsPresenceTracking(t *testing.T) {
 
 	llms.WithTemperature(0.0)(&opts)
 	assert.True(t, opts.TemperatureSet(), "WithTemperature(0.0) should mark Temperature as set")
-	assert.Equal(t, 0.0, opts.Temperature)
+	assert.InDelta(t, 0.0, opts.Temperature, 0.0001)
 
 	llms.WithSeed(0)(&opts)
 	assert.True(t, opts.SeedSet(), "WithSeed(0) should mark Seed as set")
@@ -342,7 +343,7 @@ func TestCallOptionsPresenceTracking(t *testing.T) {
 	opts2 := llms.CallOptions{}
 	llms.WithTemperature(0.7)(&opts2)
 	assert.True(t, opts2.TemperatureSet())
-	assert.Equal(t, 0.7, opts2.Temperature)
+	assert.InDelta(t, 0.7, opts2.Temperature, 0.0001)
 }
 
 func TestBuildOllamaOptionsZeroTemperature(t *testing.T) {
@@ -351,7 +352,7 @@ func TestBuildOllamaOptionsZeroTemperature(t *testing.T) {
 
 	result := buildOllamaOptions(opts)
 	assert.NotNil(t, result, "should allocate map when Temperature is explicitly set to 0")
-	assert.Equal(t, float32(0), result["temperature"])
+	assert.InDelta(t, float32(0), result["temperature"], 0.0001)
 }
 
 func TestBuildOllamaOptionsZeroSeed(t *testing.T) {
@@ -449,7 +450,7 @@ func TestInvalidateModelDetailsCache(t *testing.T) {
 
 	llm.detailsMu.RLock()
 	assert.Nil(t, llm.details, "details should be nil after invalidation")
-	assert.Nil(t, llm.detailsErr, "detailsErr should be nil after invalidation")
+	require.NoError(t, llm.detailsErr, "detailsErr should be nil after invalidation")
 	llm.detailsMu.RUnlock()
 }
 
@@ -493,7 +494,7 @@ func TestBuildGenerationInfo_WithLogprobs(t *testing.T) {
 	assert.True(t, ok)
 	assert.Len(t, lps, 1)
 	assert.Equal(t, "hello", lps[0].Token)
-	assert.Equal(t, -0.0123, lps[0].Logprob)
+	assert.InDelta(t, -0.0123, lps[0].Logprob, 0.0001)
 }
 
 func TestParseKeepAlive_Indefinite(t *testing.T) {
@@ -528,7 +529,7 @@ func TestApplyFormatOption_JSONSchemaTypes(t *testing.T) {
 			JSONSchema: `{"type": "object"}`,
 		}
 		llm.applyFormatOption(req, opts)
-		assert.Equal(t, []byte(`{"type": "object"}`), []byte(req.Format))
+		assert.JSONEq(t, `{"type": "object"}`, string(req.Format))
 	})
 
 	t.Run("raw json bytes", func(t *testing.T) {
@@ -537,7 +538,7 @@ func TestApplyFormatOption_JSONSchemaTypes(t *testing.T) {
 			JSONSchema: []byte(`{"type": "array"}`),
 		}
 		llm.applyFormatOption(req, opts)
-		assert.Equal(t, []byte(`{"type": "array"}`), []byte(req.Format))
+		assert.JSONEq(t, `{"type": "array"}`, string(req.Format))
 	})
 
 	t.Run("structured map", func(t *testing.T) {
@@ -546,7 +547,7 @@ func TestApplyFormatOption_JSONSchemaTypes(t *testing.T) {
 			JSONSchema: map[string]any{"type": "string"},
 		}
 		llm.applyFormatOption(req, opts)
-		assert.Equal(t, []byte(`{"type":"string"}`), []byte(req.Format))
+		assert.JSONEq(t, `{"type":"string"}`, string(req.Format))
 	})
 }
 

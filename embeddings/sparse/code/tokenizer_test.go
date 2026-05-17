@@ -96,7 +96,7 @@ func TestCodeSparseProvider_GenerateSparseVector(t *testing.T) {
 
 	assert.NotEmpty(t, vec.Indices)
 	assert.NotEmpty(t, vec.Values)
-	assert.Equal(t, len(vec.Indices), len(vec.Values))
+	assert.Len(t, vec.Values, len(vec.Indices))
 
 	sum := float32(0)
 	for _, v := range vec.Values {

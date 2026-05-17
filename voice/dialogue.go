@@ -436,7 +436,7 @@ func (ds *DialogueSynthesizer) synthesizeSegment(ctx context.Context, idx int, s
 
 	data, err := io.ReadAll(stream)
 	if closeErr := stream.Close(); closeErr != nil {
-		slog.Warn("Failed to close stream", "error", closeErr)
+		slog.Default().WarnContext(ctx, "Failed to close stream", "error", closeErr)
 	}
 	if err != nil {
 		results <- parallelResult{index: idx, err: fmt.Errorf("voice: failed to read segment %d: %w", idx, err)}

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/sevigo/goframe/vectorstores/fake"
 )
@@ -12,5 +12,5 @@ import (
 func TestDeleteCollection(t *testing.T) {
 	s := fake.New()
 	err := s.DeleteCollection(context.Background(), "test-collection")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 }

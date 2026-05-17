@@ -252,7 +252,7 @@ func (o *LLM) generateStreamingContent(
 			if args, hasArgs := toolCallArgs[i]; hasArgs {
 				var parsed map[string]any
 				if err := json.Unmarshal([]byte(args.String()), &parsed); err != nil {
-					o.logger.Warn("failed to parse streaming tool call arguments", "error", err, "arguments", args.String())
+					o.logger.WarnContext(ctx, "failed to parse streaming tool call arguments", "error", err, "arguments", args.String())
 				} else {
 					tc.Function.Arguments = parsed
 				}
@@ -661,7 +661,7 @@ func (o *LLM) waitForRetryDelay(ctx context.Context, delay time.Duration, attemp
 	}
 	totalDelay := delay + jitter
 
-	o.logger.Warn("Retrying OpenAI API call",
+	o.logger.WarnContext(ctx, "Retrying OpenAI API call",
 		"attempt", fmt.Sprintf("%d/%d", attempt, o.options.retryAttempts),
 		"delay", totalDelay,
 		"error", err)

@@ -22,7 +22,7 @@ func TestStringParser_Parse(t *testing.T) {
 	t.Run("handles empty string", func(t *testing.T) {
 		result, err := parser.Parse(context.Background(), "")
 		require.NoError(t, err)
-		assert.Equal(t, "", result)
+		assert.Empty(t, result)
 	})
 
 	t.Run("preserves whitespace and newlines", func(t *testing.T) {

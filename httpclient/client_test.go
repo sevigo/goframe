@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewConfig(t *testing.T) {
@@ -124,7 +125,7 @@ func TestDoWithRetryNoRetry(t *testing.T) {
 		return nil
 	})
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 1, callCount)
 }
 
@@ -145,7 +146,7 @@ func TestDoWithRetrySuccess(t *testing.T) {
 		return nil
 	})
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 2, callCount)
 }
 
@@ -162,7 +163,7 @@ func TestDoWithRetryNonRetryableError(t *testing.T) {
 		return errors.New("invalid parameter")
 	})
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, 1, callCount)
 }
 
@@ -179,7 +180,7 @@ func TestDoWithRetryExhausted(t *testing.T) {
 		return errors.New("connection refused")
 	})
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "test_op failed after 3 attempts")
 	assert.Equal(t, 3, callCount) // initial + 2 retries
 }
@@ -200,7 +201,7 @@ func TestDoWithRetryContextCancellation(t *testing.T) {
 		return errors.New("connection refused")
 	})
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, context.Canceled, err)
 	assert.Equal(t, 1, callCount)
 }

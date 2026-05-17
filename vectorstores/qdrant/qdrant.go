@@ -1604,7 +1604,7 @@ func buildQdrantFilter(filters map[string]any) *qdrant.Filter {
 		case []any:
 			match = buildMatchFromSlice(key, v)
 		default:
-			slog.Warn("Unsupported filter type for key", "key", key, "type", fmt.Sprintf("%T", v))
+			slog.Default().WarnContext(context.Background(), "Unsupported filter type for key", "key", key, "type", fmt.Sprintf("%T", v))
 			continue
 		}
 
@@ -1671,7 +1671,7 @@ func buildMatchFromSlice(key string, v []any) *qdrant.Match {
 		}
 		return &qdrant.Match{MatchValue: &qdrant.Match_Integers{Integers: &qdrant.RepeatedIntegers{Integers: intSlice}}}
 	default:
-		slog.Warn("Unsupported slice element type in filter", "key", key, "type", fmt.Sprintf("%T", firstValid))
+		slog.Default().WarnContext(context.Background(), "Unsupported slice element type in filter", "key", key, "type", fmt.Sprintf("%T", firstValid))
 		return nil
 	}
 }

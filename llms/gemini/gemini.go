@@ -76,7 +76,7 @@ func New(ctx context.Context, opts ...Option) (*LLM, error) {
 		logger:  o.logger.With("component", "gemini_llm", "model", o.model),
 	}
 
-	llm.logger.Info("Gemini LLM initialized successfully")
+	llm.logger.InfoContext(ctx, "Gemini LLM initialized successfully")
 	return llm, nil
 }
 

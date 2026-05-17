@@ -119,6 +119,6 @@ func TestDefinitionRetriever_GetDefinition(t *testing.T) {
 	t.Run("LookupNonExistentSymbol", func(t *testing.T) {
 		docs, err := retriever.GetDefinition(context.Background(), "NonExistent")
 		require.NoError(t, err)
-		assert.Len(t, docs, 0)
+		assert.Empty(t, docs)
 	})
 }

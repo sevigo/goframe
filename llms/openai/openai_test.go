@@ -12,6 +12,7 @@ import (
 	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/shared"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/sevigo/goframe/llms"
 	"github.com/sevigo/goframe/schema"
@@ -126,18 +127,18 @@ func TestWithProject(t *testing.T) {
 
 func TestNewRequiresAPIKey(t *testing.T) {
 	_, err := New()
-	assert.ErrorIs(t, err, ErrNoAPIKey)
+	require.ErrorIs(t, err, ErrNoAPIKey)
 }
 
 func TestNewWithAPIKey(t *testing.T) {
 	llm, err := New(WithAPIKey("sk-test-key"))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, llm)
 }
 
 func TestNewWithCustomModel(t *testing.T) {
 	llm, err := New(WithAPIKey("sk-test"), WithModel("gpt-4o-mini"))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, llm)
 	assert.Equal(t, "gpt-4o-mini", llm.options.model)
 }
@@ -147,13 +148,13 @@ func TestNewWithBaseURL(t *testing.T) {
 		WithAPIKey("sk-test"),
 		WithBaseURL("https://my-proxy.example.com/v1"),
 	)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, llm)
 }
 
 func TestNewWithRetryAttemptsZero(t *testing.T) {
 	llm, err := New(WithAPIKey("sk-test"), WithRetryAttempts(0))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, llm)
 	assert.Equal(t, 0, llm.options.retryAttempts)
 }
@@ -223,7 +224,7 @@ func TestDoWithRetryNoRetry(t *testing.T) {
 		return nil
 	})
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 1, callCount)
 }
 
@@ -240,7 +241,7 @@ func TestDoWithRetrySuccess(t *testing.T) {
 		return nil
 	})
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 3, callCount)
 }
 
@@ -254,7 +255,7 @@ func TestDoWithRetryNonRetryableError(t *testing.T) {
 		return errors.New("invalid model name")
 	})
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, 1, callCount, "should not retry non-retryable errors")
 }
 
@@ -268,7 +269,7 @@ func TestDoWithRetryExhausted(t *testing.T) {
 		return errors.New("connection refused")
 	})
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, 3, callCount, "should try initial + 2 retries = 3 total attempts")
 }
 
@@ -285,7 +286,7 @@ func TestDoWithRetryContextCancellation(t *testing.T) {
 		return errors.New("connection refused")
 	})
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, context.Canceled, err)
 	assert.Equal(t, 1, callCount, "should stop after context cancellation")
 }
@@ -613,7 +614,7 @@ func TestNewWithAllOptions(t *testing.T) {
 		WithRequestTimeout(180*time.Second),
 		WithLogger(slog.Default()),
 	)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, llm)
 	assert.Equal(t, "gpt-4o-mini", llm.options.model)
 	assert.Equal(t, "text-embedding-3-large", llm.options.embeddingModel)

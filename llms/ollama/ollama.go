@@ -833,7 +833,7 @@ func (o *LLM) determineModel(opts llms.CallOptions) string {
 
 // PullModel downloads a model from the Ollama registry.
 func (o *LLM) PullModel(ctx context.Context, name string) error {
-	o.logger.Info("Pulling model", "model", name)
+	o.logger.InfoContext(ctx, "Pulling model", "model", name)
 	lastLogged := -1
 	return o.client.Pull(ctx, &api.PullRequest{Name: name}, func(resp api.ProgressResponse) error {
 		if resp.Total > 0 {
@@ -920,13 +920,13 @@ func (o *LLM) ListRunningModels(ctx context.Context) ([]RunningModel, error) {
 
 // DeleteModel removes a model from local storage.
 func (o *LLM) DeleteModel(ctx context.Context, name string) error {
-	o.logger.Info("Deleting model", "model", name)
+	o.logger.InfoContext(ctx, "Deleting model", "model", name)
 	return o.client.Delete(ctx, &api.DeleteRequest{Name: name})
 }
 
 // CopyModel creates a copy of a model with a new name.
 func (o *LLM) CopyModel(ctx context.Context, source, destination string) error {
-	o.logger.Info("Copying model", "source", source, "destination", destination)
+	o.logger.InfoContext(ctx, "Copying model", "source", source, "destination", destination)
 	return o.client.Copy(ctx, &api.CopyRequest{Source: source, Destination: destination})
 }
 

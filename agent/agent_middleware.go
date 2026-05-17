@@ -375,7 +375,7 @@ func (h *ChannelApprovalHandler) RequestApproval(ctx context.Context, req HumanA
 	// Send request to UI
 	select {
 	case h.RequestChan <- req:
-		h.Logger.Debug("approval request sent", "tool", req.ToolName, "risk", req.RiskLevel)
+		h.Logger.DebugContext(ctx, "approval request sent", "tool", req.ToolName, "risk", req.RiskLevel)
 	case <-ctx.Done():
 		return false, ErrApprovalTimedOut
 	}
@@ -384,13 +384,13 @@ func (h *ChannelApprovalHandler) RequestApproval(ctx context.Context, req HumanA
 	select {
 	case approved := <-h.ApprovalChan:
 		if approved {
-			h.Logger.Info("action approved by human", "tool", req.ToolName)
+			h.Logger.InfoContext(ctx, "action approved by human", "tool", req.ToolName)
 		} else {
-			h.Logger.Warn("action rejected by human", "tool", req.ToolName)
+			h.Logger.WarnContext(ctx, "action rejected by human", "tool", req.ToolName)
 		}
 		return approved, nil
 	case <-ctx.Done():
-		h.Logger.Warn("approval timed out", "tool", req.ToolName, "timeout", timeout)
+		h.Logger.WarnContext(ctx, "approval timed out", "tool", req.ToolName, "timeout", timeout)
 		return false, ErrApprovalTimedOut
 	}
 }
@@ -422,12 +422,12 @@ func (h *MockApprovalHandler) RequestApproval(ctx context.Context, req HumanAppr
 	}
 
 	if h.AutoApprove {
-		h.Logger.Debug("auto-approving action", "tool", req.ToolName)
+		h.Logger.DebugContext(ctx, "auto-approving action", "tool", req.ToolName)
 		return true, nil
 	}
 
 	if h.AutoReject {
-		h.Logger.Debug("auto-rejecting action", "tool", req.ToolName)
+		h.Logger.DebugContext(ctx, "auto-rejecting action", "tool", req.ToolName)
 		return false, nil
 	}
 
@@ -442,7 +442,7 @@ func RiskAssessmentMiddleware(assessor RiskAssessor, handler HumanApprovalHandle
 		return func(ctx context.Context, toolName string, params map[string]any) (any, error) {
 			if assessor != nil {
 				riskLevel := assessor.AssessRisk(ctx, toolName, params)
-				slog.Debug("risk assessment", "tool", toolName, "risk_level", riskLevel)
+				slog.Default().DebugContext(ctx, "risk assessment", "tool", toolName, "risk_level", riskLevel)
 
 				if riskLevel >= threshold && handler != nil {
 					req := HumanApprovalRequest{
@@ -454,15 +454,15 @@ func RiskAssessmentMiddleware(assessor RiskAssessor, handler HumanApprovalHandle
 						Timeout:   timeout,
 					}
 
-					slog.Info("requesting human approval", "tool", toolName, "risk", riskLevel)
+					slog.Default().InfoContext(ctx, "requesting human approval", "tool", toolName, "risk", riskLevel)
 
 					approval, err := handler.RequestApproval(ctx, req)
 					if err != nil {
-						slog.Error("human approval failed", "tool", toolName, "error", err)
+						slog.Default().ErrorContext(ctx, "human approval failed", "tool", toolName, "error", err)
 						return nil, fmt.Errorf("HUMAN_APPROVAL_ERROR: %w", err)
 					}
 					if !approval {
-						slog.Warn("action rejected by human", "tool", toolName)
+						slog.Default().WarnContext(ctx, "action rejected by human", "tool", toolName)
 						return nil, ErrHumanInterventionRequired
 					}
 				}
@@ -487,12 +487,12 @@ func ActionVerificationMiddleware(verifier ActionVerifier) ActionMiddleware {
 			if verifier != nil {
 				vr, verr := verifier.VerifyAction(ctx, toolName, params, result)
 				if verr != nil {
-					slog.Error("verification execution failed", "tool", toolName, "error", verr)
+					slog.Default().ErrorContext(ctx, "verification execution failed", "tool", toolName, "error", verr)
 					return result, nil // verification system logic failed, fallback to returning original result safely
 				}
 
 				if !vr.Verified {
-					slog.Warn("action verification failed",
+					slog.Default().WarnContext(ctx, "action verification failed",
 						"tool", toolName,
 						"reason", vr.Reason,
 						"correction", vr.Correction,
@@ -500,7 +500,7 @@ func ActionVerificationMiddleware(verifier ActionVerifier) ActionMiddleware {
 					// Return an error so the LLM gets this in the observation message to self heal
 					return nil, fmt.Errorf("%w: %s. Suggested correction: %s", ErrActionFailedVerification, vr.Reason, vr.Correction)
 				}
-				slog.Info("action verified successfully", "tool", toolName)
+				slog.Default().InfoContext(ctx, "action verified successfully", "tool", toolName)
 			}
 			return result, nil
 		}

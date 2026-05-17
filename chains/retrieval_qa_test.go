@@ -102,7 +102,7 @@ Helpful Answer:`, contextStr)
 		_, err = ragChain.Call(ctx, "Any question.")
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, retrievalErr)
+		require.ErrorIs(t, err, retrievalErr)
 		assert.Contains(t, err.Error(), "document retrieval failed")
 
 		assert.Equal(t, 0, fakeLLM.GetCallCount(), "LLM should not have been called when retrieval fails")
