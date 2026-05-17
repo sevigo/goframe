@@ -38,7 +38,7 @@ func (k CacheKey) String() string {
 // ImageCacheKey creates a CacheKey for an image embedding.
 // It hashes the image data for the cache key instead of storing raw bytes.
 func ImageCacheKey(provider, model string, img ImageData) CacheKey {
-	h := sha256.Sum256(img.Data)
+	h := sha256.Sum256(append([]byte(img.MimeType+":"), img.Data...))
 	return CacheKey{
 		Provider:  provider,
 		Model:     model,

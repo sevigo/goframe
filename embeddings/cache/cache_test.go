@@ -314,13 +314,16 @@ func TestImageCacheKey(t *testing.T) {
 	img1 := ImageData{Data: []byte("hello"), MimeType: "image/png"}
 	img2 := ImageData{Data: []byte("hello"), MimeType: "image/png"}
 	img3 := ImageData{Data: []byte("world"), MimeType: "image/png"}
+	img4 := ImageData{Data: []byte("hello"), MimeType: "image/jpeg"}
 
 	k1 := ImageCacheKey("gemini", "gemini-embedding-001", img1)
 	k2 := ImageCacheKey("gemini", "gemini-embedding-001", img2)
 	k3 := ImageCacheKey("gemini", "gemini-embedding-001", img3)
+	k4 := ImageCacheKey("gemini", "gemini-embedding-001", img4)
 
 	assert.Equal(t, k1.String(), k2.String(), "same image data must produce same key")
 	assert.NotEqual(t, k1.String(), k3.String(), "different image data must produce different keys")
+	assert.NotEqual(t, k1.String(), k4.String(), "different MIME types must produce different keys")
 }
 
 func TestCachedEmbedderImageHit(t *testing.T) {
