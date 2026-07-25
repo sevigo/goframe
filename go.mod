@@ -25,7 +25,7 @@ require (
 	golang.org/x/time v0.14.0
 	google.golang.org/api v0.243.0
 	google.golang.org/genai v1.17.0
-	google.golang.org/grpc v1.80.0
+	google.golang.org/grpc v1.82.1
 	gopkg.in/yaml.v3 v3.0.1
 )
 
